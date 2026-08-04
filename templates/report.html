@@ -73,6 +73,41 @@
       <div class="sub">{{ T.pages }}: {{ r.metadata.page_count }} · PDF {{ r.metadata.pdf_version }}</div></div>
   </div>
 
+  <!-- SUB-SCORES -->
+  {% set sscol = {True:'var(--good)', False:'var(--critical)'} %}
+  {% macro subcolor(v) %}{{ 'var(--good)' if v>=80 else ('var(--warning)' if v>=50 else 'var(--critical)') }}{% endmacro %}
+  <div class="tiles" style="margin-top:12px">
+    <div class="tile"><div class="k">{{ T.integrity }}</div>
+      <div class="v" style="color:{{ subcolor(r.subscores.integrity) }}">{{ r.subscores.integrity }}<span style="font-size:13px;color:var(--text-muted)">/100</span></div></div>
+    <div class="tile"><div class="k">{{ T.data_consistency }}</div>
+      <div class="v" style="color:{{ subcolor(r.subscores.data_consistency) }}">{{ r.subscores.data_consistency }}<span style="font-size:13px;color:var(--text-muted)">/100</span></div></div>
+    <div class="tile"><div class="k">{{ T.source_verifiability }}</div>
+      <div class="v" style="color:{{ subcolor(r.subscores.source_verifiability) }}">{{ r.subscores.source_verifiability }}<span style="font-size:13px;color:var(--text-muted)">/100</span></div>
+      <div class="sub">{{ T.qr_title }}: {{ T.found if r.qr.found else T.not_found }} · XML: {{ T.found if r.embedded_xml.present else T.not_found }}</div></div>
+  </div>
+
+  <!-- REVISION COMPARISON -->
+  {% if r.revision.has_prior and r.revision.changes %}
+  <div class="section-title">{{ T.revision_compare }} · {{ r.revision.changes|length }} {{ T.changes }}</div>
+  <div class="card" style="border:1px solid var(--critical)">
+    <p class="subline" style="margin-top:0">{{ T.rev_changes_note }}</p>
+    <table class="kv" style="width:100%">
+      <tr style="border-bottom:2px solid var(--border-strong)">
+        <td class="k" style="width:26%">{{ T.rev_field }}</td>
+        <td class="k" style="width:30%">{{ T.rev_prev }}</td>
+        <td class="k" style="width:30%">{{ T.rev_curr }}</td>
+        <td class="k" style="width:14%">{{ T.rev_importance }}</td></tr>
+      {% for c in r.revision.changes %}
+      <tr>
+        <td class="v">{{ c.label }}</td>
+        <td class="v" style="color:var(--text-secondary)">{{ c.prev }}</td>
+        <td class="v" style="font-weight:650;color:{{ 'var(--critical)' if c.severity=='kritik' else 'var(--text-primary)' }}">{{ c.curr }}</td>
+        <td><span class="tag" style="background:color-mix(in srgb, {{ 'var(--critical)' if c.severity=='kritik' else 'var(--text-muted)' }} 15%, transparent);color:{{ 'var(--critical)' if c.severity=='kritik' else 'var(--text-muted)' }}">{{ T.critical if c.severity=='kritik' else T.supporting }}</span></td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
   <!-- TAMPER FINDINGS -->
   <div class="section-title">{{ T.tamper_signals }}</div>
   {% set shown = findings|selectattr('weight','!=',0)|list %}
@@ -202,6 +237,37 @@
     </div>
   </div>
   {% endif %}
+
+  <!-- VERIFICATION: QR / XML / CONSISTENCY -->
+  <div class="section-title">{{ T.consistency_title }}</div>
+  <div class="grid grid-3">
+    <div class="card">
+      <div class="party-h">▣ {{ T.qr_title }}</div>
+      <table class="kv">
+        <tr><td class="k">{{ T.qr_title }}</td><td class="v">{{ (T.found ~ ' (' ~ r.qr.count ~ ')') if r.qr.found else T.not_found }}</td></tr>
+        {% if r.qr.check and r.qr.check.iban_match is not none %}<tr><td class="k">IBAN</td><td class="v" style="color:{{ 'var(--good)' if r.qr.check.iban_match else 'var(--critical)' }}">{{ T.verified if r.qr.check.iban_match else T.mismatch }}</td></tr>{% endif %}
+        {% if r.qr.check and r.qr.check.amount_match is not none %}<tr><td class="k">{{ T.amount }}</td><td class="v" style="color:{{ 'var(--good)' if r.qr.check.amount_match else 'var(--critical)' }}">{{ T.verified if r.qr.check.amount_match else T.mismatch }}</td></tr>{% endif %}
+      </table>
+    </div>
+    <div class="card">
+      <div class="party-h">⟨⟩ {{ T.xml_title }}</div>
+      <table class="kv">
+        <tr><td class="k">XML</td><td class="v">{{ T.found if r.embedded_xml.present else T.not_found }}</td></tr>
+        <tr><td class="k">e-Dekont</td><td class="v">{{ T.found if r.embedded_xml.looks_like_dekont else T.not_found }}</td></tr>
+        <tr><td class="k">{{ 'Gömülü dosya' if L=='tr' else 'Embedded files' }}</td><td class="v">{{ T.found if r.embedded_xml.has_embedded_files else T.not_found }}</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="party-h">Σ {{ T.consistency_title }}</div>
+      {% if r.consistency.checks %}
+      <table class="kv">
+        {% for c in r.consistency.checks %}
+        <tr><td class="k">{{ c.name }}</td><td class="v" style="color:{{ 'var(--good)' if c.ok else 'var(--critical)' }}">{{ T.consistent if c.ok else T.inconsistent }}</td></tr>
+        {% endfor %}
+      </table>
+      {% else %}<p class="note" style="margin:0">{{ T.none_found }}</p>{% endif %}
+    </div>
+  </div>
 
   <!-- TECHNICAL METADATA -->
   <div class="section-title">{{ T.metadata }}</div>
