@@ -22,7 +22,9 @@ def get_words(pdf_bytes: bytes):
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             p = pdf.pages[0]
-            return p.extract_words(use_text_flow=False, keep_blank_chars=False)
+            # Açık tolerans: pdfplumber sürümleri arası kelime birleştirme farkını sabitler
+            return p.extract_words(use_text_flow=False, keep_blank_chars=False,
+                                   x_tolerance=3.0, y_tolerance=3.0)
     except Exception:
         return []
 
