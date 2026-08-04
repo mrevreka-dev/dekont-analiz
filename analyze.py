@@ -95,8 +95,8 @@ def analyze_document(pdf_bytes: bytes, filename: str = "") -> dict:
     # 4) Yapısal tahrifat bulguları
     findings = detect(struct, digital_text_len, doc_type)
 
-    # 5) Alan çıkarımı
-    extraction = extract_fields(text_layout, text_read)
+    # 5) Alan çıkarımı (geometrik çıkarım için pdf_bytes de verilir)
+    extraction = extract_fields(text_layout, text_read, pdf_bytes if text_source == "digital" else None)
     extraction.text_source = text_source
 
     # 6) Görsel adli analiz (görsel içeren belgeler için)
@@ -214,6 +214,11 @@ def _img_forensics_dict(f: ImageForensics | None) -> dict:
         "jpeg_quality_est": f.jpeg_quality_est, "noise_inconsistency": round(f.noise_inconsistency, 3),
         "manipulation_score": round(f.manipulation_score, 1), "ai_score": round(f.ai_score, 1),
         "ela_preview_b64": f.ela_preview_b64,
+        "bg_color": f.bg_color, "bg_dev_max": round(f.bg_dev_max, 1),
+        "bg_dev_hotspot_ratio": round(f.bg_dev_hotspot_ratio, 4),
+        "bg_patch_count": f.bg_patch_count, "bg_patch_max": f.bg_patch_max,
+        "tone_chroma_var": round(f.tone_chroma_var, 1), "tone_cast": round(f.tone_cast, 1),
+        "bg_heatmap_b64": f.bg_heatmap_b64,
         "signals": f.signals,
     }
 

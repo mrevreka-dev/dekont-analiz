@@ -146,7 +146,7 @@ def _clean_name(s: str) -> str:
     return s
 
 
-def extract_fields(text: str, reading_text: str = "") -> Extraction:
+def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = None) -> Extraction:
     ex = Extraction()
     ex.raw_text = text or reading_text
     if (not text or not text.strip()) and (not reading_text or not reading_text.strip()):
@@ -244,6 +244,36 @@ def extract_fields(text: str, reading_text: str = "") -> Extraction:
     # =============================================================
     elif is_vakif:
         ex.doc_kind = "İşlem Dekontu"
+        ex.sender.bank = "VakıfBank"
+        # Öncelik: geometrik (koordinat-tabanlı) çıkarım
+        geo_ok = False
+        if pdf_bytes:
+            try:
+                import geo
+                g = geo.vakif_fields(pdf_bytes)
+                if g:
+                    geo_ok = True
+                    ex.sender.name = g["sender_name"]
+                    ex.receiver.name = g["receiver_name"]
+                    ex.sender.iban = g["sender_iban"]
+                    ex.receiver.iban = g["receiver_iban"]
+                    ex.receiver.bank = g["receiver_bank"]
+                    if g["amount"] is not None:
+                        ex.amount.value = g["amount"]; ex.amount.currency = "TL"
+                    ex.amount.fee = g["fee"]
+                    ex.transaction.date = g["date"]
+                    ex.transaction.ref_no = g["ref_no"]
+                    ex.transaction.document_no = g["document_no"]
+                    ex.transaction.type = g["type"]
+            except Exception:
+                geo_ok = False
+        if geo_ok:
+            # geometrik çıkarım tamam; IBAN'lardan banka tamamla ve bitir
+            if not ex.receiver.bank and ex.receiver.iban:
+                ex.receiver.bank = banks.bank_from_iban(ex.receiver.iban)
+            ex.confidence = _confidence(ex)
+            return ex
+        # ---- Yedek: metin-tabanlı ayrıştırma ----
         rt = rjoined
         ex.transaction.type = _find_label(rt, ["İŞLEM TÜRÜ", "ISLEM TURU"])
         dm = re.search(r"İŞLEM TARİHİ\s*[:：]?\s*(\d{2}\.\d{2}\.\d{4}(?:\s+\d{2}:\d{2}:\d{2})?)", rt)
@@ -299,11 +329,29 @@ def extract_fields(text: str, reading_text: str = "") -> Extraction:
     return ex
 
 
+_IBAN_OCR_TRANS = str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "S": "5",
+                                 "B": "8", "Z": "2", "Q": "0", "D": "0", "g": "9"})
+
+
+def _ocr_fix_iban(s: str) -> str:
+    """OCR karışıklıklarını (O->0, I->1, S->5, B->8) düzeltip geçerli IBAN'a çevirir."""
+    body = re.sub(r"\s", "", s[2:]).translate(_IBAN_OCR_TRANS)
+    cand = "TR" + body
+    m = re.match(r"TR\d{24}", cand)
+    return m.group(0) if m else ""
+
+
 def _first_iban_after(text: str, labels: list[str]) -> str:
+    # "Alıcı IBAN" gibi karşı-taraf etiketlerini gönderici IBAN'ı ile karıştırma
     for lab in labels:
-        m = re.search(rf"{lab}\s*[:：]?\s*(TR[\d ]{{20,32}})", text, re.I)
-        if m:
-            return banks.normalize_iban(m.group(1))
+        pat = rf"(?<!Al[ıi]c[ıi] )(?<!Alacakl[ıi] ){lab}\s*[:：]?\s*(TR[\dOoIlSBZQDg][\dOoIlSBZQDg ]{{20,34}})"
+        for m in re.finditer(pat, text):
+            raw = m.group(1)
+            if re.match(r"TR[\d ]{20,32}$", raw):
+                return banks.normalize_iban(raw)
+            fixed = _ocr_fix_iban(raw)   # OCR toleranslı (O->0, I->1, S->5, B->8)
+            if fixed:
+                return fixed
     return ""
 
 
@@ -315,6 +363,20 @@ def _left_col(raw: str) -> str:
     return re.split(r"\s{2,}", raw.strip())[0].strip()
 
 
+def _leading_caps(s: str) -> str:
+    """Satır başındaki ardışık BÜYÜK-HARF isim kelimelerini döndürür (OCR için)."""
+    toks = s.strip().split()
+    out = []
+    for t in toks:
+        # noktalama temizle
+        tw = re.sub(r"[^\wÇĞİÖŞÜçğıöşü]", "", t)
+        if len(tw) >= 2 and tw == tw.upper() and re.match(r"^[A-ZÇĞİÖŞÜ]+$", tw):
+            out.append(tw)
+        else:
+            break
+    return " ".join(out)
+
+
 def _isbank_sender_name(lines: list[str]) -> str:
     # İş Bankası: sol üstte, "Müşteri No" satırından önceki BÜYÜK HARF isim
     for i, l in enumerate(lines):
@@ -323,10 +385,17 @@ def _isbank_sender_name(lines: list[str]) -> str:
                 cand = _left_col(lines[j])
                 if _NAME_RE.match(cand) and "DEKONT" not in cand.upper():
                     return cand
+                # OCR: satırın başındaki büyük-harf kelimeler (etiketten önce)
+                lc = _leading_caps(lines[j])
+                if len(lc.split()) >= 2 and "DEKONT" not in lc.upper() and "TURKIYE" not in lc.upper():
+                    return lc
     for l in lines[:12]:
         cand = _left_col(l)
         if _NAME_RE.match(cand) and "DEKONT" not in cand.upper():
             return cand
+        lc = _leading_caps(l)
+        if len(lc.split()) >= 2 and not any(k in lc.upper() for k in ("DEKONT", "TURKIYE", "BANKASI", "BANKACILIK")):
+            return lc
     return ""
 
 

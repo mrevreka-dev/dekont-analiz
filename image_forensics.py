@@ -65,6 +65,16 @@ class ImageForensics:
     double_compression_suspected: bool = False
     noise_inconsistency: float = 0.0
 
+    # Zemin rengi / renk tonu analizi
+    bg_color: list = field(default_factory=list)     # baskın zemin rengi (RGB)
+    bg_dev_max: float = 0.0                            # en yüksek bölgesel zemin sapması
+    bg_dev_hotspot_ratio: float = 0.0                 # yüksek sapmalı blok oranı
+    bg_patch_count: int = 0                            # ayrık şüpheli zemin bölgesi sayısı
+    bg_patch_max: int = 0                              # en büyük bitişik şüpheli bölge (blok)
+    tone_chroma_var: float = 0.0                       # zemin renk tonu (chroma) değişkenliği
+    tone_cast: float = 0.0                             # genel renk tonu sapması (nötr'den)
+    bg_heatmap_b64: str = ""                           # zemin sapma ısı haritası
+
     # Türetilmiş skorlar (0-100)
     manipulation_score: float = 0.0    # yüksek = oynama şüphesi yüksek
     ai_score: float = 0.0              # yüksek = yapay üretim şüphesi yüksek
@@ -174,8 +184,115 @@ def analyze_image(img: Image.Image, raw: bytes | None = None) -> ImageForensics:
     except Exception:
         pass
 
+    # --- Zemin rengi / renk tonu analizi ---
+    try:
+        background_tone_analysis(r, img)
+    except Exception:
+        pass
+
     _score_image(r)
     return r
+
+
+def background_tone_analysis(r: "ImageForensics", img: Image.Image) -> None:
+    """
+    Zemin (arka plan) rengi ve renk tonu analizi.
+
+    Dekontlar tek düze açık bir zemine sahiptir. Bir bölgenin üzerine ekleme /
+    rötuş yapıldığında (ör. tutar/isim silinip yeniden yazıldığında) o bölgedeki
+    zemin beyazı, sıkıştırma veya kaynak farkı yüzünden hafifçe farklı bir tona
+    kayar. Bu fonksiyon sayfayı ızgaraya böler, her bloğun zemin rengini küresel
+    zemin rengiyle karşılaştırır ve sapan bölgeleri (olası oynama) işaretler.
+    Ayrıca zeminin renk tonu (chroma) tutarlılığını ve genel renk kaymasını ölçer.
+    """
+    rgb = np.asarray(img.convert("RGB")).astype(np.float32)
+    H, W, _ = rgb.shape
+    if H < 40 or W < 40:
+        return
+    mx = rgb.max(2); mn = rgb.min(2)
+    sat = mx - mn
+    # zemin (near-white) maskesi
+    bg_mask = (mn > 170) & (sat < 40)
+    if bg_mask.sum() < 0.02 * H * W:
+        bg_mask = mn > 150
+    if bg_mask.sum() < 100:
+        return
+    global_bg = rgb[bg_mask].mean(0)
+    r.bg_color = [int(round(c)) for c in global_bg]
+
+    gy, gx = 26, 18
+    grid = np.full((gy, gx), np.nan)
+    chroma_vals = []
+    for i in range(gy):
+        for j in range(gx):
+            y0 = i * H // gy; y1 = (i + 1) * H // gy
+            x0 = j * W // gx; x1 = (j + 1) * W // gx
+            m = bg_mask[y0:y1, x0:x1]
+            if m.sum() < 25:
+                continue
+            block = rgb[y0:y1, x0:x1]
+            bgc = block[m].mean(0)
+            grid[i, j] = float(np.linalg.norm(bgc - global_bg))
+            chroma_vals.append(abs(bgc[0] - bgc[1]) + abs(bgc[1] - bgc[2]) + abs(bgc[0] - bgc[2]))
+
+    valid = grid[~np.isnan(grid)]
+    if valid.size == 0:
+        return
+    r.bg_dev_max = float(valid.max())
+    p95 = float(np.percentile(valid, 95))
+    # Yüksek eşik: gerçek rötuş, metin-kenarı uç değerlerinin BELİRGİN üstünde olmalı
+    high_thr = max(13.0, p95 * 1.4)
+    hot = np.nan_to_num(grid, nan=0.0) > high_thr
+    r.bg_dev_hotspot_ratio = float(hot.sum() / valid.size)
+    # kompakt bölge tespiti: en büyük bitişik yüksek-sapma bloğu (rötuş = kompakt alan)
+    cnt, r.bg_patch_max = _count_patches(hot)
+    r.bg_patch_count = cnt
+    if chroma_vals:
+        cv = np.array(chroma_vals)
+        r.tone_chroma_var = float(cv.std())
+        r.tone_cast = float(cv.mean())
+    # ısı haritası görselleştirmesi
+    r.bg_heatmap_b64 = _heatmap_png(grid, thr)
+
+
+def _count_patches(mask: np.ndarray):
+    """Bağlı-bileşen sayımı (4-komşuluk). (adet, en_büyük_boyut) döndürür."""
+    m = np.asarray(mask).astype(bool)
+    seen = np.zeros_like(m, dtype=bool)
+    cnt = 0
+    biggest = 0
+    H, W = m.shape
+    for i in range(H):
+        for j in range(W):
+            if m[i, j] and not seen[i, j]:
+                cnt += 1
+                size = 0
+                stack = [(i, j)]
+                seen[i, j] = True
+                while stack:
+                    y, x = stack.pop()
+                    size += 1
+                    for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        ny, nx = y + dy, x + dx
+                        if 0 <= ny < H and 0 <= nx < W and m[ny, nx] and not seen[ny, nx]:
+                            seen[ny, nx] = True
+                            stack.append((ny, nx))
+                biggest = max(biggest, size)
+    return cnt, biggest
+
+
+def _heatmap_png(grid: np.ndarray, thr: float) -> str:
+    g = np.nan_to_num(grid, nan=0.0)
+    mx = max(g.max(), thr * 1.5, 1.0)
+    norm = np.clip(g / mx, 0, 1)
+    # kırmızı kanalı sapmayla artan basit ısı haritası
+    h, w = norm.shape
+    rgb = np.zeros((h, w, 3), dtype=np.uint8)
+    rgb[..., 0] = (norm * 255).astype(np.uint8)             # kırmızı = sapma
+    rgb[..., 2] = ((1 - norm) * 120).astype(np.uint8)       # mavi = düşük
+    img = Image.fromarray(rgb).resize((w * 16, h * 16), Image.NEAREST)
+    b = io.BytesIO(); img.save(b, "PNG")
+    return base64.b64encode(b.getvalue()).decode()
 
 
 def _noise_inconsistency(img: Image.Image) -> float:
@@ -238,13 +355,46 @@ def _score_image(r: ImageForensics) -> None:
                     "tr": f"ELA analizinde orta düzeyde hata farkı bölgeleri var (%{r.ela_hotspot_ratio*100:.1f}). İncelenmeli.",
                     "en": f"ELA shows moderate error-level regions ({r.ela_hotspot_ratio*100:.1f}%). Worth review."})
 
-    # Gürültü tutarsızlığı
-    if r.noise_inconsistency > 1.4:
-        manip += 18
+    # Zemin rengi oynaması — TANISAL. Tek başına zemin sapması logo/mühür/gölge
+    # de olabilir; bu yüzden YÜKSEK ceza yalnızca ELA (hata seviyesi) ile AYNI
+    # yönde teyit edilirse verilir. Aksi halde inceleme notu (düşük) bırakılır.
+    ela_corroborates = r.ela_hotspot_ratio > 0.008
+    if r.bg_patch_max >= 3 and r.bg_dev_max >= 16:
+        if ela_corroborates:
+            manip += 28
+            sig.append({"severity": "high", "category": "image",
+                        "tr": f"Zeminde kompakt bir bölgede renk sapması (~{r.bg_patch_max} blok, maks. {r.bg_dev_max:.1f}) "
+                              f"ELA hata-seviyesi anomalisiyle ÖRTÜŞÜYOR. İki bağımsız sinyalin aynı bölgeyi işaret etmesi, "
+                              f"o alanın silinip üzerine yeniden yazıldığına (rötuş/yama) güçlü işarettir.",
+                        "en": f"A compact background deviation (~{r.bg_patch_max} blocks, max {r.bg_dev_max:.1f}) COINCIDES with an "
+                              f"ELA anomaly — two independent signals on the same area strongly indicate a retouched/patched region."})
+        else:
+            manip += 6
+            sig.append({"severity": "low", "category": "image",
+                        "tr": f"Zeminde bölgesel renk farkı var (~{r.bg_patch_max} blok, maks. {r.bg_dev_max:.1f}). Bu bir logo/mühür/"
+                              f"gölge ya da rötuş olabilir; ısı haritasında işaretli bölge(ler)i gözle inceleyin.",
+                        "en": f"Regional background-color difference (~{r.bg_patch_max} blocks, max {r.bg_dev_max:.1f}) — could be a logo/"
+                              f"stamp/shadow or a retouch; visually inspect the highlighted area(s) in the heatmap."})
+
+    # Renk tonu tutarsızlığı (zemin nötr olmalı; bölgesel renkli ton = şüpheli)
+    if r.tone_chroma_var >= 7:
+        manip += 15
         sig.append({"severity": "medium", "category": "image",
-                    "tr": f"Görselde gürültü dağılımı tutarsız (katsayı {r.noise_inconsistency:.2f}) — farklı kaynaklardan "
+                    "tr": f"Zeminin renk tonu bölgeden bölgeye tutarsız (chroma değişkenliği {r.tone_chroma_var:.1f}). "
+                          f"Farklı kaynaktan yapıştırma veya renk rötuşu olasılığı.",
+                    "en": f"Background color tone varies across regions (chroma variance {r.tone_chroma_var:.1f}) — possible paste/retouch."})
+    elif r.tone_cast >= 14:
+        sig.append({"severity": "low", "category": "image",
+                    "tr": f"Genel renk tonu nötr beyazdan sapıyor (renk kayması {r.tone_cast:.1f}). Fotoğraf ışığı veya filtre olabilir.",
+                    "en": f"Overall color cast away from neutral white ({r.tone_cast:.1f}) — lighting or a filter."})
+
+    # Gürültü tutarsızlığı (belge taramalarında metin/zemin farkı doğaldır; eşik yüksek)
+    if r.noise_inconsistency > 2.4:
+        manip += 14
+        sig.append({"severity": "medium", "category": "image",
+                    "tr": f"Görselde gürültü dağılımı belirgin tutarsız (katsayı {r.noise_inconsistency:.2f}) — farklı kaynaklardan "
                           f"birleştirme (splicing) olasılığı.",
-                    "en": f"Inconsistent noise distribution (coef {r.noise_inconsistency:.2f}) — possible splicing."})
+                    "en": f"Strongly inconsistent noise distribution (coef {r.noise_inconsistency:.2f}) — possible splicing."})
 
     # Kamera/tarayıcı metadata'sı yok + fotoğrafik boyut -> screenshot/synthetic
     if not r.has_exif and not r.exif_make and (r.width * r.height) > 500 * 500:
