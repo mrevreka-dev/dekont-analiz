@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="{{ L }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ T.app_title }} — {{ r.file.name }}</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+</head>
+<body>
+{% set risk = r.score.risk_level %}
+{% set riskcolor = {'authentic':'var(--good)','low':'var(--good)','medium':'var(--warning)','high':'var(--serious)','critical':'var(--critical)'}[risk] %}
+{% set sevcolor = {'critical':'var(--critical)','high':'var(--serious)','medium':'var(--warning)','low':'var(--text-muted)','info':'var(--accent)'} %}
+{% set findings = r.findings_tr if L=='tr' else r.findings_en %}
+{% set circ = 552.92 %}
+
+<header class="topbar"><div class="container">
+  <div class="brand"><span class="logo">D</span><span>{{ T.app_title }}</span></div>
+  <div class="toolbar">
+    <a class="pill {{ 'active' if L=='tr' }}" href="?lang=tr">TR</a>
+    <a class="pill {{ 'active' if L=='en' }}" href="?lang=en">EN</a>
+    <a class="pill" href="/?lang={{ L }}">＋ {{ T.new_analysis }}</a>
+  </div>
+</div></header>
+
+<main class="container report">
+
+  <!-- SCORE HERO -->
+  <div class="card">
+    <div class="scorehero">
+      <div class="gauge">
+        <svg width="200" height="200" viewBox="0 0 200 200">
+          <circle cx="100" cy="100" r="88" fill="none" stroke="var(--surface-2)" stroke-width="16"/>
+          <circle cx="100" cy="100" r="88" fill="none" stroke="{{ riskcolor }}" stroke-width="16"
+            stroke-linecap="round" stroke-dasharray="{{ circ }}"
+            stroke-dashoffset="{{ circ - (circ * r.score.authenticity_score / 100) }}"/>
+        </svg>
+        <div class="val">
+          <div class="num" style="color:{{ riskcolor }}">{{ r.score.authenticity_score }}</div>
+          <div class="max">/ 100</div>
+        </div>
+      </div>
+      <div>
+        <div class="section-title" style="margin-top:0">{{ T.score }}</div>
+        <span class="riskbadge bg-{{ risk }}"><span class="dot" style="background:{{ riskcolor }}"></span>
+          {{ T.risk_label[risk] }}</span>
+        <div class="verdict">{{ r.score.verdict_tr if L=='tr' else r.score.verdict_en }}</div>
+        {% if r.score.max_possible < 100 %}
+        <div class="subline">{{ T.max_note }}: {{ r.score.max_possible }}/100</div>
+        {% endif %}
+        <div class="subline" style="margin-top:10px">
+          <span class="badge-soft">{{ T.doc_type }}: {{ r.classification.doc_type_label_tr if L=='tr' else r.classification.doc_type_label_en }}</span>
+          <span class="badge-soft">{{ r.file.name }}</span>
+          <span class="badge-soft">{{ (r.file.size_bytes/1024)|round(1) }} KB</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STAT TILES -->
+  <div class="tiles" style="margin-top:16px">
+    <div class="tile"><div class="k">{{ T.ai_likelihood }}</div>
+      <div class="v" style="color:{{ 'var(--critical)' if r.ai_trace.likelihood>=60 else ('var(--warning)' if r.ai_trace.likelihood>=30 else 'var(--good)') }}">%{{ r.ai_trace.likelihood }}</div>
+      <div class="sub">{{ r.ai_trace.verdict.split('/')[0] if L=='tr' else r.ai_trace.verdict.split('/')[1] if '/' in r.ai_trace.verdict else r.ai_trace.verdict }}</div></div>
+    <div class="tile"><div class="k">{{ T.tamper_signals }}</div>
+      <div class="v" style="color:{{ 'var(--critical)' if r.tamper.critical_findings>0 else 'var(--text-primary)' }}">{{ r.tamper.findings_count }}</div>
+      <div class="sub">{{ r.tamper.critical_findings }} {{ 'yüksek/kritik' if L=='tr' else 'high/critical' }}</div></div>
+    <div class="tile"><div class="k">{{ T.incremental }}</div>
+      <div class="v" style="color:{{ 'var(--warning)' if r.tamper.incremental_updates>0 else 'var(--text-primary)' }}">{{ r.tamper.incremental_updates }}</div>
+      <div class="sub">{{ 'yeniden kayıt' if r.tamper.resaved_by_editor else '—' }}</div></div>
+    <div class="tile"><div class="k">{{ T.text_source }}</div>
+      <div class="v">{{ r.classification.text_source|upper }}</div>
+      <div class="sub">{{ T.pages }}: {{ r.metadata.page_count }} · PDF {{ r.metadata.pdf_version }}</div></div>
+  </div>
+
+  <!-- TAMPER FINDINGS -->
+  <div class="section-title">{{ T.tamper_signals }}</div>
+  {% set shown = findings|selectattr('weight','!=',0)|list %}
+  {% if shown %}
+    {% for f in findings %}
+      {% if f.weight != 0 %}
+      <div class="finding">
+        <div class="bar" style="background:{{ sevcolor[f.severity] }}"></div>
+        <div>
+          <div class="msg">{{ f.message }}</div>
+          {% if f.detail %}<div class="detail">{{ f.detail }}</div>{% endif %}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">
+          <span class="tag" style="background:color-mix(in srgb, {{ sevcolor[f.severity] }} 15%, transparent);color:{{ sevcolor[f.severity] }}">{{ T.severity[f.severity] }}</span>
+          <span class="tag tag-cat">{{ T.category[f.category] }}</span>
+        </div>
+      </div>
+      {% endif %}
+    {% endfor %}
+  {% else %}
+    <div class="card bg-good" style="border:1px solid var(--good)">✓ {{ T.no_findings }}</div>
+  {% endif %}
+
+  <!-- EXTRACTED INFO -->
+  <div class="section-title">{{ T.extracted }}</div>
+  {% set ex = r.extracted %}
+  <div class="grid grid-3">
+    <div class="card">
+      <div class="party-h">↗ {{ T.sender }}</div>
+      <table class="kv">
+        <tr><td class="k">{{ T.name }}</td><td class="v">{{ ex.sender.name or '—' }}</td></tr>
+        <tr><td class="k">{{ T.iban }}</td><td class="v mono">{{ ex.sender.iban or '—' }}</td></tr>
+        <tr><td class="k">{{ T.bank }}</td><td class="v">{{ ex.sender.bank or ex.bank or '—' }}</td></tr>
+        {% if ex.sender.tckn %}<tr><td class="k">{{ T.tckn }}</td><td class="v mono">{{ ex.sender.tckn }}</td></tr>{% endif %}
+        {% if ex.sender.branch %}<tr><td class="k">{{ T.branch }}</td><td class="v">{{ ex.sender.branch }}</td></tr>{% endif %}
+        {% if ex.sender.customer_no %}<tr><td class="k">{{ T.customer }}</td><td class="v mono">{{ ex.sender.customer_no }}</td></tr>{% endif %}
+      </table>
+    </div>
+    <div class="card">
+      <div class="party-h">↘ {{ T.receiver }}</div>
+      <table class="kv">
+        <tr><td class="k">{{ T.name }}</td><td class="v">{{ ex.receiver.name or '—' }}</td></tr>
+        <tr><td class="k">{{ T.iban }}</td><td class="v mono">{{ ex.receiver.iban or '—' }}</td></tr>
+        <tr><td class="k">{{ T.bank }}</td><td class="v">{{ ex.receiver.bank or '—' }}</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="party-h">₺ {{ T.amount }}</div>
+      <div class="amount-big">{{ '{:,.2f}'.format(ex.amount.value).replace(',','X').replace('.',',').replace('X','.') if ex.amount.value is not none else '—' }}
+        <span class="amount-cur">{{ ex.amount.currency }}</span></div>
+      <table class="kv" style="margin-top:10px">
+        {% if ex.amount.fee is not none %}<tr><td class="k">{{ T.fee }}</td><td class="v">{{ ex.amount.fee }} {{ ex.amount.currency }}</td></tr>{% endif %}
+        {% if ex.amount.total is not none %}<tr><td class="k">{{ T.total }}</td><td class="v">{{ ex.amount.total }} {{ ex.amount.currency }}</td></tr>{% endif %}
+        {% if ex.transaction.date %}<tr><td class="k">{{ T.date }}</td><td class="v">{{ ex.transaction.date }}</td></tr>{% endif %}
+        {% if ex.transaction.ref_no %}<tr><td class="k">{{ T.ref }}</td><td class="v mono">{{ ex.transaction.ref_no }}</td></tr>{% endif %}
+        {% if ex.transaction.type %}<tr><td class="k">{{ T.txn_type }}</td><td class="v">{{ ex.transaction.type }}</td></tr>{% endif %}
+        {% if ex.transaction.channel %}<tr><td class="k">{{ T.channel }}</td><td class="v">{{ ex.transaction.channel }}</td></tr>{% endif %}
+      </table>
+    </div>
+  </div>
+
+  <!-- SCORE BREAKDOWN + TIMELINE -->
+  <div class="grid grid-2" style="margin-top:16px">
+    <div class="card">
+      <div class="party-h">{{ T.score_breakdown }}</div>
+      {% if r.score.breakdown %}
+        {% for b in r.score.breakdown %}
+        <div class="bd-row">
+          <div class="bd-k">{{ T.category[b.category] }}</div>
+          <div class="bd-track"><div class="bd-fill" style="width:{{ [b.penalty/45*100, 100]|min }}%;background:{{ 'var(--critical)' if b.penalty>=25 else ('var(--warning)' if b.penalty>=12 else 'var(--serious)') }}"></div></div>
+          <div class="bd-v">−{{ b.penalty }}</div>
+        </div>
+        {% endfor %}
+      {% else %}<p class="note">{{ T.no_findings }}</p>{% endif %}
+    </div>
+    <div class="card">
+      <div class="party-h">⏱ {{ T.created }} / {{ T.modified }}</div>
+      <div class="timeline">
+        <div class="tl-node"><div class="lab">{{ T.created }}</div><div class="dt">{{ r.metadata.creation_date or '—' }}</div></div>
+        <div class="tl-node"><div class="lab">{{ T.modified }}</div><div class="dt">{{ r.metadata.mod_date or '—' }}</div></div>
+      </div>
+      <table class="kv" style="margin-top:12px">
+        <tr><td class="k">{{ T.producer }}</td><td class="v">{{ r.metadata.producer or '—' }}</td></tr>
+        <tr><td class="k">{{ T.creator }}</td><td class="v">{{ r.metadata.creator or '—' }}</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- IMAGE FORENSICS -->
+  {% if r.image_forensics.analyzed %}
+  {% set imgf = r.image_forensics %}
+  <div class="section-title">{{ T.image_forensics }}</div>
+  <div class="grid grid-2">
+    <div class="card">
+      <table class="kv">
+        <tr><td class="k">{{ T.manipulation }}</td><td class="v" style="color:{{ 'var(--critical)' if imgf.manipulation_score>=40 else ('var(--warning)' if imgf.manipulation_score>=15 else 'var(--good)') }}">{{ imgf.manipulation_score }}/100</td></tr>
+        <tr><td class="k">{{ T.ai_trace }}</td><td class="v">{{ imgf.ai_score }}/100</td></tr>
+        <tr><td class="k">{{ T.images }}</td><td class="v">{{ imgf.width }}×{{ imgf.height }} · {{ imgf.format }}</td></tr>
+        <tr><td class="k">{{ T.exif }}</td><td class="v">{{ (imgf.exif_make ~ ' ' ~ imgf.exif_model)|trim or imgf.exif_software or T.none_found }}</td></tr>
+        <tr><td class="k">C2PA / AI</td><td class="v">{{ (imgf.ai_signature_hits|join(', ')) or (imgf.c2pa_present and 'C2PA') or T.none_found }}</td></tr>
+      </table>
+      {% for s in imgf.signals %}
+        <div class="finding" style="margin-top:9px"><div class="bar" style="background:{{ sevcolor[s.severity] }}"></div>
+          <div class="msg">{{ s.tr if L=='tr' else s.en }}</div><div></div></div>
+      {% endfor %}
+    </div>
+    {% if imgf.ela_preview_b64 %}
+    <div class="card">
+      <div class="party-h">{{ T.ela_preview }}</div>
+      <img class="ela-img" src="data:image/png;base64,{{ imgf.ela_preview_b64 }}" alt="ELA">
+      <p class="note" style="margin-bottom:0">{{ T.ela_note }}</p>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- TECHNICAL METADATA -->
+  <div class="section-title">{{ T.metadata }}</div>
+  <div class="card">
+    <table class="kv">
+      <tr><td class="k">{{ T.file_hash }}</td><td class="v mono">{{ r.file.sha256 }}</td></tr>
+      <tr><td class="k">{{ T.pdf_version }} · {{ T.pages }}</td><td class="v">PDF {{ r.metadata.pdf_version }} · {{ r.metadata.page_count }} · {{ r.metadata.page_sizes }}</td></tr>
+      <tr><td class="k">{{ T.fonts }}</td><td class="v">{% for f in r.metadata.fonts %}<span class="badge-soft">{{ f.basefont }}{{ ' ✓' if f.embedded }}</span> {% endfor %}{{ '—' if not r.metadata.fonts }}</td></tr>
+      <tr><td class="k">%%EOF · {{ T.incremental }}</td><td class="v">{{ r.metadata.eof_count }} · {{ r.tamper.incremental_updates }}</td></tr>
+      <tr><td class="k">Annotations · JS</td><td class="v">{{ r.metadata.annotation_count }} · {{ 'var' if r.metadata.js_present else 'yok' }}</td></tr>
+      <tr><td class="k">Doc ID</td><td class="v mono">{{ r.metadata.doc_id_permanent[:24] or '—' }}</td></tr>
+    </table>
+  </div>
+
+  <div class="center" style="margin-top:26px;display:flex;gap:12px;justify-content:center">
+    <button class="btn" onclick="dl()">⬇ {{ T.download_json }}</button>
+    <a class="btn ghost" href="/?lang={{ L }}">＋ {{ T.new_analysis }}</a>
+  </div>
+
+  <details style="margin-top:22px">
+    <summary class="note" style="cursor:pointer">JSON</summary>
+    <pre class="codeblock" id="json">{{ report_json }}</pre>
+  </details>
+</main>
+
+<footer class="footer"><div class="container">{{ T.footer_note }} · v{{ version }} · {{ r.elapsed_ms }} ms</div></footer>
+
+<script>
+function dl(){
+  const blob=new Blob([document.getElementById('json').textContent],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download={{ r.file.name|tojson }}.replace(/\.pdf$/i,'')+'_analiz.json'; a.click();
+}
+</script>
+</body>
+</html>

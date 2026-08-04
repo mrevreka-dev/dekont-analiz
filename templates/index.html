@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="{{ L }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ T.app_title }}</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+</head>
+<body>
+<header class="topbar"><div class="container">
+  <div class="brand"><span class="logo">D</span><span>{{ T.app_title }}</span></div>
+  <div class="toolbar">
+    <a class="pill {{ 'active' if L=='tr' }}" href="/?lang=tr">TR</a>
+    <a class="pill {{ 'active' if L=='en' }}" href="/?lang=en">EN</a>
+    <a class="pill" href="/api/docs" target="_blank">API</a>
+  </div>
+</div></header>
+
+<main class="container">
+  <section class="hero">
+    <h1>{{ T.app_subtitle }}</h1>
+    <p>{{ T.upload_note }}</p>
+  </section>
+
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+
+  <div class="card upload-card">
+    <form id="frm" action="/analyze" method="post" enctype="multipart/form-data">
+      <input type="hidden" name="lang" value="{{ L }}">
+      <label class="dropzone" id="dz" for="file">
+        <div class="big">📄⬆️</div>
+        <div><strong>{{ T.upload_title }}</strong></div>
+        <div class="note">{{ T.upload_hint }}</div>
+        <div class="fname hidden" id="fname"></div>
+        <input type="file" id="file" name="file" accept="application/pdf,.pdf" class="hidden" required>
+      </label>
+      <div class="center" style="margin-top:18px">
+        <button class="btn" id="submit" type="submit" disabled>
+          <span id="btnlabel">{{ T.analyze_btn }}</span>
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <section style="max-width:640px;margin:34px auto 0">
+    <div class="section-title">{{ T.api_title }}</div>
+    <div class="card">
+      <p class="subline" style="margin-top:0">{{ T.api_desc }}</p>
+      <div class="codeblock">curl -X POST {{ '{BASE_URL}' }}/api/v1/analyze \
+  -H "X-API-Key: {{ '{KEY}' }}" \
+  -F "file=@dekont.pdf"</div>
+      <p class="note" style="margin-bottom:0">GET /api/v1/health · POST /api/v1/analyze · <a href="/api/docs" target="_blank">/api/docs</a></p>
+    </div>
+  </section>
+</main>
+
+<footer class="footer"><div class="container">{{ T.footer_note }} · v{{ version }}</div></footer>
+
+<script>
+const dz=document.getElementById('dz'), fi=document.getElementById('file'),
+      fn=document.getElementById('fname'), sb=document.getElementById('submit'),
+      frm=document.getElementById('frm'), bl=document.getElementById('btnlabel');
+function setFile(f){ if(!f) return; fn.textContent=f.name; fn.classList.remove('hidden'); sb.disabled=false; }
+fi.addEventListener('change',e=>setFile(e.target.files[0]));
+['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('drag');}));
+['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('drag');}));
+dz.addEventListener('drop',e=>{ const f=e.dataTransfer.files[0]; if(f){ fi.files=e.dataTransfer.files; setFile(f);} });
+frm.addEventListener('submit',()=>{ sb.disabled=true; bl.innerHTML='<span class="spinner"></span> {{ T.analyzing }}'; });
+</script>
+</body>
+</html>
