@@ -170,10 +170,15 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     ex.all_amounts = [m.group(0).strip() for m in AMOUNT_RE.finditer(joined)]
 
     # --- Format / banka tespiti (gönderici öncelikli; alıcı banka adını yakalamamak için) ---
+    # Format tespiti bankanın KENDİ imzasına (başlık/footer/özel etiket) sabitlenir;
+    # karşı-taraf banka adının metinde geçmesi tetiklememeli.
     low = joined.lower()
-    is_vakif = "VAKIFBANK" in joined.upper() or "vakıflar bankası" in low or "vakifbank.com" in low
-    is_isbank = "e-Dekont" in joined or "isbank.com" in low or "ETTN" in joined
-    is_garanti = "HESAPTAN" in joined or "garantibbva" in low or ("ALACAKLI" in joined and "garanti" in low)
+    up = joined.upper()
+    is_vakif = ("vakifbank.com" in low or "vakıflar bankası" in low
+                or ("VAKIFBANK" in up and "İŞLEM BİLGİLERİ" in up))
+    is_isbank = ("isbank.com" in low or "ETTN" in joined
+                 or ("e-dekont" in low and "doküman numarası" in low))
+    is_garanti = ("HESAPTAN" in up or "garantibbva" in low)
 
     if is_vakif:
         ex.bank = "VakıfBank"
@@ -305,11 +310,32 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.sender.bank = "VakıfBank"
 
     # =============================================================
-    #  GENEL / bilinmeyen format (OCR veya diğer bankalar)
+    #  EVRENSEL / diğer tüm bankalar (Ziraat, Akbank, Yapı Kredi, ...)
     # =============================================================
     else:
-        ex.doc_kind = "Dekont (genel)"
-        _generic_extract(ex, rjoined)
+        ex.doc_kind = "Dekont"
+        import universal
+        u = universal.universal_extract(pdf_bytes, joined, rjoined)
+        ex.sender.name = u["sender_name"]
+        ex.sender.iban = u["sender_iban"]
+        ex.sender.tckn = u["sender_tckn"]
+        ex.sender.customer_no = u["sender_customer"]
+        ex.sender.branch = u["sender_branch"]
+        ex.receiver.name = u["receiver_name"]
+        ex.receiver.iban = u["receiver_iban"]
+        ex.receiver.bank = u["receiver_bank"]
+        if u["amount"] is not None:
+            ex.amount.value = u["amount"]
+            ex.amount.currency = u["amount_currency"] or "TL"
+        ex.amount.fee = u["fee"]
+        ex.transaction.date = u["date"]
+        ex.transaction.ref_no = u["ref_no"]
+        ex.transaction.type = u["type"]
+        ex.transaction.channel = u["channel"]
+        ex.transaction.description = u["description"]
+        ex.all_ibans = u["all_ibans"] or ex.all_ibans
+        if not ex.bank:
+            ex.bank = banks.bank_from_iban(ex.sender.iban) or banks.bank_from_text(joined) or u["receiver_bank"]
 
     # --- IBAN'lardan banka tamamlama ---
     if not ex.receiver.bank and ex.receiver.iban:

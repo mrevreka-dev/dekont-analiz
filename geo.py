@@ -149,6 +149,9 @@ def label_value_map(words, label_phrases):
     right_band = (right_lab_right + 4, page_r + 1)
 
     CAP = 42  # dikey atama mesafesi (satır kaydırmalı değerleri kapsar, dipnotu dışlar)
+    # başlık/altbilgi sızmasını önle: etiket bloğunun dışındaki satırları dışla
+    top_lim = min(f["top"] for f in found) - 8
+    bot_lim = max(f["top"] for f in found) + CAP
 
     def assign(labs, band):
         res = {}
@@ -160,7 +163,10 @@ def label_value_map(words, label_phrases):
             if not (lo <= w["x0"] < hi):
                 continue
             wc = (w["top"] + w.get("bottom", w["top"])) / 2
+            if wc < top_lim or wc > bot_lim:   # başlık/altbilgi bölgesi
+                continue
             best = min(range(len(labs)), key=lambda i: abs(labs[i]["top"] - wc))
+            # aynı satır güçlü tercih: değer etiketin satırındaysa uzaklık ~0
             if abs(labs[best]["top"] - wc) <= CAP:
                 buckets[best].append(w)
         for i, lab in enumerate(labs):
@@ -172,6 +178,18 @@ def label_value_map(words, label_phrases):
     result = {}
     result.update(assign(left_labs, left_band))
     result.update(assign(right_labs, right_band))
+
+    # --- Yığılı (kart) düzen yedeği: değer etiketin HEMEN ALTINDA, aynı sütunda ---
+    for f in found:
+        if f["phrase"] in result:
+            continue
+        col = [w for w in value_words
+               if abs(w["x0"] - f["x0"]) <= 38
+               and f["top"] + 5 <= (w["top"] + w.get("bottom", w["top"])) / 2 <= f["top"] + 26]
+        if col:
+            val = re.sub(r"\s{2,}", " ", _order_reading(col))
+            if val:
+                result[f["phrase"]] = val
     return result
 
 
@@ -202,6 +220,7 @@ def clean_amount(v: str):
 
 def clean_name(v: str) -> str:
     s = v or ""
+    s = s.lstrip(" :：-")                         # baştaki ayraç/kolon
     s = _IBAN_RE.sub(" ", s)
     s = re.sub(r"\bIBAN\b|\bNO\b|\bUNVAN\b|/", " ", s, flags=re.I)
     s = re.sub(r"\d[\d.,: ]*", " ", s)          # rakam blokları
