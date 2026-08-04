@@ -121,8 +121,75 @@ def analyze_document(pdf_bytes: bytes, filename: str = "") -> dict:
                 manip = img_forensics.manipulation_score
                 ai = img_forensics.ai_score
 
+    # 6.5) İLERİ ANALİZLER: revizyon karşılaştırması, QR, gömülü XML, veri tutarlılığı
+    from forensics import Finding
+    import revision as _rev, qrxml as _qx, consistency as _cons
+
+    ex = extraction
+    # --- Revizyon karşılaştırması (artımlı güncellemeli belgeler) ---
+    rev = _rev.compare_revisions(pdf_bytes)
+    if rev["has_prior"] and rev["changes"]:
+        crit = [c for c in rev["changes"] if c["severity"] == "kritik"]
+        amount_changed = any(c["field"] == "amount" for c in crit)
+        if amount_changed:
+            findings.append(Finding(
+                "REV_AMOUNT_CHANGED", "critical", "structure", 45,
+                tr="TUTAR, PDF revizyonları arasında DEĞİŞTİRİLMİŞ. Önceki sürümdeki parasal değer "
+                   "son sürümde farklı — bu, belge üzerinde doğrudan tutar oynaması demektir.",
+                en="The AMOUNT was changed between PDF revisions — direct monetary tampering.",
+                detail="; ".join(f"{c['label']}: {c['prev']} -> {c['curr']}" for c in crit if c["field"] == "amount")))
+        findings.append(Finding(
+            "REV_CONTENT_CHANGED", "critical", "structure", 35,
+            tr=f"Eski revizyon ile son görünüm FARKLI: {len(crit)} kritik alan sonradan değiştirilmiş. "
+               f"PDF'in önceki sürümündeki metinler değiştirilerek üzerine kaydedilmiş.",
+            en=f"Old revision differs from final: {len(crit)} critical field(s) altered after creation.",
+            detail="; ".join(f"{c['label']}: {c['prev']} -> {c['curr']}" for c in rev["changes"])))
+        for c in crit:
+            if c["field"] == "amount":
+                continue
+            findings.append(Finding(
+                "REV_FIELD_CHANGED", "high", "content", 12,
+                tr=f"Kritik alan revizyonlar arasında değişmiş — {c['label']}: '{c['prev']}' → '{c['curr']}'.",
+                en=f"Critical field changed across revisions — {c['label']}: '{c['prev']}' -> '{c['curr']}'.",
+                detail=""))
+
+    # --- QR kod tespiti + karşılaştırma ---
+    qr = _qx.detect_qr(pdf_bytes) if doc_type != "none" else {"found": False, "count": 0, "payloads": []}
+    qr_check = {}
+    if qr["found"]:
+        qr_check = _qx.cross_check_qr(qr["payloads"], ex.sender.iban, ex.receiver.iban, ex.amount.value)
+        if qr_check.get("iban_match") is False or qr_check.get("amount_match") is False:
+            findings.append(Finding(
+                "QR_MISMATCH", "high", "content", 30,
+                tr="QR koddaki bilgiler, dekont üzerinde görünen alanlarla UYUŞMUYOR (IBAN/tutar farklı). "
+                   "Bu, görünen metnin sonradan değiştirildiğine güçlü işaret olabilir.",
+                en="QR-code data does not match the visible fields (IBAN/amount) — strong tamper signal.",
+                detail=str(qr_check)))
+        elif qr_check.get("iban_match") or qr_check.get("amount_match"):
+            findings.append(Finding(
+                "QR_MATCH", "info", "content", -8,
+                tr="QR koddaki bilgiler görünen alanlarla tutarlı (doğrulayıcı).",
+                en="QR-code data is consistent with the visible fields (corroborating).", detail=""))
+
+    # --- Gömülü XML (e-dekont/GİB) ---
+    xml = _qx.detect_embedded_xml(pdf_bytes)
+
+    # --- Veri tutarlılığı ---
+    cons = _cons.check_consistency(
+        ex.amount.value, ex.amount.fee, ex.amount.total,
+        _rev._find_bsmv(text_layout or ""), _rev._find_amount_words(text_layout or ""))
+    for c in cons["checks"]:
+        if not c["ok"]:
+            findings.append(Finding(
+                "CONSISTENCY_FAIL", "medium", "content", 15,
+                tr=f"Veri tutarlılığı hatası — {c['name']}: {c['detail']}. Alanlardan biri elle değiştirilmiş olabilir.",
+                en=f"Data consistency failure — {c['name']}: {c['detail']}.", detail=""))
+
     # 7) Skorlama
     score = compute_score(findings, doc_type, manip, ai)
+
+    # 7.5) Alt-skorlar (Dekont Guard tarzı)
+    subscores = _compute_subscores(struct, rev, cons, xml, qr_check, findings, doc_type)
 
     # 8) Rapor derle
     lang_findings = [f.as_dict("tr") for f in findings]
@@ -156,6 +223,24 @@ def analyze_document(pdf_bytes: bytes, filename: str = "") -> dict:
             "verdict_tr": score.verdict_tr,
             "verdict_en": score.verdict_en,
         },
+        "subscores": subscores,
+        "revision": {
+            "revision_count": rev["revision_count"],
+            "has_prior": rev["has_prior"],
+            "changes": rev["changes"],
+            "critical_count": rev["critical_count"],
+            "supporting_count": rev["supporting_count"],
+        },
+        "qr": {
+            "found": qr["found"], "count": qr["count"],
+            "payloads": [p[:200] for p in qr.get("payloads", [])],
+            "check": qr_check,
+        },
+        "embedded_xml": {
+            "present": xml["present"], "looks_like_dekont": xml["looks_like_dekont"],
+            "has_embedded_files": xml["has_embedded_files"],
+        },
+        "consistency": cons,
         "ai_trace": {
             "likelihood": score.ai_likelihood,
             "verdict": score.ai_verdict,
@@ -198,6 +283,45 @@ def analyze_document(pdf_bytes: bytes, filename: str = "") -> dict:
         "image_forensics": _img_forensics_dict(img_forensics),
     }
     return report
+
+
+def _compute_subscores(struct, rev, cons, xml, qr_check, findings, doc_type) -> dict:
+    """Dekont Guard tarzı üç alt-skor: bütünlük, veri tutarlılığı, kaynak doğrulanabilirliği."""
+    cp = classify_producer(struct.producer, struct.creator)
+    rev_crit = rev.get("critical_count", 0) if rev.get("has_prior") else 0
+
+    # Belge bütünlüğü
+    integrity = 100
+    if rev_crit > 0:
+        integrity -= 85
+    elif struct.has_incremental_updates:
+        integrity -= 18
+    if cp["editor_hits"] and cp["generator_hits"]:
+        integrity -= 30
+    if cp["append_mode"]:
+        integrity -= 15
+    integrity = max(0, min(100, integrity))
+
+    # Veri tutarlılığı
+    consistency = 100
+    consistency -= cons.get("fail_count", 0) * 25
+    consistency -= rev.get("critical_count", 0) * 20 + rev.get("supporting_count", 0) * 8
+    consistency = max(0, min(100, consistency))
+
+    # Kaynak doğrulanabilirliği
+    source = 8
+    if struct.has_signature:
+        source += 45
+    if xml.get("looks_like_dekont"):
+        source += 32
+    elif xml.get("present"):
+        source += 12
+    if qr_check.get("iban_match") or qr_check.get("amount_match"):
+        source += 22
+    source = max(0, min(100, source))
+
+    return {"integrity": int(integrity), "data_consistency": int(consistency),
+            "source_verifiability": int(source)}
 
 
 def _img_forensics_dict(f: ImageForensics | None) -> dict:

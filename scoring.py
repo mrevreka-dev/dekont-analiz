@@ -109,6 +109,16 @@ def compute_score(findings: list[Finding], doc_type: str,
     score = min(score, DOCTYPE_MAX_SCORE.get(doc_type, 100))
     score = int(max(0, min(100, round(score))))
 
+    # SERT GEÇERSİZLEŞTİRME: revizyonlar arasında tutar/kritik alan değişmişse bu,
+    # kanıtlanmış tahrifattır; kategori tavanlarından bağımsız olarak skoru kritiğe çeker.
+    codes = {f.code for f in findings}
+    if "REV_AMOUNT_CHANGED" in codes:
+        score = min(score, 8)
+    elif "REV_CONTENT_CHANGED" in codes:
+        score = min(score, 15)
+    elif "QR_MISMATCH" in codes:
+        score = min(score, 30)
+
     res.authenticity_score = score
     res.penalties_total = int(round(total_pen))
     res.bonuses_total = int(round(min(bonus, 10)))
