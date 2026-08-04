@@ -171,6 +171,12 @@
         <tr><td class="k">{{ T.manipulation }}</td><td class="v" style="color:{{ 'var(--critical)' if imgf.manipulation_score>=40 else ('var(--warning)' if imgf.manipulation_score>=15 else 'var(--good)') }}">{{ imgf.manipulation_score }}/100</td></tr>
         <tr><td class="k">{{ T.ai_trace }}</td><td class="v">{{ imgf.ai_score }}/100</td></tr>
         <tr><td class="k">{{ T.images }}</td><td class="v">{{ imgf.width }}×{{ imgf.height }} · {{ imgf.format }}</td></tr>
+        <tr><td class="k">{{ T.bg_color }}</td><td class="v">
+          {% if imgf.bg_color %}<span style="display:inline-block;width:14px;height:14px;border:1px solid var(--border-strong);border-radius:3px;vertical-align:middle;background:rgb({{ imgf.bg_color[0] }},{{ imgf.bg_color[1] }},{{ imgf.bg_color[2] }})"></span>
+          rgb({{ imgf.bg_color|join(', ') }}){% else %}—{% endif %}</td></tr>
+        <tr><td class="k">{{ T.bg_dev }}</td><td class="v">{{ T.max }} {{ imgf.bg_dev_max }} · {{ imgf.bg_patch_max }} {{ T.blocks }}</td></tr>
+        <tr><td class="k">{{ T.tone }}</td><td class="v">chroma {{ imgf.tone_chroma_var }} · {{ T.cast }} {{ imgf.tone_cast }}</td></tr>
+        <tr><td class="k">{{ T.noise }}</td><td class="v">{{ imgf.noise_inconsistency }}</td></tr>
         <tr><td class="k">{{ T.exif }}</td><td class="v">{{ (imgf.exif_make ~ ' ' ~ imgf.exif_model)|trim or imgf.exif_software or T.none_found }}</td></tr>
         <tr><td class="k">C2PA / AI</td><td class="v">{{ (imgf.ai_signature_hits|join(', ')) or (imgf.c2pa_present and 'C2PA') or T.none_found }}</td></tr>
       </table>
@@ -179,13 +185,18 @@
           <div class="msg">{{ s.tr if L=='tr' else s.en }}</div><div></div></div>
       {% endfor %}
     </div>
-    {% if imgf.ela_preview_b64 %}
     <div class="card">
+      {% if imgf.ela_preview_b64 %}
       <div class="party-h">{{ T.ela_preview }}</div>
       <img class="ela-img" src="data:image/png;base64,{{ imgf.ela_preview_b64 }}" alt="ELA">
-      <p class="note" style="margin-bottom:0">{{ T.ela_note }}</p>
+      <p class="note">{{ T.ela_note }}</p>
+      {% endif %}
+      {% if imgf.bg_heatmap_b64 %}
+      <div class="party-h" style="margin-top:14px">{{ T.bg_heatmap }}</div>
+      <img class="ela-img" src="data:image/png;base64,{{ imgf.bg_heatmap_b64 }}" alt="bg-heatmap">
+      <p class="note" style="margin-bottom:0">{{ T.bg_heatmap_note }}</p>
+      {% endif %}
     </div>
-    {% endif %}
   </div>
   {% endif %}
 
