@@ -128,8 +128,11 @@
         {% if ex.amount.total is not none %}<tr><td class="k">{{ T.total }}</td><td class="v">{{ ex.amount.total }} {{ ex.amount.currency }}</td></tr>{% endif %}
         {% if ex.transaction.date %}<tr><td class="k">{{ T.date }}</td><td class="v">{{ ex.transaction.date }}</td></tr>{% endif %}
         {% if ex.transaction.ref_no %}<tr><td class="k">{{ T.ref }}</td><td class="v mono">{{ ex.transaction.ref_no }}</td></tr>{% endif %}
+        {% if ex.transaction.document_no %}<tr><td class="k">{{ T.doc_no }}</td><td class="v mono">{{ ex.transaction.document_no }}</td></tr>{% endif %}
+        {% if ex.transaction.ettn %}<tr><td class="k">ETTN</td><td class="v mono">{{ ex.transaction.ettn }}</td></tr>{% endif %}
         {% if ex.transaction.type %}<tr><td class="k">{{ T.txn_type }}</td><td class="v">{{ ex.transaction.type }}</td></tr>{% endif %}
         {% if ex.transaction.channel %}<tr><td class="k">{{ T.channel }}</td><td class="v">{{ ex.transaction.channel }}</td></tr>{% endif %}
+        {% if ex.transaction.description %}<tr><td class="k">{{ T.description }}</td><td class="v">{{ ex.transaction.description }}</td></tr>{% endif %}
       </table>
     </div>
   </div>
