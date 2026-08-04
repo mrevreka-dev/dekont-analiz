@@ -66,7 +66,39 @@ def _largest_image_with_raw(pdf_bytes: bytes):
     return img, best[2]
 
 
-def analyze_document(pdf_bytes: bytes, filename: str = "") -> dict:
+_IMAGE_MAGIC = {
+    b"\xff\xd8\xff": "jpg", b"\x89PNG\r\n\x1a\n": "png", b"GIF8": "gif",
+    b"BM": "bmp", b"II*\x00": "tiff", b"MM\x00*": "tiff", b"RIFF": "webp",
+}
+
+
+def prepare_input(data: bytes, filename: str = "") -> tuple[bytes, str]:
+    """
+    Yüklenen veriyi analiz için hazırlar. PDF ise dokunmaz. Görsel (JPG/PNG/...) ise
+    KAYIPSIZ olarak tek sayfalık PDF'e sarar (img2pdf) ki ELA/EXIF gibi görsel adli
+    analizler orijinal görsel üzerinde çalışsın. Döndürür: (pdf_bytes, input_kind).
+    """
+    if data[:5] == b"%PDF-" or (filename or "").lower().endswith(".pdf"):
+        return data, "pdf"
+    ext = (filename or "").lower().rsplit(".", 1)[-1] if "." in (filename or "") else ""
+    is_img = ext in ("jpg", "jpeg", "png", "gif", "bmp", "tif", "tiff", "webp") or \
+             any(data.startswith(sig) for sig in _IMAGE_MAGIC)
+    if not is_img:
+        raise ValueError("unsupported_type")
+    # Kayıpsız sar
+    try:
+        import img2pdf
+        return img2pdf.convert(data), "image"
+    except Exception:
+        # Yedek: PIL ile normalize edip sar
+        from PIL import Image
+        im = Image.open(io.BytesIO(data)).convert("RGB")
+        buf = io.BytesIO(); im.save(buf, "PDF", resolution=150.0)
+        return buf.getvalue(), "image"
+
+
+def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pdf") -> dict:
+    # input_kind: "pdf" (yüklenen PDF) veya "image" (doğrudan yüklenen fotoğraf)
     t0 = time.time()
 
     # 1) Yapı / metadata
@@ -174,6 +206,15 @@ def analyze_document(pdf_bytes: bytes, filename: str = "") -> dict:
     # --- Gömülü XML (e-dekont/GİB) ---
     xml = _qx.detect_embedded_xml(pdf_bytes)
 
+    # --- Tarih/saat derin analizi ---
+    import timing as _tim
+    is_aem = any(g in ("adobe experience manager", "adobe livecycle")
+                 for g in classify_producer(struct.producer, struct.creator)["generator_hits"])
+    timing = _tim.analyze_timing(struct.creation_dt, struct.mod_dt, ex.transaction.date, is_aem)
+    for tf in timing["findings"]:
+        findings.append(Finding(tf["code"], tf["severity"], "metadata", tf["weight"],
+                                tr=tf["tr"], en=tf["en"], detail=tf.get("detail", "")))
+
     # --- Veri tutarlılığı ---
     cons = _cons.check_consistency(
         ex.amount.value, ex.amount.fee, ex.amount.total,
@@ -184,6 +225,18 @@ def analyze_document(pdf_bytes: bytes, filename: str = "") -> dict:
                 "CONSISTENCY_FAIL", "medium", "content", 15,
                 tr=f"Veri tutarlılığı hatası — {c['name']}: {c['detail']}. Alanlardan biri elle değiştirilmiş olabilir.",
                 en=f"Data consistency failure — {c['name']}: {c['detail']}.", detail=""))
+
+    # --- Tek fotoğraftan oluşan PDF => KRİTİK (doğrudan foto yüklemede uygulanmaz) ---
+    if input_kind == "pdf" and doc_type in ("image_only", "scanned"):
+        findings.append(Finding(
+            "SINGLE_PHOTO_PDF", "critical", "content", 45,
+            tr="Yüklenen PDF, seçilebilir hiçbir veri içermeyen TEK BİR FOTOĞRAFTAN/GÖRSELDEN oluşuyor. "
+               "Gerçek banka dekontları dijital metin katmanı içerir; tek bir fotoğrafı PDF'e koymak, "
+               "orijinal dijital dekont yerine düzenlenebilir bir görsel sunulduğunu gösterir. Yüksek sahtecilik riski.",
+            en="The uploaded PDF consists of a SINGLE PHOTO/IMAGE with no selectable data. Genuine bank receipts "
+               "contain a digital text layer; wrapping a single photo in a PDF indicates an editable image was "
+               "presented instead of the original digital receipt. High forgery risk.",
+            detail=f"doc_type={doc_type}"))
 
     # 7) Skorlama
     score = compute_score(findings, doc_type, manip, ai)
@@ -241,6 +294,14 @@ def analyze_document(pdf_bytes: bytes, filename: str = "") -> dict:
             "has_embedded_files": xml["has_embedded_files"],
         },
         "consistency": cons,
+        "timing": {
+            "timeline": timing["timeline"],
+            "transaction_local": timing["transaction_local"],
+            "creation_local": timing["creation_local"],
+            "mod_local": timing["mod_local"],
+            "gaps": timing["gaps"],
+        },
+        "input_kind": input_kind,
         "ai_trace": {
             "likelihood": score.ai_likelihood,
             "verdict": score.ai_verdict,

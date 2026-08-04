@@ -12,10 +12,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from analyze import analyze_document, ENGINE_VERSION
+from analyze import analyze_document, prepare_input, ENGINE_VERSION
 from i18n import t as i18n_t
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+BASE = os.path.dirname(__file__)
 MAX_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", 25 * 1024 * 1024))  # 25 MB
 API_KEYS = {k.strip() for k in os.environ.get("DEKONT_API_KEYS", "").split(",") if k.strip()}
 
@@ -60,12 +60,14 @@ async def analyze_web(request: Request, file: UploadFile = File(...), lang: str 
             status_code=400)
     if len(data) > MAX_BYTES:
         raise HTTPException(413, "File too large")
-    if not (data[:5] == b"%PDF-" or (file.filename or "").lower().endswith(".pdf")):
+    try:
+        prepared, kind = prepare_input(data, file.filename or "")
+    except Exception:
         return templates.TemplateResponse("index.html",
             {"request": request, "L": L, "T": T, "version": ENGINE_VERSION, "error": T["err_not_pdf"]},
             status_code=400)
     try:
-        report = analyze_document(data, file.filename or "document.pdf")
+        report = analyze_document(prepared, file.filename or "document.pdf", input_kind=kind)
     except Exception as e:
         return templates.TemplateResponse("index.html",
             {"request": request, "L": L, "T": T, "version": ENGINE_VERSION,
@@ -96,7 +98,7 @@ async def analyze_api(file: UploadFile = File(...), x_api_key: str | None = Head
     Bir PDF dekontu analiz eder ve yapılandırılmış JSON rapor döndürür.
     Analyze a PDF receipt and return a structured JSON report.
 
-    - **file**: multipart/form-data PDF dosyası
+    - **file**: multipart/form-data PDF veya görsel (JPG/PNG) dosyası
     - **X-API-Key**: (opsiyonel) sunucu yapılandırılmışsa gereklidir
     """
     _check_api_key(x_api_key)
@@ -105,10 +107,12 @@ async def analyze_api(file: UploadFile = File(...), x_api_key: str | None = Head
         raise HTTPException(400, "Empty file.")
     if len(data) > MAX_BYTES:
         raise HTTPException(413, "File too large.")
-    if not (data[:5] == b"%PDF-" or (file.filename or "").lower().endswith(".pdf")):
-        raise HTTPException(415, "Only PDF files are supported.")
     try:
-        report = analyze_document(data, file.filename or "document.pdf")
+        prepared, kind = prepare_input(data, file.filename or "")
+    except Exception:
+        raise HTTPException(415, "Only PDF or image (JPG/PNG) files are supported.")
+    try:
+        report = analyze_document(prepared, file.filename or "document.pdf", input_kind=kind)
     except Exception as e:
         raise HTTPException(500, f"Analysis failed: {e}")
     return JSONResponse(report)

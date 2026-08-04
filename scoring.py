@@ -116,7 +116,11 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 8)
     elif "REV_CONTENT_CHANGED" in codes:
         score = min(score, 15)
-    elif "QR_MISMATCH" in codes:
+    if "TIME_FILE_BEFORE_TXN" in codes:      # geriye tarihleme — imkânsız
+        score = min(score, 10)
+    if "SINGLE_PHOTO_PDF" in codes:          # PDF içinde tek fotoğraf
+        score = min(score, 20)
+    if "QR_MISMATCH" in codes:
         score = min(score, 30)
 
     res.authenticity_score = score

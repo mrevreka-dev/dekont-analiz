@@ -142,17 +142,7 @@ def detect(s: StructureReport, text_len: int, doc_type: str) -> list[Finding]:
                 en=f"Modification date ({s.mod_dt}) is BEFORE creation date ({s.creation_dt}) — physically impossible.",
                 detail=f"delta={delta}s",
             ))
-        elif delta > 120 and not is_aem:
-            # AEM forms output'ta CreationDate şablon tarihidir; onu ayrı ele al
-            hrs = delta / 3600
-            sev = "medium" if hrs > 1 else "low"
-            F.append(Finding(
-                "CREATE_MOD_GAP", sev, "metadata", 10 if hrs > 1 else 5,
-                tr=f"Oluşturulma ve değiştirilme tarihleri farklı (~{hrs:.1f} saat fark). "
-                   f"Anlık üretilen bir dekontta bu ikisi genelde aynıdır; fark, belgenin sonradan işlendiğini düşündürür.",
-                en=f"Creation and modification timestamps differ (~{hrs:.1f}h). Instantly-generated receipts usually match.",
-                detail=f"create={s.creation_dt} mod={s.mod_dt}",
-            ))
+        # Not: oluşturma↔değiştirme farkı artık timing.py'de (daha ayrıntılı) ele alınır.
     if is_aem and s.creation_dt and s.creation_dt.year <= 2018:
         F.append(Finding(
             "AEM_TEMPLATE_DATE", "info", "metadata", 0,
