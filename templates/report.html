@@ -187,14 +187,23 @@
       {% else %}<p class="note">{{ T.no_findings }}</p>{% endif %}
     </div>
     <div class="card">
-      <div class="party-h">⏱ {{ T.created }} / {{ T.modified }}</div>
-      <div class="timeline">
-        <div class="tl-node"><div class="lab">{{ T.created }}</div><div class="dt">{{ r.metadata.creation_date or '—' }}</div></div>
-        <div class="tl-node"><div class="lab">{{ T.modified }}</div><div class="dt">{{ r.metadata.mod_date or '—' }}</div></div>
-      </div>
-      <table class="kv" style="margin-top:12px">
+      <div class="party-h">⏱ {{ T.timing_title }}</div>
+      <table class="kv">
+        {% for ev in r.timing.timeline %}
+        <tr><td class="k">{{ ev.label }}</td><td class="v mono">{{ ev.value }}</td></tr>
+        {% endfor %}
+        {% if r.timing.gaps.txn_to_generation_sec is defined %}
+        <tr><td class="k">{{ 'İşlem → Üretim farkı' if L=='tr' else 'Txn → Generation gap' }}</td>
+          <td class="v" style="color:{{ 'var(--critical)' if r.timing.gaps.txn_to_generation_sec < -300 or r.timing.gaps.txn_to_generation_sec > 21600 else 'var(--good)' }}">{{ (r.timing.gaps.txn_to_generation_sec/60)|round(1) }} dk</td></tr>
+        {% endif %}
+        {% if r.timing.gaps.creation_to_mod_sec is defined and r.timing.gaps.creation_to_mod_sec > 60 %}
+        <tr><td class="k">{{ 'Oluşturma → Değiştirme' if L=='tr' else 'Created → Modified' }}</td>
+          <td class="v" style="color:var(--warning)">{{ (r.timing.gaps.creation_to_mod_sec/60)|round(1) }} dk</td></tr>
+        {% endif %}
+      </table>
+      <p class="note" style="margin-bottom:0">{{ T.timing_note }}</p>
+      <table class="kv" style="margin-top:8px">
         <tr><td class="k">{{ T.producer }}</td><td class="v">{{ r.metadata.producer or '—' }}</td></tr>
-        <tr><td class="k">{{ T.creator }}</td><td class="v">{{ r.metadata.creator or '—' }}</td></tr>
       </table>
     </div>
   </div>
