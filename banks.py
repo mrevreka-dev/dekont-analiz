@@ -5,31 +5,79 @@ Turkish banks: IBAN bank codes and name matching.
 from __future__ import annotations
 import re
 
-# 5 haneli IBAN banka kodu -> banka adı
+# IBAN banka kodu -> banka adı.
+# Kaynak: TCMB Ödeme Sistemleri Katılımcıları (resmi liste). IBAN'daki 5 haneli kod,
+# TCMB'nin 4 haneli EFT kodunun başına '0' eklenmiş halidir (ör. EFT 0064 -> IBAN 00064).
 IBAN_BANK_CODES = {
+    "00001": "Türkiye Cumhuriyet Merkez Bankası",
+    "00004": "İller Bankası",
     "00010": "T.C. Ziraat Bankası",
     "00012": "Türkiye Halk Bankası",
+    "00014": "Türkiye Sınai Kalkınma Bankası (TSKB)",
     "00015": "VakıfBank",
+    "00016": "Türk Eximbank",
+    "00017": "Türkiye Kalkınma ve Yatırım Bankası",
+    "00029": "Birleşik Fon Bankası",
     "00032": "Türk Ekonomi Bankası (TEB)",
     "00046": "Akbank",
     "00059": "Şekerbank",
+    "00060": "Türk Ticaret Bankası",
     "00062": "Garanti BBVA",
     "00064": "Türkiye İş Bankası",
     "00067": "Yapı ve Kredi Bankası",
+    "00091": "Arap Türk Bankası (A&T Bank)",
+    "00092": "Citibank",
+    "00096": "Turkish Bank",
+    "00098": "JPMorgan Chase Bank",
     "00099": "ING Bank",
     "00103": "Fibabanka",
+    "00108": "Turkland Bank (T-Bank)",
+    "00109": "ICBC Turkey Bank",
     "00111": "QNB Finansbank",
+    "00115": "Deutsche Bank",
+    "00116": "Pasha Yatırım Bankası",
+    "00121": "Standard Chartered Yatırım Bankası",
+    "00122": "Société Générale",
     "00123": "HSBC Bank",
+    "00124": "Alternatifbank (ABank)",
+    "00125": "Burgan Bank",
+    "00129": "Bank of America Yatırım Bank",
+    "00132": "İstanbul Takas ve Saklama Bankası (Takasbank)",
     "00134": "DenizBank",
-    "00143": "Odea Bank",
-    "00146": "Aktif Yatırım Bankası",
+    "00135": "Anadolubank",
+    "00137": "Rabobank",
+    "00138": "Diler Yatırım Bankası",
+    "00139": "GSD Yatırım Bankası",
+    "00141": "Nurol Yatırım Bankası",
+    "00142": "Bankpozitif",
+    "00143": "Aktif Yatırım Bankası",
+    "00146": "Odea Bank",
+    "00147": "MUFG Bank Turkey",
+    "00148": "Intesa Sanpaolo",
+    "00149": "Bank of China Turkey",
+    "00150": "Golden Global Yatırım Bankası",
+    "00151": "D Yatırım Bankası",
+    "00152": "Destek Yatırım Bankası",
+    "00153": "Misyon Yatırım Bankası",
+    "00154": "Tera Yatırım Bankası",
+    "00155": "Q Yatırım Bankası",
+    "00156": "Hedef Yatırım Bankası",
+    "00157": "Enpara Bank",
+    "00158": "Colendi Bank",
+    "00159": "Fups Bank",
+    "00160": "Ziraat Dinamik Banka",
+    "00161": "Aytemiz Yatırım Bankası",
     "00203": "Albaraka Türk Katılım",
     "00205": "Kuveyt Türk Katılım",
     "00206": "Türkiye Finans Katılım",
     "00209": "Ziraat Katılım",
     "00210": "Vakıf Katılım",
-    "00211": "Emlak Katılım",
-    "00015000": "VakıfBank",
+    "00211": "Türkiye Emlak Katılım",
+    "00212": "Hayat Finans Katılım",
+    "00213": "T.O.M. Katılım Bankası",
+    "00214": "Dünya Katılım Bankası",
+    "00806": "Merkezi Kayıt Kuruluşu",
+    "00807": "PTT (Posta ve Telgraf Teşkilatı)",
 }
 
 # Metin içi anahtar kelimeler -> banka adı
@@ -44,7 +92,7 @@ NAME_KEYWORDS = [
     (r"denizbank", "DenizBank"),
     (r"finansbank|qnb", "QNB Finansbank"),
     (r"\bteb\b|türk ekonomi", "Türk Ekonomi Bankası (TEB)"),
-    (r"enpara", "QNB Finansbank (Enpara)"),
+    (r"enpara", "Enpara Bank"),
     (r"kuveyt türk", "Kuveyt Türk Katılım"),
     (r"albaraka", "Albaraka Türk Katılım"),
     (r"ing bank|\bing\b", "ING Bank"),
@@ -58,12 +106,32 @@ def normalize_iban(raw: str) -> str:
     return s
 
 
-def bank_from_iban(iban: str) -> str:
+def iban_bank_code(iban: str) -> str:
+    """IBAN'dan 5 haneli banka kodunu döndürür (ör. 'TR64 0006 4...' -> '00064')."""
     s = normalize_iban(iban)
     m = re.match(r"TR\d{2}(\d{5})", s)
-    if m:
-        return IBAN_BANK_CODES.get(m.group(1), "")
-    return ""
+    return m.group(1) if m else ""
+
+
+def bank_from_iban(iban: str) -> str:
+    """IBAN banka kodundan banka adını döndürür; bilinmiyorsa boş."""
+    code = iban_bank_code(iban)
+    return IBAN_BANK_CODES.get(code, "") if code else ""
+
+
+def bank_label_from_iban(iban: str) -> str:
+    """
+    IBAN'dan banka etiketi. Bilinen kod -> banka adı. Kod var ama tabloda yoksa
+    en azından kodu göster ('Tanımsız kurum (IBAN kodu: 00XYZ)') ki kullanıcı
+    bakabilsin. IBAN geçersizse boş.
+    """
+    code = iban_bank_code(iban)
+    if not code:
+        return ""
+    name = IBAN_BANK_CODES.get(code)
+    if name:
+        return name
+    return f"Tanımsız kurum (IBAN kodu: {code})"
 
 
 def bank_from_text(text: str) -> str:

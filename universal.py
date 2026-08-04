@@ -171,9 +171,9 @@ def universal_extract(pdf_bytes: bytes | None, text: str, reading_text: str = ""
             cm = _CURRENCY_RE.search(txt)
             out["amount_currency"] = cm.group(1).upper() if cm else ""
 
-    # banka tamamla
+    # banka tamamla (bilinmeyen kodda IBAN kodunu göster)
     if not out["receiver_bank"] and out["receiver_iban"]:
-        out["receiver_bank"] = banks.bank_from_iban(out["receiver_iban"])
+        out["receiver_bank"] = banks.bank_label_from_iban(out["receiver_iban"])
     return out
 
 

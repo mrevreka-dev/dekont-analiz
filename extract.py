@@ -275,7 +275,9 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         if geo_ok:
             # geometrik çıkarım tamam; IBAN'lardan banka tamamla ve bitir
             if not ex.receiver.bank and ex.receiver.iban:
-                ex.receiver.bank = banks.bank_from_iban(ex.receiver.iban)
+                ex.receiver.bank = banks.bank_label_from_iban(ex.receiver.iban)
+            if not ex.sender.bank and ex.sender.iban:
+                ex.sender.bank = banks.bank_label_from_iban(ex.sender.iban)
             ex.confidence = _confidence(ex)
             return ex
         # ---- Yedek: metin-tabanlı ayrıştırma ----
@@ -339,9 +341,9 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
 
     # --- IBAN'lardan banka tamamlama ---
     if not ex.receiver.bank and ex.receiver.iban:
-        ex.receiver.bank = banks.bank_from_iban(ex.receiver.iban)
+        ex.receiver.bank = banks.bank_label_from_iban(ex.receiver.iban)
     if not ex.sender.bank and ex.sender.iban:
-        ex.sender.bank = banks.bank_from_iban(ex.sender.iban)
+        ex.sender.bank = banks.bank_label_from_iban(ex.sender.iban)
     if not ex.bank:
         ex.bank = ex.sender.bank or banks.bank_from_iban(ex.sender.iban) or ex.receiver.bank
 
