@@ -23,8 +23,9 @@ from __future__ import annotations
 
 TRUE, FALSE, NEUTRAL = "true", "false", "neutral"
 
-# İçerik oynamasını KESİN kanıtlayan bulgular (revizyonlar arası fark)
-_CONTENT_TAMPER = {"REV_CONTENT_CHANGED", "REV_AMOUNT_CHANGED", "REV_FIELD_CHANGED"}
+# İçerik oynamasını KESİN kanıtlayan bulgular (revizyon farkı VEYA bakiye zinciri kırılması)
+_CONTENT_TAMPER = {"REV_CONTENT_CHANGED", "REV_AMOUNT_CHANGED", "REV_FIELD_CHANGED",
+                   "STATEMENT_BALANCE_BREAK"}
 # Zaman tutarsızlığını gösteren bulgular
 _TIME_BAD = {"TIME_FILE_BEFORE_TXN", "TIME_LATE_GENERATION", "TIME_MODIFIED_AFTER_CREATE"}
 
@@ -53,16 +54,24 @@ def _mode(doc_type: str, input_kind: str) -> str:
 
 def compute_verdicts(*, doc_type: str, input_kind: str, codes: set, cons: dict,
                      has_pdf_dates: bool, txn_date: str, seq: str,
-                     db_checked: bool, db_count: int, is_receipt: bool) -> dict:
+                     db_checked: bool, db_count: int, is_receipt: bool,
+                     doc_kind: str = "dekont", balance_state: str = "neutral") -> dict:
     mode = _mode(doc_type, input_kind)
+    is_statement = (doc_kind == "hesap_hareketi")
+    belge = "hesap hareketi" if is_statement else "dekont"
     checks = []
 
     def add(key, q_tr, q_en, state, r_tr, r_en):
         checks.append({"key": key, "question_tr": q_tr, "question_en": q_en,
                        "state": state, "reason_tr": r_tr, "reason_en": r_en})
 
-    # 1) Geçerli bir banka dekontu mu? (her zaman kesin)
-    if is_receipt:
+    # 1) Geçerli bir belge mi? (dekont / hesap hareketi)
+    if is_statement:
+        add("valid_receipt", "Geçerli bir hesap hareketi belgesi mi?",
+            "Is it a valid account statement?", TRUE,
+            "Hesap hareketi içeriği (hesap sahibi, IBAN, dönem, işlem/bakiye tablosu) tespit edildi.",
+            "Account-statement content (holder, IBAN, period, transaction/balance table) was detected.")
+    elif is_receipt:
         add("valid_receipt", "Geçerli bir banka dekontu mu?", "Is it a valid bank receipt?",
             TRUE, "Dekont içeriği (banka, IBAN, tutar, taraf bilgileri) tespit edildi.",
             "Receipt content (bank, IBAN, amount, party info) was detected.")
@@ -70,6 +79,26 @@ def compute_verdicts(*, doc_type: str, input_kind: str, codes: set, cons: dict,
         add("valid_receipt", "Geçerli bir banka dekontu mu?", "Is it a valid bank receipt?",
             FALSE, "Görselde/dosyada banka dekontu içeriği tespit EDİLEMEDİ.",
             "No bank-receipt content could be detected in the file/image.")
+
+    # 1.5) HESAP HAREKETİ: yürüyen bakiye zinciri tutarlı mı? (matematiksel içerik kontrolü)
+    if is_statement:
+        if balance_state == FALSE:
+            add("balance_chain", "Yürüyen bakiye zinciri tutarlı mı?",
+                "Is the running-balance chain consistent?", FALSE,
+                "Bakiye zinciri KIRILMIŞ: en az bir satırda bakiye, işlem tutarıyla uyuşmuyor — bir "
+                "tutar/bakiye elle değiştirilmiş ya da satır eklenip çıkarılmış olabilir (matematiksel kanıt).",
+                "Balance chain BROKEN: on at least one row the balance does not match the amount — an "
+                "amount/balance was altered or a row inserted/removed (mathematical proof).")
+        elif balance_state == TRUE:
+            add("balance_chain", "Yürüyen bakiye zinciri tutarlı mı?",
+                "Is the running-balance chain consistent?", TRUE,
+                "Her satırda bakiye = önceki bakiye ± işlem tutarı doğrulandı; içerik oynaması yönünde işaret yok.",
+                "Verified balance = previous balance ± amount on every row; no sign of tampering.")
+        else:
+            add("balance_chain", "Yürüyen bakiye zinciri tutarlı mı?",
+                "Is the running-balance chain consistent?", NEUTRAL,
+                "Yürüyen bakiye sütunu okunamadı ya da yeterli işlem satırı yok.",
+                "The running-balance column could not be read or there are too few transaction rows.")
 
     # 2) İçerik değiştirilmemiş mi? (oynama yok mu)
     if codes & _CONTENT_TAMPER:
@@ -145,17 +174,19 @@ def compute_verdicts(*, doc_type: str, input_kind: str, codes: set, cons: dict,
     # 6) GENEL: Dekont güvenilir mi (sahte değil)?
     states = {c["key"]: c["state"] for c in checks}
     any_false = any(c["state"] == FALSE for c in checks)
+    _B = "Hesap hareketi" if is_statement else "Dekont"
+    _Ben = "account statement" if is_statement else "receipt"
     if any_false:
         overall = FALSE
-        o_tr = ("Dekont GÜVENİLİR DEĞİL: en az bir doğrulama kesin olarak başarısız oldu "
+        o_tr = (f"{_B} GÜVENİLİR DEĞİL: en az bir doğrulama kesin olarak başarısız oldu "
                 "(tahrifat/uyumsuzluk tespit edildi).")
-        o_en = ("The receipt is NOT trustworthy: at least one verification definitively failed "
+        o_en = (f"The {_Ben} is NOT trustworthy: at least one verification definitively failed "
                 "(tampering/inconsistency detected).")
     elif states.get("content_integrity") == TRUE:
         overall = TRUE
-        o_tr = ("Dekont GÜVENİLİR: gerçek dijital PDF üzerinde yapılan kesin doğrulamalarda "
+        o_tr = (f"{_B} GÜVENİLİR: gerçek dijital PDF üzerinde yapılan kesin doğrulamalarda "
                 "tahrifat/uyumsuzluk bulunmadı.")
-        o_en = ("The receipt is TRUSTWORTHY: definitive checks on the genuine digital PDF found "
+        o_en = (f"The {_Ben} is TRUSTWORTHY: definitive checks on the genuine digital PDF found "
                 "no tampering/inconsistency.")
     else:
         overall = NEUTRAL
@@ -170,6 +201,7 @@ def compute_verdicts(*, doc_type: str, input_kind: str, codes: set, cons: dict,
         "mode": mode,
         "mode_label_tr": _MODE_TR[mode],
         "mode_label_en": _MODE_EN[mode],
+        "belge_turu": doc_kind,
         "checks": checks,
         "overall": {"state": overall, "label_tr": o_tr, "label_en": o_en},
     }

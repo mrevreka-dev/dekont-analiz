@@ -71,11 +71,38 @@ class Degerlendirme(BaseModel):
 
 
 class KesinCevaplar(BaseModel):
-    gecerli_dekont: str = Field("neutral", description="Geçerli bir banka dekontu mu? true | false")
+    gecerli_belge: str = Field("neutral", description="Geçerli bir dekont/hesap hareketi belgesi mi? true | false")
     evrakta_oynama: str = Field("belirsiz", description="Evrakta oynama/işlem var mı? yok | var | belirsiz")
-    zaman_tutarli: str = Field("neutral", description="İşlem ↔ dekont zamanı tutarlı mı? true | false | neutral")
+    zaman_tutarli: str = Field("neutral", description="İşlem ↔ belge zamanı tutarlı mı? true | false | neutral")
     veri_tutarli: str = Field("neutral", description="Tutar/veri hesapları tutarlı mı? true | false | neutral")
+    bakiye_zinciri_tutarli: str = Field("neutral", description="(Hesap hareketi) yürüyen bakiye zinciri tutarlı mı? true | false | neutral")
     numara_celiskisi_yok: str = Field("neutral", description="Numara geçmişiyle çelişki yok mu? true | false | neutral")
+
+
+class BakiyeKirilmasi(BaseModel):
+    tarih: str = ""
+    tutar: Optional[float] = None
+    bakiye: Optional[float] = None
+    beklenen_onceki_bakiye: Optional[float] = None
+    gercek_onceki_bakiye: Optional[float] = None
+    fark: Optional[float] = None
+    satir: str = ""
+
+
+class HesapHareketi(BaseModel):
+    hesap_sahibi: str = ""
+    iban: str = ""
+    hesap_tipi: str = ""
+    donem_baslangic: str = ""
+    donem_bitis: str = ""
+    seri_sira_no: str = ""
+    islem_sayisi: int = 0
+    acilis_bakiye: Optional[float] = None
+    kapanis_bakiye: Optional[float] = None
+    net_degisim: Optional[float] = None
+    bakiye_zinciri_tutarli: Optional[bool] = Field(None, description="Yürüyen bakiye zinciri tutarlı mı (true/false/null)")
+    bakiye_kirilma_sayisi: int = 0
+    bakiye_kirilmalari: list[BakiyeKirilmasi] = []
 
 
 class Bilgiler(BaseModel):
@@ -116,7 +143,10 @@ class AnalyzeResponse(BaseModel):
     motor_surumu: str = ""
     analiz_zamani: str = ""
     dosya: Dosya
+    belge_turu: str = Field("", description="dekont | hesap_hareketi | diger")
+    belge_turu_aciklama: str = ""
     dekont_mu: bool = Field(..., description="Yüklenen dosya bir banka dekontu mu?")
+    hesap_hareketi_mi: bool = Field(False, description="Yüklenen dosya bir hesap hareketi/özeti mi?")
     dogrulama_modu: str = Field("", description="digital | pdf_photo | photo")
     dogrulama_modu_aciklama: str = ""
     degerlendirme: Degerlendirme
@@ -124,6 +154,7 @@ class AnalyzeResponse(BaseModel):
     islem_tespit_edildi: bool = Field(False, description="Evrakta bir işlem/dekont içeriği tespit edildi mi?")
     bilgiler: Bilgiler
     zaman: Zaman
+    hesap_hareketi: Optional[HesapHareketi] = Field(None, description="Belge bir hesap hareketiyse doldurulur")
     bulgular: list[Bulgu] = []
     detay: dict[str, Any] = Field(default_factory=dict, description="Tam ayrıntılı iç rapor (isteğe bağlı)")
 

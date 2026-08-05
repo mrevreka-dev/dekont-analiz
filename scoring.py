@@ -128,6 +128,8 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 30)
     if "SEQ_DB_DUPLICATE" in codes:          # numara başka dekontta da var
         score = min(score, 12)
+    if "STATEMENT_BALANCE_BREAK" in codes:   # hesap hareketinde bakiye zinciri kırık
+        score = min(score, 10)
 
     res.authenticity_score = score
     res.penalties_total = int(round(total_pen))

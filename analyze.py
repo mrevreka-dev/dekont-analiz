@@ -249,9 +249,13 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     from extract import derive_sequence_number
     extraction.transaction.sequence_number = derive_sequence_number(extraction)
 
-    # --- Bu bir dekont mu? (özellikle görsel/OCR girdilerinde) ---
+    # --- Belge türü: dekont mu, hesap hareketi mi? ---
     from extract import receipt_content_score
+    import statement as _stmt
     rc_score = receipt_content_score(text_layout, extraction)
+    stmt = _stmt.analyze(text_layout or "")
+    st_score = stmt["score"]
+
     is_receipt = (doc_type in ("digital_native", "hybrid")) or rc_score >= 0.30
     # Vision modeli bir görüşe sahipse onu dikkate al (görselde daha güvenilir)
     if vision_result is not None:
@@ -262,6 +266,17 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             is_receipt = True
         elif _vr is False and not _has_fields:
             is_receipt = False
+
+    # Hesap hareketi belirleyici sinyali: 3+ işlem satırı + yürüyen bakiye tablosu
+    # (tek işlemlik dekontlarda bulunmaz). Anahtar kelime örtüşmesinden bağımsız kesin ayrım.
+    is_statement = st_score >= 0.5 and stmt["islem_sayisi"] >= 3
+    if is_statement:
+        is_receipt = False          # hesap hareketi dekont DEĞİLDİR
+        doc_kind = "hesap_hareketi"
+    elif is_receipt:
+        doc_kind = "dekont"
+    else:
+        doc_kind = "diger"
 
     # 6) Görsel adli analiz (görsel içeren belgeler için)
     img_forensics: ImageForensics | None = None
@@ -363,8 +378,38 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 tr=f"Veri tutarlılığı hatası — {c['name']}: {c['detail']}. Alanlardan biri elle değiştirilmiş olabilir.",
                 en=f"Data consistency failure — {c['name']}: {c['detail']}.", detail=""))
 
+    # --- HESAP HAREKETİ: yürüyen bakiye sürekliliği (içerik oynaması kesin kanıtı) ---
+    if is_statement:
+        _bal = stmt["balance"]
+        if _bal.get("consistent") is False and _bal.get("breaks"):
+            _n = len(_bal["breaks"])
+            _b0 = _bal["breaks"][0]
+            findings.append(Finding(
+                "STATEMENT_BALANCE_BREAK", "critical", "content", 45,
+                tr=f"HESAP HAREKETİNDE BAKİYE ZİNCİRİ KIRILMIŞ: {_n} satırda yürüyen bakiye, işlem "
+                   f"tutarıyla UYUŞMUYOR. Gerçek bir hesap özetinde her satırda 'bakiye = önceki bakiye ± "
+                   f"işlem tutarı' olmalıdır. İlk kırılma {_b0['tarih']} tarihli satırda: beklenen önceki "
+                   f"bakiye {_b0['beklenen_onceki_bakiye']}, görünen {_b0['gercek_onceki_bakiye']} "
+                   f"(fark {_b0['fark']}). Bu, bir işlem tutarının/bakiyenin elle değiştirildiğine ya da "
+                   f"satır eklenip çıkarıldığına matematiksel kanıttır.",
+                en=f"BALANCE CHAIN BROKEN in the account statement: on {_n} row(s) the running balance does "
+                   f"not match the transaction amount. In a genuine statement each row must satisfy "
+                   f"'balance = previous balance ± amount'. First break on {_b0['tarih']}: expected previous "
+                   f"balance {_b0['beklenen_onceki_bakiye']}, shown {_b0['gercek_onceki_bakiye']} "
+                   f"(diff {_b0['fark']}). Mathematical proof that an amount/balance was altered or a row "
+                   f"inserted/removed.",
+                detail="; ".join(f"{b['tarih']}: {b['beklenen_onceki_bakiye']} vs {b['gercek_onceki_bakiye']}"
+                                 for b in _bal["breaks"][:5])))
+        elif _bal.get("consistent") is True and _bal.get("checked", 0) >= 2:
+            findings.append(Finding(
+                "STATEMENT_BALANCE_OK", "info", "content", -6,
+                tr=f"Yürüyen bakiye zinciri tutarlı ({_bal['checked']} işlem doğrulandı): her satırda bakiye, "
+                   f"işlem tutarıyla uyumlu. İçerikte tutar/bakiye oynaması yönünde bir işaret bulunmadı.",
+                en=f"Running balance chain is consistent ({_bal['checked']} transactions verified): each row's "
+                   f"balance matches the amount. No sign of amount/balance tampering.", detail=""))
+
     # --- Bu bir dekont değil ---
-    if not is_receipt and extraction.text_source in ("ocr", "none", "vision"):
+    if not is_receipt and not is_statement and extraction.text_source in ("ocr", "none", "vision"):
         findings.append(Finding(
             "NOT_A_RECEIPT", "critical", "content", 0,
             tr="BU DOSYA BİR BANKA DEKONTU DEĞİLDİR. Yüklenen görselde dekont içeriği (banka adı, IBAN, tutar, "
@@ -437,12 +482,17 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             _db_count = _st.stats().get("count", 0)
         except Exception:
             _db_count = 0
+    _bal_state = "neutral"
+    if is_statement:
+        _bc = stmt["balance"].get("consistent")
+        _bal_state = "true" if _bc is True else ("false" if _bc is False else "neutral")
     verdicts = _vd.compute_verdicts(
         doc_type=doc_type, input_kind=input_kind,
         codes={f.code for f in findings}, cons=cons,
         has_pdf_dates=struct.creation_dt is not None,
         txn_date=ex.transaction.date, seq=ex.transaction.sequence_number,
-        db_checked=bool(use_store and is_receipt), db_count=_db_count, is_receipt=is_receipt)
+        db_checked=bool(use_store and is_receipt), db_count=_db_count, is_receipt=is_receipt,
+        doc_kind=doc_kind, balance_state=_bal_state)
 
     # 8) Rapor derle
     lang_findings = [f.as_dict("tr") for f in findings]
@@ -468,6 +518,11 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             "is_image_only": doc_type in ("image_only", "scanned"),
             "is_receipt": is_receipt,
             "receipt_score": rc_score,
+            "is_statement": is_statement,
+            "statement_score": st_score,
+            "doc_kind": doc_kind,
+            "doc_kind_label_tr": {"dekont": "Banka dekontu", "hesap_hareketi": "Hesap hareketi (hesap özeti)",
+                                  "diger": "Diğer / belirsiz"}.get(doc_kind, doc_kind),
             "input_kind": input_kind,
         },
         "score": {
@@ -483,6 +538,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         },
         "subscores": subscores,
         "verdicts": verdicts,
+        "statement": (stmt if is_statement else {"is_statement": False}),
         "revision": {
             "revision_count": rev["revision_count"],
             "has_prior": rev["has_prior"],

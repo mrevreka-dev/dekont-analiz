@@ -63,8 +63,11 @@ def build_summary(report: dict) -> dict:
             "tur": _TR_TUR.get(cls.get("input_kind", ""), cls.get("input_kind", "")),
         },
 
-        # --- Dekont mu? ---
+        # --- Belge türü / dekont mu / hesap hareketi mi? ---
+        "belge_turu": cls.get("doc_kind", ""),                 # dekont | hesap_hareketi | diger
+        "belge_turu_aciklama": cls.get("doc_kind_label_tr", ""),
         "dekont_mu": bool(cls.get("is_receipt", False)),
+        "hesap_hareketi_mi": bool(cls.get("is_statement", False)),
 
         # --- Doğrulama modu (belge tipine göre neyin kesin doğrulanabildiği) ---
         "dogrulama_modu": vd.get("mode", ""),
@@ -82,10 +85,11 @@ def build_summary(report: dict) -> dict:
 
         # --- Kesin cevaplar (true / false / neutral) ---
         "kesin_cevaplar": {
-            "gecerli_dekont": vstate("valid_receipt"),
+            "gecerli_belge": vstate("valid_receipt"),
             "evrakta_oynama": _oynama(vstate("content_integrity")),   # yok | var | belirsiz
             "zaman_tutarli": vstate("time_consistency"),
             "veri_tutarli": vstate("data_consistency"),
+            "bakiye_zinciri_tutarli": vstate("balance_chain"),        # hesap hareketi için
             "numara_celiskisi_yok": vstate("cross_reference"),
         },
 
@@ -130,4 +134,31 @@ def build_summary(report: dict) -> dict:
         # --- Tam ayrıntılı iç rapor (isteğe bağlı) ---
         "detay": report,
     }
+
+    # --- Hesap hareketi ise: belgeye özgü blok + hesap sahibi bilgileri ---
+    st = report.get("statement", {})
+    if st.get("is_statement"):
+        bal = st.get("balance", {}) or {}
+        fields = st.get("fields", {}) or {}
+        summary["hesap_hareketi"] = {
+            "hesap_sahibi": fields.get("ad_soyad", ""),
+            "iban": fields.get("iban", ""),
+            "hesap_tipi": fields.get("hesap_tipi", ""),
+            "donem_baslangic": fields.get("donem_baslangic", ""),
+            "donem_bitis": fields.get("donem_bitis", ""),
+            "seri_sira_no": fields.get("seri_sira_no", ""),
+            "islem_sayisi": st.get("islem_sayisi", 0),
+            "acilis_bakiye": bal.get("opening"),
+            "kapanis_bakiye": bal.get("closing"),
+            "net_degisim": bal.get("net"),
+            "bakiye_zinciri_tutarli": bal.get("consistent"),      # true | false | null
+            "bakiye_kirilma_sayisi": len(bal.get("breaks", [])),
+            "bakiye_kirilmalari": bal.get("breaks", []),
+        }
+        # Ortak 'bilgiler' alanına hesap sahibini de yansıt
+        if not summary["bilgiler"]["gonderici_ad_soyad"]:
+            summary["bilgiler"]["gonderici_ad_soyad"] = fields.get("ad_soyad", "")
+        if not summary["bilgiler"]["gonderici_iban"]:
+            summary["bilgiler"]["gonderici_iban"] = fields.get("iban", "")
+
     return summary
