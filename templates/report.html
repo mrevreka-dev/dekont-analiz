@@ -114,6 +114,44 @@
     </table>
   </div>
 
+  <!-- TAHRİFAT / DEĞİŞİKLİK KARŞILAŞTIRMASI (Alan · Orijinal · Değiştirilmiş) -->
+  {% if r.tamper_comparison %}
+  {% set ocolor = {'kritik':'var(--critical)','yuksek':'var(--serious)'} %}
+  <div class="card" style="border-left:5px solid var(--critical)">
+    <div class="section-title" style="margin-top:0">
+      {{ 'DEĞİŞİKLİK / TAHRİFAT KARŞILAŞTIRMASI' if L=='tr' else 'TAMPERING COMPARISON' }}</div>
+    <div class="subline" style="margin-top:-4px;margin-bottom:14px">
+      {{ 'Hangi alan, orijinal hâli ve değiştirilmiş/çelişen hâli:' if L=='tr' else 'Which field, its original and altered/conflicting value:' }}</div>
+    {% for t in r.tamper_comparison %}
+    <div style="border:1px solid var(--surface-2);border-radius:12px;padding:14px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px">
+        <div style="font-weight:700">{{ t.alan }}</div>
+        <span style="font-size:11px;font-weight:700;color:{{ ocolor.get(t.onem,'var(--serious)') }};
+              border:1.5px solid {{ ocolor.get(t.onem,'var(--serious)') }};border-radius:6px;padding:2px 8px">
+          {{ t.kaynak }}</span>
+      </div>
+      <div style="display:flex;align-items:stretch;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px;background:rgba(34,197,94,0.08);border:1px solid var(--good);
+             border-radius:10px;padding:10px">
+          <div style="font-size:11px;font-weight:700;color:var(--good);margin-bottom:4px">
+            {{ 'ORİJİNAL / OLMASI GEREKEN' if L=='tr' else 'ORIGINAL / EXPECTED' }}</div>
+          <div style="font-family:monospace;font-size:13px">{{ t.orijinal }}</div>
+        </div>
+        <div style="display:flex;align-items:center;font-size:22px;color:var(--critical);font-weight:800">→</div>
+        <div style="flex:1;min-width:200px;background:rgba(220,38,38,0.08);border:1px solid var(--critical);
+             border-radius:10px;padding:10px">
+          <div style="font-size:11px;font-weight:700;color:var(--critical);margin-bottom:4px">
+            {{ 'DEĞİŞTİRİLMİŞ / BELGEDEKİ' if L=='tr' else 'ALTERED / IN DOCUMENT' }}</div>
+          <div style="font-family:monospace;font-size:13px">{{ t.degistirilmis }}</div>
+        </div>
+      </div>
+      <div class="subline" style="margin:10px 0 0;color:{{ ocolor.get(t.onem,'var(--serious)') }}">
+        ⚠ {{ t.durum }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   <!-- HESAP HAREKETİ -->
   {% if r.classification.is_statement and r.statement %}
   {% set stf = r.statement.fields %}
