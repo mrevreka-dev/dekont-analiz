@@ -125,6 +125,9 @@ def build_summary(report: dict) -> dict:
             "dekont_degistirme": report.get("timing", {}).get("mod_local", ""),
         },
 
+        # --- Tahrifat karşılaştırması (alan · orijinal · değiştirilmiş) ---
+        "tahrifat_karsilastirmasi": report.get("tamper_comparison", []),
+
         # --- Bulgular (özet) ---
         "bulgular": [
             {"kod": f.get("code"), "onem": f.get("severity"), "aciklama": f.get("message")}

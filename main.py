@@ -138,6 +138,15 @@ class Bulgu(BaseModel):
     aciklama: str = ""
 
 
+class TahrifatSatiri(BaseModel):
+    alan: str = Field("", description="Değiştirilen/çelişen alan")
+    orijinal: str = Field("", description="Orijinal / olması gereken değer")
+    degistirilmis: str = Field("", description="Değiştirilmiş / belgedeki değer")
+    durum: str = ""
+    kaynak: str = Field("", description="İçerik (revizyon) | Metadata (tarih) | İçerik (bakiye zinciri)")
+    onem: str = ""
+
+
 class AnalyzeResponse(BaseModel):
     basarili: bool = True
     motor_surumu: str = ""
@@ -155,6 +164,8 @@ class AnalyzeResponse(BaseModel):
     bilgiler: Bilgiler
     zaman: Zaman
     hesap_hareketi: Optional[HesapHareketi] = Field(None, description="Belge bir hesap hareketiyse doldurulur")
+    tahrifat_karsilastirmasi: list[TahrifatSatiri] = Field(default_factory=list,
+        description="Değiştirilen/çelişen alanlar: alan · orijinal · değiştirilmiş · durum")
     bulgular: list[Bulgu] = []
     detay: dict[str, Any] = Field(default_factory=dict, description="Tam ayrıntılı iç rapor (isteğe bağlı)")
 

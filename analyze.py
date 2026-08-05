@@ -504,6 +504,10 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     # 7.6) Alt-skorlar (Dekont Guard tarzı)
     subscores = _compute_subscores(struct, rev, cons, xml, qr_check, findings, doc_type)
 
+    # 7.7) TAHRİFAT KARŞILAŞTIRMASI — hangi alan, orijinal hali, değiştirilmiş hali (görsel)
+    tamper_comparison = _build_tamper_comparison(
+        {f.code for f in findings}, rev, timing, stmt if is_statement else None)
+
     # 8) Rapor derle
     lang_findings = [f.as_dict("tr") for f in findings]
     lang_findings_en = [f.as_dict("en") for f in findings]
@@ -548,6 +552,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         },
         "subscores": subscores,
         "verdicts": verdicts,
+        "tamper_comparison": tamper_comparison,
         "statement": (stmt if is_statement else {"is_statement": False}),
         "revision": {
             "revision_count": rev["revision_count"],
@@ -629,6 +634,69 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         except Exception:
             pass
     return report
+
+
+def _build_tamper_comparison(codes: set, rev: dict, timing: dict, stmt: dict | None) -> list:
+    """Tahrifat/değişiklik karşılaştırması: her satır {alan, orijinal, degistirilmis, durum,
+    kaynak, onem}. Rapor bu veriyi 'Alan · Orijinal · Değiştirilmiş' görselinde gösterir."""
+    rows = []
+    cl = (timing or {}).get("creation_local") or "—"
+    ml = (timing or {}).get("mod_local") or "—"
+    tl = (timing or {}).get("transaction_local") or "—"
+
+    # 1) İçerik alanları — PDF revizyonları arasında GERÇEK orijinal→değiştirilmiş
+    if rev and rev.get("has_prior"):
+        for c in rev.get("changes", []):
+            rows.append({
+                "alan": c.get("label", c.get("field", "")),
+                "orijinal": c.get("prev", ""),
+                "degistirilmis": c.get("curr", ""),
+                "durum": "İçerik, PDF revizyonları arasında değiştirilmiş",
+                "kaynak": "İçerik (PDF revizyonu)",
+                "onem": "kritik" if c.get("severity") == "kritik" else "yuksek",
+            })
+
+    # 2) Metadata / tarih tahrifatı
+    if "TIME_FILE_BEFORE_TXN" in codes:
+        rows.append({
+            "alan": "PDF üretim tarihi ↔ belge içeriği",
+            "orijinal": f"İçerikteki en geç işlem/dönem: {tl}",
+            "degistirilmis": f"Metadata üretim tarihi: {cl}",
+            "durum": "İMKÂNSIZ — dosya, içerdiği işlemlerden ÖNCE üretilmiş (geriye tarihleme)",
+            "kaynak": "Metadata (tarih)",
+            "onem": "kritik",
+        })
+    if "TIME_MODIFIED_AFTER_CREATE" in codes:
+        rows.append({
+            "alan": "PDF değiştirme tarihi",
+            "orijinal": f"Oluşturma (ilk üretim): {cl}",
+            "degistirilmis": f"Değiştirme (sonradan): {ml}",
+            "durum": "Belge üretildikten sonra açılıp yeniden kaydedilmiş (olası oynama)",
+            "kaynak": "Metadata (tarih)",
+            "onem": "yuksek",
+        })
+    if "TIME_MOD_BEFORE_CREATE" in codes:
+        rows.append({
+            "alan": "PDF değiştirme ↔ oluşturma tarihi",
+            "orijinal": f"Oluşturma: {cl}",
+            "degistirilmis": f"Değiştirme: {ml}",
+            "durum": "Değiştirme tarihi oluşturmadan ÖNCE — metadata çelişkisi (oynama)",
+            "kaynak": "Metadata (tarih)",
+            "onem": "yuksek",
+        })
+
+    # 3) Hesap hareketi — yürüyen bakiye zinciri kırılmaları
+    if stmt:
+        for b in (stmt.get("balance", {}) or {}).get("breaks", []):
+            rows.append({
+                "alan": f"Bakiye — {b.get('tarih','')} tarihli satır",
+                "orijinal": f"Beklenen bakiye: {b.get('beklenen_onceki_bakiye')}",
+                "degistirilmis": f"Belgedeki bakiye: {b.get('gercek_onceki_bakiye')} (fark {b.get('fark')})",
+                "durum": "Yürüyen bakiye zinciri kırık — bir tutar/bakiye değiştirilmiş",
+                "kaynak": "İçerik (bakiye zinciri)",
+                "onem": "kritik",
+            })
+    return rows
 
 
 def _compute_subscores(struct, rev, cons, xml, qr_check, findings, doc_type) -> dict:
