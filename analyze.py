@@ -339,7 +339,12 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     import timing as _tim
     is_aem = any(g in ("adobe experience manager", "adobe livecycle")
                  for g in classify_producer(struct.producer, struct.creator)["generator_hits"])
-    timing = _tim.analyze_timing(struct.creation_dt, struct.mod_dt, ex.transaction.date, is_aem)
+    # Doğrudan fotoğraf yüklemesinde PDF oluşturma/değiştirme zamanı = yükleme anı (anlamsız);
+    # işlem↔üretim kıyaslaması yapılmaz (yanlış "geç üretim" sinyalini önler).
+    if input_kind == "image":
+        timing = _tim.analyze_timing(None, None, ex.transaction.date, is_aem)
+    else:
+        timing = _tim.analyze_timing(struct.creation_dt, struct.mod_dt, ex.transaction.date, is_aem)
     for tf in timing["findings"]:
         findings.append(Finding(tf["code"], tf["severity"], "metadata", tf["weight"],
                                 tr=tf["tr"], en=tf["en"], detail=tf.get("detail", "")))
