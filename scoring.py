@@ -79,7 +79,8 @@ RISK_EN = {
 
 
 def compute_score(findings: list[Finding], doc_type: str,
-                  img_manipulation: float = 0.0, img_ai: float = 0.0) -> ScoreResult:
+                  img_manipulation: float = 0.0, img_ai: float = 0.0,
+                  verdict_untrusted: bool = False) -> ScoreResult:
     res = ScoreResult()
 
     # --- Kategori bazında ceza topla (cap uygulayarak) ---
@@ -130,6 +131,12 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 12)
     if "STATEMENT_BALANCE_BREAK" in codes:   # hesap hareketinde bakiye zinciri kırık
         score = min(score, 10)
+
+    # TUTARLILIK: Kesin karar "GÜVENİLİR DEĞİL" ise puan "güvenilir/düşük risk" olamaz.
+    # Kritik geçersizleştirmeler zaten daha düşük çekmişse dokunma; aksi halde en fazla 40
+    # (yüksek risk) yaparak puanı kesin kararla çelişmez hale getir.
+    if verdict_untrusted:
+        score = min(score, 40)
 
     res.authenticity_score = score
     res.penalties_total = int(round(total_pen))

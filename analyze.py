@@ -359,10 +359,19 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                  for g in classify_producer(struct.producer, struct.creator)["generator_hits"])
     # Doğrudan fotoğraf yüklemesinde PDF oluşturma/değiştirme zamanı = yükleme anı (anlamsız);
     # işlem↔üretim kıyaslaması yapılmaz (yanlış "geç üretim" sinyalini önler).
+    # Hesap hareketinde referans tarih = DÖNEM SONU / en geç işlem tarihi. Böylece
+    # "PDF, içindeki işlemlerden ÖNCE üretilmiş" (imkânsız) durumu yakalanır.
+    _txn_ref = ex.transaction.date
+    if is_statement:
+        _txn_ref = stmt["fields"].get("donem_bitis") or ""
+        if not _txn_ref:
+            _rows = stmt.get("balance", {}) and _stmt.parse_transactions(text_layout or "")
+            if _rows:
+                _txn_ref = _rows[0]["tarih"]   # en üstteki = en yeni işlem
     if input_kind == "image":
-        timing = _tim.analyze_timing(None, None, ex.transaction.date, is_aem)
+        timing = _tim.analyze_timing(None, None, _txn_ref, is_aem)
     else:
-        timing = _tim.analyze_timing(struct.creation_dt, struct.mod_dt, ex.transaction.date, is_aem)
+        timing = _tim.analyze_timing(struct.creation_dt, struct.mod_dt, _txn_ref, is_aem)
     for tf in timing["findings"]:
         findings.append(Finding(tf["code"], tf["severity"], "metadata", tf["weight"],
                                 tr=tf["tr"], en=tf["en"], detail=tf.get("detail", "")))
@@ -467,13 +476,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         except Exception:
             db_findings = []
 
-    # 7) Skorlama
-    score = compute_score(findings, doc_type, manip, ai)
-
-    # 7.5) Alt-skorlar (Dekont Guard tarzı)
-    subscores = _compute_subscores(struct, rev, cons, xml, qr_check, findings, doc_type)
-
-    # 7.6) KESİN CEVAPLAR (true/false/nötr) — belge tipine göre
+    # 7) KESİN CEVAPLAR (true/false/nötr) — skordan ÖNCE hesaplanır ki skor buna bağlansın
     import verdicts as _vd
     _db_count = 0
     if use_store:
@@ -492,7 +495,14 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         has_pdf_dates=struct.creation_dt is not None,
         txn_date=ex.transaction.date, seq=ex.transaction.sequence_number,
         db_checked=bool(use_store and is_receipt), db_count=_db_count, is_receipt=is_receipt,
-        doc_kind=doc_kind, balance_state=_bal_state)
+        doc_kind=doc_kind, balance_state=_bal_state, timing=timing)
+
+    # 7.5) Skorlama — KESİN KARAR "GÜVENİLİR DEĞİL" ise puan "güvenilir" olamaz (tutarlılık)
+    _untrusted = verdicts["overall"]["state"] == "false"
+    score = compute_score(findings, doc_type, manip, ai, verdict_untrusted=_untrusted)
+
+    # 7.6) Alt-skorlar (Dekont Guard tarzı)
+    subscores = _compute_subscores(struct, rev, cons, xml, qr_check, findings, doc_type)
 
     # 8) Rapor derle
     lang_findings = [f.as_dict("tr") for f in findings]

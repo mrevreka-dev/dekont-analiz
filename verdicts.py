@@ -27,7 +27,8 @@ TRUE, FALSE, NEUTRAL = "true", "false", "neutral"
 _CONTENT_TAMPER = {"REV_CONTENT_CHANGED", "REV_AMOUNT_CHANGED", "REV_FIELD_CHANGED",
                    "STATEMENT_BALANCE_BREAK"}
 # Zaman tutarsızlığını gösteren bulgular
-_TIME_BAD = {"TIME_FILE_BEFORE_TXN", "TIME_LATE_GENERATION", "TIME_MODIFIED_AFTER_CREATE"}
+_TIME_BAD = {"TIME_FILE_BEFORE_TXN", "TIME_LATE_GENERATION", "TIME_MODIFIED_AFTER_CREATE",
+             "TIME_MOD_BEFORE_CREATE"}
 
 _MODE_TR = {
     "digital": "Gerçek dijital PDF (içerik ve yapı doğrulanabilir)",
@@ -52,10 +53,47 @@ def _mode(doc_type: str, input_kind: str) -> str:
     return "digital"
 
 
+def _time_reason(codes: set, timing: dict, is_statement: bool) -> tuple[str, str]:
+    """Zaman tutarsızlığı için SOMUT (tarihli) açıklama üretir."""
+    t = timing or {}
+    created = t.get("creation_local") or "—"
+    modified = t.get("mod_local") or "—"
+    txn = t.get("transaction_local") or "—"
+    islem = "dönem/işlem" if is_statement else "işlem"
+    if "TIME_FILE_BEFORE_TXN" in codes:
+        tr = (f"PDF {created} tarihinde ÜRETİLMİŞ görünüyor, ancak belge {txn} tarihli {islem} "
+              f"içeriyor. Bir dosya, içerdiği işlemlerden ÖNCE oluşturulamaz — bu İMKÂNSIZDIR. "
+              f"Tarih/metadata ile oynandığına (geriye tarihleme) güçlü işarettir.")
+        en = (f"The PDF appears CREATED on {created}, yet it contains a {txn} transaction. A file "
+              f"cannot be created before the transactions it contains — this is IMPOSSIBLE. Strong "
+              f"backdating/metadata-tampering signal.")
+        return tr, en
+    if "TIME_MOD_BEFORE_CREATE" in codes:
+        tr = (f"PDF değiştirilme tarihi ({modified}), oluşturulma tarihinden ({created}) ÖNCE — "
+              f"metadata ile oynanmış olabilir.")
+        en = (f"PDF modification date ({modified}) precedes creation date ({created}) — metadata may be tampered.")
+        return tr, en
+    if "TIME_MODIFIED_AFTER_CREATE" in codes:
+        tr = (f"PDF, oluşturulduktan ({created}) SONRA değiştirilmiş ({modified}). Anlık üretilen "
+              f"belgelerde bu iki zaman aynıdır; fark, belgenin üretimden sonra açılıp yeniden "
+              f"kaydedildiğini (olası oynama) gösterir.")
+        en = (f"PDF was modified ({modified}) after creation ({created}); indicates it was reopened "
+              f"and re-saved after generation (possible tampering).")
+        return tr, en
+    if "TIME_LATE_GENERATION" in codes:
+        tr = (f"PDF, {islem} zamanından ({txn}) çok sonra üretilmiş ({created}). Anlık üretilen bir "
+              f"belgede beklenmez; sonradan yeniden oluşturma/oynama riski.")
+        en = (f"PDF generated ({created}) long after the {txn} transaction — regeneration/tamper risk.")
+        return tr, en
+    return ("PDF üretim/değiştirme zamanı ile işlem zamanı UYUMSUZ — zaman tutarsızlığı.",
+            "PDF generation/modification time conflicts with the transaction time.")
+
+
 def compute_verdicts(*, doc_type: str, input_kind: str, codes: set, cons: dict,
                      has_pdf_dates: bool, txn_date: str, seq: str,
                      db_checked: bool, db_count: int, is_receipt: bool,
-                     doc_kind: str = "dekont", balance_state: str = "neutral") -> dict:
+                     doc_kind: str = "dekont", balance_state: str = "neutral",
+                     timing: dict = None) -> dict:
     mode = _mode(doc_type, input_kind)
     is_statement = (doc_kind == "hesap_hareketi")
     belge = "hesap hareketi" if is_statement else "dekont"
@@ -126,11 +164,9 @@ def compute_verdicts(*, doc_type: str, input_kind: str, codes: set, cons: dict,
             "kıyaslaması yapılamaz. " + _NEUTRAL_TR,
             "A direct photo has no reliable generation timestamp; time cannot be compared. " + _NEUTRAL_EN)
     elif codes & _TIME_BAD:
+        _r_tr, _r_en = _time_reason(codes, timing, is_statement)
         add("time_consistency", "İşlem saati/tarih tutarlı mı?", "Is the transaction time consistent?",
-            FALSE, "PDF üretim/değiştirme zamanı ile işlem zamanı UYUMSUZ (geriye tarihleme veya "
-            "geç üretim) — zaman tutarsızlığı.",
-            "PDF generation/modification time conflicts with the transaction time (backdating or late "
-            "generation) — timing inconsistency.")
+            FALSE, _r_tr, _r_en)
     elif has_pdf_dates and txn_date:
         add("time_consistency", "İşlem saati/tarih tutarlı mı?", "Is the transaction time consistent?",
             TRUE, "PDF üretim zamanı işlem zamanıyla tutarlı; geriye tarihleme/geç üretim yok.",
