@@ -44,6 +44,28 @@
   </div>
 
   <section style="max-width:640px;margin:34px auto 0">
+    <div class="section-title">{{ T.compare_title }}</div>
+    <div class="card">
+      <p class="subline" style="margin-top:0">{{ T.compare_hint }}</p>
+      <form id="cfrm" action="/compare" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="lang" value="{{ L }}">
+        <label class="dropzone" id="cdz" for="cfile" style="padding:22px">
+          <div class="big">🗂️⬆️</div>
+          <div><strong>{{ T.compare_receipts }}</strong></div>
+          <div class="note">{{ T.compare_note }}</div>
+          <div class="fname hidden" id="cfname"></div>
+          <input type="file" id="cfile" name="files" multiple accept="application/pdf,.pdf,image/*,.jpg,.jpeg,.png,.webp,.tiff" class="hidden" required>
+        </label>
+        <div class="center" style="margin-top:16px">
+          <button class="btn" id="csubmit" type="submit" disabled>
+            <span id="cbtnlabel">{{ T.compare_btn }}</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section style="max-width:640px;margin:34px auto 0">
     <div class="section-title">{{ T.api_title }}</div>
     <div class="card">
       <p class="subline" style="margin-top:0">{{ T.api_desc }}</p>
@@ -67,6 +89,17 @@ fi.addEventListener('change',e=>setFile(e.target.files[0]));
 ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('drag');}));
 dz.addEventListener('drop',e=>{ const f=e.dataTransfer.files[0]; if(f){ fi.files=e.dataTransfer.files; setFile(f);} });
 frm.addEventListener('submit',()=>{ sb.disabled=true; bl.innerHTML='<span class="spinner"></span> {{ T.analyzing }}'; });
+
+// çoklu karşılaştırma
+const cdz=document.getElementById('cdz'), ci=document.getElementById('cfile'),
+      cfn=document.getElementById('cfname'), csb=document.getElementById('csubmit'),
+      cfrm=document.getElementById('cfrm'), cbl=document.getElementById('cbtnlabel');
+function setFiles(list){ if(!list||!list.length){return;} cfn.textContent=Array.from(list).map(f=>f.name).join(', '); cfn.classList.remove('hidden'); csb.disabled=list.length<2; }
+ci.addEventListener('change',e=>setFiles(e.target.files));
+['dragover','dragenter'].forEach(ev=>cdz.addEventListener(ev,e=>{e.preventDefault();cdz.classList.add('drag');}));
+['dragleave','drop'].forEach(ev=>cdz.addEventListener(ev,e=>{e.preventDefault();cdz.classList.remove('drag');}));
+cdz.addEventListener('drop',e=>{ if(e.dataTransfer.files.length){ ci.files=e.dataTransfer.files; setFiles(e.dataTransfer.files);} });
+cfrm.addEventListener('submit',()=>{ csb.disabled=true; cbl.innerHTML='<span class="spinner"></span> {{ T.comparing }}'; });
 </script>
 </body>
 </html>

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="{{ L }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ T.app_title }} — {{ T.cross_analysis }}</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+</head>
+<body>
+{% set vcolor = {'consistent':'var(--good)','inconsistent':'var(--critical)','review_needed':'var(--serious)','insufficient':'var(--text-muted)'}[c.verdict] %}
+{% set sevcolor = {'critical':'var(--critical)','high':'var(--serious)','medium':'var(--warning)','low':'var(--text-muted)','info':'var(--accent)'} %}
+
+<header class="topbar"><div class="container">
+  <div class="brand"><span class="logo">D</span><span>{{ T.app_title }}</span></div>
+  <div class="toolbar">
+    <a class="pill {{ 'active' if L=='tr' }}" href="?lang=tr">TR</a>
+    <a class="pill {{ 'active' if L=='en' }}" href="?lang=en">EN</a>
+    <a class="pill" href="/?lang={{ L }}">＋ {{ T.new_analysis }}</a>
+  </div>
+</div></header>
+
+<main class="container report">
+
+  <!-- CROSS VERDICT -->
+  <div class="card">
+    <div class="section-title" style="margin-top:0">{{ T.compare_title }}</div>
+    <span class="riskbadge" style="border-color:{{ vcolor }}">
+      <span class="dot" style="background:{{ vcolor }}"></span>
+      {% if c.verdict=='consistent' %}{{ T.consistent }}
+      {% elif c.verdict=='inconsistent' %}{{ T.inconsistent }}
+      {% elif c.verdict=='review_needed' %}{{ T.severity.high if T.severity else 'İncelenmeli' }}
+      {% else %}{{ T.insufficient }}{% endif %}
+    </span>
+    <div class="verdict">{{ c.verdict_tr if L=='tr' else c.verdict_en }}</div>
+    <div class="subline" style="margin-top:8px">{{ T.compare_note }}</div>
+  </div>
+
+  <!-- COMPARED RECEIPTS TABLE -->
+  <div class="card">
+    <div class="section-title" style="margin-top:0">{{ T.compare_receipts }} ({{ c.count }})</div>
+    <table class="tbl">
+      <thead><tr>
+        <th>#</th><th>{{ T.sender }}</th><th>{{ T.seq_no }}</th>
+        <th>{{ T.date }}</th><th>{{ T.amount }}</th><th>{{ T.score }}</th>
+      </tr></thead>
+      <tbody>
+      {% for it in c['items'] %}
+        <tr>
+          <td>{{ it.label }}</td>
+          <td>{{ it.sender_name or '—' }}</td>
+          <td><strong>{{ it.seq or '—' }}</strong></td>
+          <td>{{ it.date or '—' }}</td>
+          <td>{% if it.amount is not none %}{{ '%.2f'|format(it.amount) }}{% else %}—{% endif %}</td>
+          <td>{{ it.score if it.score is not none else '—' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- CROSS FINDINGS -->
+  {% set cross = c['findings'] %}
+  {% if cross %}
+  <div class="card">
+    <div class="section-title" style="margin-top:0">{{ T.compare_findings }}</div>
+    {% for f in cross %}
+      {% set sc = sevcolor[f.severity] %}
+      <div class="finding" style="border-left:4px solid {{ sc }}">
+        <div class="finding-head">
+          <span class="sev" style="background:{{ sc }}">{{ T.severity[f.severity] }}</span>
+          <span class="fcode">{{ f.code }}</span>
+        </div>
+        <div class="ftext">{{ f.tr if L=='tr' else f.en }}</div>
+        {% if f.detail %}<div class="fdetail">{{ f.detail }}</div>{% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <!-- SENDER GROUPS -->
+  {% if c['groups'] %}
+  <div class="card">
+    <div class="section-title" style="margin-top:0">{{ T.sender_group }}</div>
+    {% for g in c['groups'] %}
+      <div class="subline" style="margin-top:12px"><strong>{{ g.sender_name or g.sender_key }}</strong> — {{ g.count }}</div>
+      <table class="tbl" style="margin-top:6px">
+        <thead><tr><th>#</th><th>{{ T.seq_no }}</th><th>{{ T.date }}</th><th>{{ T.amount }}</th></tr></thead>
+        <tbody>
+        {% for m in g['members'] %}
+          <tr><td>{{ m.label }}</td><td>{{ m.seq or '—' }}</td><td>{{ m.date or '—' }}</td>
+              <td>{% if m.amount is not none %}{{ '%.2f'|format(m.amount) }}{% else %}—{% endif %}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <!-- INDIVIDUAL REPORTS LINKS -->
+  <div class="card">
+    <div class="section-title" style="margin-top:0">{{ T.single_analysis }}</div>
+    <div class="subline">{{ T.compare_receipts }}:</div>
+    <ul>
+    {% for rp in reports %}
+      <li>{{ rp.file.name }} — {{ T.score }}: <strong>{{ rp.score.authenticity_score }}</strong>/100
+        ({{ T.risk_label[rp.score.risk_level] }})</li>
+    {% endfor %}
+    </ul>
+  </div>
+
+  <details class="card">
+    <summary style="cursor:pointer;font-weight:600">JSON</summary>
+    <div class="codeblock" style="max-height:400px;overflow:auto">{{ comparison_json }}</div>
+  </details>
+
+</main>
+
+<footer class="footer"><div class="container">{{ T.footer_note }} · v{{ version }}</div></footer>
+</body>
+</html>
