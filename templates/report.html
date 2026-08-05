@@ -25,6 +25,19 @@
 
 <main class="container report">
 
+  {% if r.score.not_a_receipt %}
+  <div class="card" style="border:2px solid var(--critical);background:rgba(220,38,38,0.06)">
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="font-size:38px">⛔</div>
+      <div>
+        <div class="section-title" style="margin:0;color:var(--critical)">
+          {{ 'BU BİR DEKONT DEĞİL' if L=='tr' else 'NOT A RECEIPT' }}</div>
+        <div class="verdict" style="margin-top:4px">{{ r.score.verdict_tr if L=='tr' else r.score.verdict_en }}</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <!-- SCORE HERO -->
   <div class="card">
     <div class="scorehero">
