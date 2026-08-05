@@ -47,6 +47,7 @@ class ScoreResult:
     penalties_total: int = 0
     bonuses_total: int = 0
     max_possible: int = 100
+    not_a_receipt: bool = False
 
 
 def _risk_level(score: int) -> str:
@@ -112,6 +113,9 @@ def compute_score(findings: list[Finding], doc_type: str,
     # SERT GEÇERSİZLEŞTİRME: revizyonlar arasında tutar/kritik alan değişmişse bu,
     # kanıtlanmış tahrifattır; kategori tavanlarından bağımsız olarak skoru kritiğe çeker.
     codes = {f.code for f in findings}
+    if "NOT_A_RECEIPT" in codes:      # görselde dekont içeriği yok
+        score = min(score, 5)
+        res.not_a_receipt = True
     if "REV_AMOUNT_CHANGED" in codes:
         score = min(score, 8)
     elif "REV_CONTENT_CHANGED" in codes:
@@ -122,6 +126,8 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 20)
     if "QR_MISMATCH" in codes:
         score = min(score, 30)
+    if "SEQ_DB_DUPLICATE" in codes:          # numara başka dekontta da var
+        score = min(score, 12)
 
     res.authenticity_score = score
     res.penalties_total = int(round(total_pen))
@@ -153,6 +159,14 @@ def _verdict_text(res: ScoreResult, findings: list[Finding], doc_type: str, lang
     crit = [f for f in findings if f.severity in ("critical", "high") and f.weight > 0]
     lvl_tr = RISK_TR[res.risk_level]
     lvl_en = RISK_EN[res.risk_level]
+    if res.not_a_receipt:
+        if lang == "tr":
+            return ("BU DOSYA BİR BANKA DEKONTU DEĞİLDİR. Yüklenen görselde dekont içeriği "
+                    "(banka adı, IBAN, tutar, gönderen/alıcı, işlem/referans numarası) tespit edilemedi. "
+                    "Lütfen gerçek bir banka dekontu (tercihen orijinal dijital PDF) yükleyin.")
+        return ("THIS FILE IS NOT A BANK RECEIPT. No receipt content (bank name, IBAN, amount, "
+                "sender/receiver, transaction/reference number) was detected in the uploaded image. "
+                "Please upload a genuine bank receipt (ideally the original digital PDF).")
     if lang == "tr":
         base = f"Doğruluk puanı {res.authenticity_score}/100 — {lvl_tr}. "
         if res.risk_level in ("authentic", "low"):

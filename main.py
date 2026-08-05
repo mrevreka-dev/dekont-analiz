@@ -86,10 +86,20 @@ def _check_api_key(x_api_key: str | None):
 
 @app.get("/api/v1/health")
 async def health():
-    import ocr
+    import ocr, vision_ocr, store
     return {"status": "ok", "engine_version": ENGINE_VERSION,
             "ocr_available": ocr.ocr_available(), "ocr_lang": ocr.best_lang(),
+            "vision_configured": vision_ocr.is_configured(),
+            "store_enabled": store.enabled(),
+            "store_count": store.stats().get("count", 0),
             "api_key_required": bool(API_KEYS)}
+
+
+@app.get("/api/v1/store/stats")
+async def store_stats(x_api_key: str | None = Header(default=None)):
+    _check_api_key(x_api_key)
+    import store
+    return store.stats()
 
 
 @app.post("/api/v1/analyze")
@@ -143,7 +153,7 @@ async def compare_api(files: list[UploadFile] = File(...), x_api_key: str | None
             raise HTTPException(413, f"File too large: {f.filename}")
         try:
             prepared, kind = prepare_input(data, f.filename or "")
-            reports.append(analyze_document(prepared, f.filename or "document.pdf", input_kind=kind))
+            reports.append(analyze_document(prepared, f.filename or "document.pdf", input_kind=kind, use_store=False))
         except Exception as e:
             raise HTTPException(500, f"Analysis failed for {f.filename}: {e}")
     if len(reports) < 2:
@@ -175,7 +185,7 @@ async def compare_web(request: Request, files: list[UploadFile] = File(...), lan
             raise HTTPException(413, "File too large")
         try:
             prepared, kind = prepare_input(data, f.filename or "")
-            reports.append(analyze_document(prepared, f.filename or "document.pdf", input_kind=kind))
+            reports.append(analyze_document(prepared, f.filename or "document.pdf", input_kind=kind, use_store=False))
         except Exception:
             continue
     if len(reports) < 2:

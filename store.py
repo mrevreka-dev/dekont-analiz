@@ -1,0 +1,223 @@
+"""
+Kalıcı dekont numarası veritabanı / Persistent receipt-number store.
+
+Doğrulanmış (tahrifat bulunmayan, yüksek puanlı) dekontların dekont/işlem/sorgu/referans
+numaralarını BANKA BAZLI olarak kalıcı bir SQLite veritabanında saklar. Sonradan yüklenen
+dekontları bu geçmiş kayıtlarla karşılaştırır:
+
+  - Aynı banka + aynı numara, FARKLI bir dekontta (farklı tutar/tarih/dosya) görülürse
+    -> SEQ_DB_DUPLICATE (kritik): numara başka bir işlemden kopyalanmış/uydurulmuş.
+  - Aynı banka + aynı gönderen + aynı formatta numara, zamanla AZALMIŞSA
+    -> SEQ_DB_ORDER (yüksek): sıralı numaralandırmaya aykırı, incelenmeli.
+
+Yapılandırma:
+  DEKONT_DB_PATH        : SQLite dosya yolu (varsayılan: /data/dekont.db — Railway kalıcı volume).
+                          Yazılamıyorsa uygulama dizinine düşer (dağıtım süresince kalıcı).
+  DEKONT_STORE_ENABLED  : "0" ise tamamen kapatır.
+  DEKONT_STORE_MIN_SCORE: otomatik kayıt için asgari doğruluk puanı (varsayılan 80).
+
+Tüm işlemler en iyi çaba ilkesiyle çalışır; veritabanı hatası analizi ASLA bozmaz.
+"""
+from __future__ import annotations
+
+import os
+import re
+import sqlite3
+import datetime as _dt
+
+from timing import parse_content_datetime
+
+_DEF_PATHS = ["/data/dekont.db", os.path.join(os.path.dirname(__file__), "..", "dekont_store.db")]
+
+
+def enabled() -> bool:
+    return os.environ.get("DEKONT_STORE_ENABLED", "1") != "0"
+
+
+def _db_path() -> str:
+    p = os.environ.get("DEKONT_DB_PATH")
+    if p:
+        return p
+    for cand in _DEF_PATHS:
+        d = os.path.dirname(os.path.abspath(cand))
+        if os.path.isdir(d) and os.access(d, os.W_OK):
+            return cand
+    return _DEF_PATHS[-1]
+
+
+def _connect():
+    path = _db_path()
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    con = sqlite3.connect(path, timeout=5, check_same_thread=False)
+    con.execute("""CREATE TABLE IF NOT EXISTS receipts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bank TEXT, seq_number TEXT, seq_len INTEGER,
+        ref_no TEXT, document_no TEXT,
+        sender_iban TEXT, sender_name TEXT, receiver_iban TEXT,
+        amount REAL, txn_date TEXT, txn_dt TEXT,
+        sha256 TEXT UNIQUE, score INTEGER, created_at TEXT )""")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_bank_seq ON receipts(bank, seq_number)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_bank_sender ON receipts(bank, sender_iban)")
+    con.commit()
+    return con
+
+
+def _fields(report: dict) -> dict:
+    ex = report.get("extracted", {})
+    tx = ex.get("transaction", {})
+    seq = tx.get("sequence_number") or ""
+    dt, _ = parse_content_datetime(tx.get("date") or "")
+    return {
+        "bank": re.sub(r"\s+", " ", (ex.get("bank") or ex.get("sender", {}).get("bank") or "")).strip().upper(),
+        "seq_number": seq,
+        "seq_len": len(seq) if seq.isdigit() else 0,
+        "ref_no": tx.get("ref_no") or "",
+        "document_no": tx.get("document_no") or "",
+        "sender_iban": re.sub(r"\s+", "", (ex.get("sender", {}).get("iban") or "")).upper(),
+        "sender_name": (ex.get("sender", {}).get("name") or "").strip(),
+        "receiver_iban": re.sub(r"\s+", "", (ex.get("receiver", {}).get("iban") or "")).upper(),
+        "amount": ex.get("amount", {}).get("value"),
+        "txn_date": tx.get("date") or "",
+        "txn_dt": dt.isoformat() if dt else "",
+        "sha256": report.get("file", {}).get("sha256") or "",
+        "score": report.get("score", {}).get("authenticity_score"),
+    }
+
+
+def check(report: dict) -> list[dict]:
+    """Yüklenen dekontu geçmiş kayıtlarla karşılaştırır; bulgu listesi döndürür.
+    Her bulgu: {code, severity, tr, en, detail}."""
+    if not enabled():
+        return []
+    f = _fields(report)
+    findings = []
+    if not f["bank"] or not f["seq_number"]:
+        return findings
+    try:
+        con = _connect()
+    except Exception:
+        return findings
+    try:
+        cur = con.execute(
+            "SELECT sha256, amount, txn_date, txn_dt, sender_iban, sender_name FROM receipts "
+            "WHERE bank=? AND seq_number=?", (f["bank"], f["seq_number"]))
+        dups = [r for r in cur.fetchall() if r[0] != f["sha256"]]
+        if dups:
+            d = dups[0]
+            findings.append({
+                "code": "SEQ_DB_DUPLICATE", "severity": "critical",
+                "tr": f"Bu dekonttaki işlem/sıra numarası ({f['seq_number']}, {f['bank']}) daha önce "
+                      f"kaydedilmiş FARKLI bir dekontta da mevcut (tutar: {d[1]}, tarih: {d[2] or '—'}). "
+                      f"Bankalar her işleme benzersiz numara verir; aynı numaranın başka bir belgede "
+                      f"görülmesi, numaranın kopyalandığını/uydurulduğunu gösterir. Yüksek sahtecilik riski.",
+                "en": f"The transaction/sequence number in this receipt ({f['seq_number']}, {f['bank']}) already "
+                      f"exists on a DIFFERENT previously-recorded receipt (amount: {d[1]}, date: {d[2] or '—'}). "
+                      f"Banks assign a unique number per transaction; a repeat elsewhere indicates the number "
+                      f"was copied/fabricated. High forgery risk.",
+                "detail": f"bank={f['bank']} seq={f['seq_number']} vs sha={d[0][:12]}",
+            })
+
+        # Sıra-zaman monotonluğu (aynı banka + aynı gönderen + aynı format)
+        if f["sender_iban"] and f["txn_dt"] and f["seq_len"]:
+            cur = con.execute(
+                "SELECT seq_number, txn_dt, txn_date FROM receipts WHERE bank=? AND sender_iban=? "
+                "AND seq_len=? AND sha256<>? AND txn_dt<>''",
+                (f["bank"], f["sender_iban"], f["seq_len"], f["sha256"]))
+            try:
+                cur_dt = _dt.datetime.fromisoformat(f["txn_dt"])
+                cur_seq = int(f["seq_number"])
+            except Exception:
+                cur_dt = cur_seq = None
+            if cur_dt is not None:
+                for pseq, pdt_s, pdate in cur.fetchall():
+                    try:
+                        pdt = _dt.datetime.fromisoformat(pdt_s); pseq_i = int(pseq)
+                    except Exception:
+                        continue
+                    if pdt == cur_dt:
+                        continue
+                    # daha sonraki işlemin numarası daha büyük olmalı
+                    later, earlier = (f, {"seq": pseq_i, "date": pdate}) if cur_dt > pdt else \
+                                     ({"seq": pseq_i, "date": pdate}, f)
+                    later_seq = cur_seq if cur_dt > pdt else pseq_i
+                    earlier_seq = pseq_i if cur_dt > pdt else cur_seq
+                    if later_seq < earlier_seq:
+                        findings.append({
+                            "code": "SEQ_DB_ORDER", "severity": "high",
+                            "tr": f"Zaman-numara çelişkisi ({f['bank']}): aynı gönderenin daha önce kayıtlı "
+                                  f"bir işlemine göre, sonraki işlemin numarası artması gerekirken azalmış "
+                                  f"({earlier_seq} → {later_seq}). Sıralı numaralandırmaya aykırı; incelenmeli.",
+                            "en": f"Time-number contradiction ({f['bank']}): compared to a previously recorded "
+                                  f"transaction from the same sender, the later transaction's number decreased "
+                                  f"instead of increasing ({earlier_seq} → {later_seq}). Violates sequential "
+                                  f"numbering; review recommended.",
+                            "detail": f"{earlier_seq} -> {later_seq}",
+                        })
+                        break
+    except Exception:
+        pass
+    finally:
+        con.close()
+    return findings
+
+
+def record(report: dict) -> bool:
+    """Dekont doğrulanmışsa (yüksek puan, kritik tahrifat yok, gerçek dekont) numaralarını kaydeder.
+    Zaten kayıtlıysa (aynı sha256) veya uygun değilse False döner."""
+    if not enabled():
+        return False
+    min_score = int(os.environ.get("DEKONT_STORE_MIN_SCORE", "80"))
+    sc = report.get("score", {})
+    cls = report.get("classification", {})
+    if not cls.get("is_receipt", False):
+        return False
+    if (sc.get("authenticity_score") or 0) < min_score:
+        return False
+    if sc.get("not_a_receipt"):
+        return False
+    # kritik/yüksek tahrifat bulgusu varsa kaydetme
+    codes = {x.get("code") for x in report.get("findings_en", [])}
+    # Kesin tahrifat sinyalleri kaydı engeller. SEQ_DB_ORDER hariç: bazı bankalar sıralı
+    # numaralandırma kullanmadığından (ör. Garanti), bu yalnızca 'incelenmeli' tavsiyesidir
+    # ve kaydı engellemez — aksi halde veritabanı gerçek dekontlarla dolamaz.
+    _BAD = {"REV_AMOUNT_CHANGED", "REV_CONTENT_CHANGED", "TIME_FILE_BEFORE_TXN", "SINGLE_PHOTO_PDF",
+            "QR_MISMATCH", "SEQ_DB_DUPLICATE"}
+    if codes & _BAD:
+        return False
+    f = _fields(report)
+    if not f["bank"] or not f["seq_number"] or not f["sha256"]:
+        return False
+    try:
+        con = _connect()
+    except Exception:
+        return False
+    try:
+        con.execute(
+            "INSERT OR IGNORE INTO receipts (bank, seq_number, seq_len, ref_no, document_no, "
+            "sender_iban, sender_name, receiver_iban, amount, txn_date, txn_dt, sha256, score, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (f["bank"], f["seq_number"], f["seq_len"], f["ref_no"], f["document_no"],
+             f["sender_iban"], f["sender_name"], f["receiver_iban"], f["amount"],
+             f["txn_date"], f["txn_dt"], f["sha256"], f["score"], _dt.datetime.utcnow().isoformat()))
+        con.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        con.close()
+
+
+def stats() -> dict:
+    if not enabled():
+        return {"enabled": False, "count": 0, "banks": []}
+    try:
+        con = _connect()
+        try:
+            n = con.execute("SELECT COUNT(*) FROM receipts").fetchone()[0]
+            banks = [r[0] for r in con.execute(
+                "SELECT bank, COUNT(*) c FROM receipts GROUP BY bank ORDER BY c DESC").fetchall()]
+            return {"enabled": True, "count": n, "banks": banks, "db_path": _db_path()}
+        finally:
+            con.close()
+    except Exception as e:
+        return {"enabled": True, "count": 0, "banks": [], "error": str(e)}

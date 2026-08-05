@@ -72,6 +72,86 @@ _IMAGE_MAGIC = {
 }
 
 
+def _vnum(x):
+    """Vision'dan gelen tutarı float'a çevirir (metin/None dahil)."""
+    if x is None:
+        return None
+    if isinstance(x, (int, float)):
+        return float(x)
+    s = str(x).strip().replace(" ", "")
+    if not s:
+        return None
+    # "5.000,00" veya "5000.00" veya "5,000.00" biçimlerini tolere et
+    import re as _re
+    s = _re.sub(r"[^\d.,-]", "", s)
+    if "," in s and "." in s:
+        # son ayraç ondalık
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+def _apply_vision(ex, v: dict) -> None:
+    """Vision modelinin döndürdüğü alanları Extraction'a uygular (görselde vision önceliklidir)."""
+    import re as _re
+    def _s(key):
+        val = v.get(key)
+        return str(val).strip() if val not in (None, "") else ""
+    def _iban(key):
+        raw = _s(key)
+        return _re.sub(r"\s+", "", raw).upper() if raw else ""
+
+    if _s("bank"):
+        ex.bank = _s("bank")
+    # Gönderen
+    if _s("sender_name"):
+        ex.sender.name = _s("sender_name")
+    if _iban("sender_iban"):
+        ex.sender.iban = _iban("sender_iban")
+    # Alıcı
+    if _s("receiver_name"):
+        ex.receiver.name = _s("receiver_name")
+    if _iban("receiver_iban"):
+        ex.receiver.iban = _iban("receiver_iban")
+    if _s("receiver_bank"):
+        ex.receiver.bank = _s("receiver_bank")
+    # Tutar
+    av = _vnum(v.get("amount"))
+    if av is not None:
+        ex.amount.value = av
+        if _s("amount_currency"):
+            ex.amount.currency = _s("amount_currency").upper()
+    fv = _vnum(v.get("fee"))
+    if fv is not None:
+        ex.amount.fee = fv
+    tv = _vnum(v.get("total"))
+    if tv is not None:
+        ex.amount.total = tv
+    # İşlem
+    for src, dst in (("date", "date"), ("ref_no", "ref_no"), ("document_no", "document_no"),
+                     ("type", "type"), ("channel", "channel"), ("description", "description")):
+        if _s(src):
+            setattr(ex.transaction, dst, _s(src))
+    # IBAN'dan banka tamamla
+    if not ex.receiver.bank and ex.receiver.iban:
+        try:
+            import banks
+            ex.receiver.bank = banks.bank_label_from_iban(ex.receiver.iban)
+        except Exception:
+            pass
+    # all_ibans güncelle
+    for ib in (ex.sender.iban, ex.receiver.iban):
+        if ib and ib not in ex.all_ibans:
+            ex.all_ibans.append(ib)
+
+
 def prepare_input(data: bytes, filename: str = "") -> tuple[bytes, str]:
     """
     Yüklenen veriyi analiz için hazırlar. PDF ise dokunmaz. Görsel (JPG/PNG/...) ise
@@ -97,8 +177,10 @@ def prepare_input(data: bytes, filename: str = "") -> tuple[bytes, str]:
         return buf.getvalue(), "image"
 
 
-def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pdf") -> dict:
+def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pdf",
+                     use_store: bool = True) -> dict:
     # input_kind: "pdf" (yüklenen PDF) veya "image" (doğrudan yüklenen fotoğraf)
+    # use_store: True ise kalıcı numara veritabanı ile karşılaştır ve doğrulanmışsa kaydet
     t0 = time.time()
 
     # 1) Yapı / metadata
@@ -141,6 +223,25 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             ocr_recover(extraction, c)
     extraction.text_source = text_source
 
+    # 5.5) VISION AI: tesseract kritik alanları okuyamadıysa görüntü-anlayan model ile oku
+    vision_result = None
+    if text_source in ("ocr", "none"):
+        import vision_ocr
+        _missing = [1 for v in (extraction.sender.name, extraction.receiver.name,
+                                extraction.receiver.iban, extraction.amount.value) if not v]
+        if vision_ocr.is_configured() and len(_missing) >= 1:
+            try:
+                _pil = ocr.render_page_to_image(pdf_bytes, 0, scale=2.0)
+                vision_result = vision_ocr.extract_from_image(_pil)
+            except Exception:
+                vision_result = None
+            if vision_result:
+                _apply_vision(extraction, vision_result)
+                extraction.text_source = "vision"
+                # sıra numarasını vision sonrası tazele
+                from extract import derive_sequence_number as _dsn
+                extraction.transaction.sequence_number = _dsn(extraction)
+
     # Sıra/işlem numarası (banka bazlı) — sıra analizi için
     from extract import derive_sequence_number
     extraction.transaction.sequence_number = derive_sequence_number(extraction)
@@ -149,6 +250,15 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     from extract import receipt_content_score
     rc_score = receipt_content_score(text_layout, extraction)
     is_receipt = (doc_type in ("digital_native", "hybrid")) or rc_score >= 0.30
+    # Vision modeli bir görüşe sahipse onu dikkate al (görselde daha güvenilir)
+    if vision_result is not None:
+        _vr = vision_result.get("is_receipt")
+        _has_fields = bool(extraction.receiver.iban or extraction.sender.name or
+                           extraction.receiver.name or extraction.amount.value)
+        if _vr is True or _has_fields:
+            is_receipt = True
+        elif _vr is False and not _has_fields:
+            is_receipt = False
 
     # 6) Görsel adli analiz (görsel içeren belgeler için)
     img_forensics: ImageForensics | None = None
@@ -246,17 +356,19 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 en=f"Data consistency failure — {c['name']}: {c['detail']}.", detail=""))
 
     # --- Bu bir dekont değil ---
-    if not is_receipt and text_source in ("ocr", "none"):
+    if not is_receipt and extraction.text_source in ("ocr", "none", "vision"):
         findings.append(Finding(
-            "NOT_A_RECEIPT", "high", "content", 0,
-            tr="Yüklenen görselde banka dekontu içeriği tespit EDİLEMEDİ (banka adı, IBAN, tutar, gönderen/alıcı "
-               "gibi alanlar bulunamadı). Bu dosya bir dekont olmayabilir ya da görüntü kalitesi okunamayacak kadar düşük.",
-            en="No bank-receipt content was detected in the uploaded image (no bank name, IBAN, amount, or "
-               "sender/receiver fields). This file may not be a receipt, or the image quality is too low to read.",
+            "NOT_A_RECEIPT", "critical", "content", 0,
+            tr="BU DOSYA BİR BANKA DEKONTU DEĞİLDİR. Yüklenen görselde dekont içeriği (banka adı, IBAN, tutar, "
+               "gönderen/alıcı, işlem/referans numarası) tespit EDİLEMEDİ. Bu dosya bir dekont değil ya da görüntü "
+               "kalitesi okunamayacak kadar düşük olabilir.",
+            en="THIS FILE IS NOT A BANK RECEIPT. No receipt content (bank name, IBAN, amount, sender/receiver, "
+               "transaction/reference number) was detected in the uploaded image. This file is not a receipt, or the "
+               "image quality is too low to read.",
             detail=f"receipt_score={rc_score}"))
 
     # --- Düşük görüntü kalitesi: dekont ama kritik alanlar okunamadı ---
-    if is_receipt and text_source == "ocr":
+    if is_receipt and extraction.text_source in ("ocr", "vision"):
         _crit_missing = [nm for nm, val in (
             ("gönderen adı", ex.sender.name), ("alıcı adı", ex.receiver.name),
             ("alıcı IBAN", ex.receiver.iban), ("tutar", ex.amount.value)) if not val]
@@ -287,6 +399,21 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                "presented instead of the original digital receipt. High forgery risk.",
             detail=f"doc_type={doc_type}"))
 
+    # 6.9) KALICI VERİTABANI KARŞILAŞTIRMASI (banka bazlı numara geçmişi)
+    db_findings: list = []
+    if use_store and is_receipt:
+        try:
+            import store as _store  # noqa
+            _pre = {"extracted": extraction.as_dict(), "file": {"sha256": struct.sha256},
+                    "score": {}, "classification": {}}
+            db_findings = _store.check(_pre)
+            for df in db_findings:
+                _w = 45 if df["code"] == "SEQ_DB_DUPLICATE" else 8
+                findings.append(Finding(df["code"], df["severity"], "content", _w,
+                                        tr=df["tr"], en=df["en"], detail=df.get("detail", "")))
+        except Exception:
+            db_findings = []
+
     # 7) Skorlama
     score = compute_score(findings, doc_type, manip, ai)
 
@@ -311,7 +438,8 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             "doc_type": doc_type,
             "doc_type_label_tr": _DOCTYPE_TR.get(doc_type, doc_type),
             "doc_type_label_en": _DOCTYPE_EN.get(doc_type, doc_type),
-            "text_source": text_source,
+            "text_source": extraction.text_source,
+            "vision_used": extraction.text_source == "vision",
             "is_digital_pdf": doc_type in ("digital_native", "hybrid"),
             "is_image_only": doc_type in ("image_only", "scanned"),
             "is_receipt": is_receipt,
@@ -322,6 +450,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             "authenticity_score": score.authenticity_score,
             "max_possible": score.max_possible,
             "risk_level": score.risk_level,
+            "not_a_receipt": score.not_a_receipt,
             "penalties_total": score.penalties_total,
             "bonuses_total": score.bonuses_total,
             "breakdown": score.breakdown,
@@ -394,7 +523,20 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         },
         "extracted": extraction.as_dict(),
         "image_forensics": _img_forensics_dict(img_forensics),
+        "cross_db": {
+            "checked": bool(use_store and is_receipt),
+            "matches": db_findings,
+            "recorded": False,
+        },
     }
+
+    # 9) Doğrulanmışsa numaralarını kalıcı veritabanına kaydet (banka bazlı)
+    if use_store:
+        try:
+            import store as _store
+            report["cross_db"]["recorded"] = _store.record(report)
+        except Exception:
+            pass
     return report
 
 
