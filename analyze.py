@@ -255,6 +255,26 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                "sender/receiver fields). This file may not be a receipt, or the image quality is too low to read.",
             detail=f"receipt_score={rc_score}"))
 
+    # --- Düşük görüntü kalitesi: dekont ama kritik alanlar okunamadı ---
+    if is_receipt and text_source == "ocr":
+        _crit_missing = [nm for nm, val in (
+            ("gönderen adı", ex.sender.name), ("alıcı adı", ex.receiver.name),
+            ("alıcı IBAN", ex.receiver.iban), ("tutar", ex.amount.value)) if not val]
+        _crit_missing_en = [nm for nm, val in (
+            ("sender name", ex.sender.name), ("receiver name", ex.receiver.name),
+            ("receiver IBAN", ex.receiver.iban), ("amount", ex.amount.value)) if not val]
+        if len(_crit_missing) >= 2:
+            findings.append(Finding(
+                "LOW_IMAGE_QUALITY", "medium", "content", 0,
+                tr="Görüntü bir dekont olarak tanındı ancak bulanıklık/düşük çözünürlük nedeniyle bazı kritik "
+                   f"alanlar OCR ile güvenilir biçimde okunamadı ({', '.join(_crit_missing)}). Daha net, iyi "
+                   "aydınlatılmış ve düz çekilmiş bir fotoğraf ya da mümkünse orijinal dijital PDF yükleyin. "
+                   "Yanlış okuma riski taşımamak için okunamayan alanlar boş bırakılmıştır.",
+                en="The image was recognized as a receipt, but blur/low resolution prevented reliable OCR of some "
+                   f"critical fields ({', '.join(_crit_missing_en)}). Please upload a sharper, well-lit, flat photo, "
+                   "or the original digital PDF if available. Unreadable fields are left blank to avoid misreads.",
+                detail=f"missing={_crit_missing_en}"))
+
     # --- Tek fotoğraftan oluşan PDF => KRİTİK (doğrudan foto/ dekont-değil hariç) ---
     if input_kind == "pdf" and is_receipt and doc_type in ("image_only", "scanned"):
         findings.append(Finding(
