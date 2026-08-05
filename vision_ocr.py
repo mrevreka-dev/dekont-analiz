@@ -106,7 +106,15 @@ def extract_from_image(pil_img, timeout: float = 45.0) -> dict | None:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, Exception):
+    except urllib.error.HTTPError as e:
+        try:
+            _body = e.read().decode("utf-8")[:500]
+        except Exception:
+            _body = ""
+        print(f"[vision_ocr] HTTP {e.code} model={model}: {_body}", flush=True)
+        return None
+    except Exception as e:
+        print(f"[vision_ocr] error model={model}: {type(e).__name__}: {e}", flush=True)
         return None
 
     # Yanıt metnini birleştir
