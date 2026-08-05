@@ -223,12 +223,15 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             ocr_recover(extraction, c)
     extraction.text_source = text_source
 
-    # 5.5) VISION AI: tesseract kritik alanları okuyamadıysa görüntü-anlayan model ile oku
+    # 5.5) VISION AI: ÖNCE ücretsiz tesseract çalışır; yalnızca ZORUNLU 4 kritik alandan
+    # (alıcı adı, alıcı IBAN, tutar, işlem tarihi) EN AZ BİRİ okunamazsa ücretli Vision'a git.
+    # Dördü de okunduysa (kaliteli foto) ücretli servise hiç gidilmez → maliyet tasarrufu.
     vision_result = None
     if text_source in ("ocr", "none"):
         import vision_ocr
-        _missing = [1 for v in (extraction.sender.name, extraction.receiver.name,
-                                extraction.receiver.iban, extraction.amount.value) if not v]
+        _crit_required = (extraction.receiver.name, extraction.receiver.iban,
+                          extraction.amount.value, extraction.transaction.date)
+        _missing = [1 for v in _crit_required if not v]
         if vision_ocr.is_configured() and len(_missing) >= 1:
             try:
                 _pil = ocr.render_page_to_image(pdf_bytes, 0, scale=2.0)
