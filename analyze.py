@@ -428,6 +428,22 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     # 7.5) Alt-skorlar (Dekont Guard tarzı)
     subscores = _compute_subscores(struct, rev, cons, xml, qr_check, findings, doc_type)
 
+    # 7.6) KESİN CEVAPLAR (true/false/nötr) — belge tipine göre
+    import verdicts as _vd
+    _db_count = 0
+    if use_store:
+        try:
+            import store as _st
+            _db_count = _st.stats().get("count", 0)
+        except Exception:
+            _db_count = 0
+    verdicts = _vd.compute_verdicts(
+        doc_type=doc_type, input_kind=input_kind,
+        codes={f.code for f in findings}, cons=cons,
+        has_pdf_dates=struct.creation_dt is not None,
+        txn_date=ex.transaction.date, seq=ex.transaction.sequence_number,
+        db_checked=bool(use_store and is_receipt), db_count=_db_count, is_receipt=is_receipt)
+
     # 8) Rapor derle
     lang_findings = [f.as_dict("tr") for f in findings]
     lang_findings_en = [f.as_dict("en") for f in findings]
@@ -466,6 +482,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             "verdict_en": score.verdict_en,
         },
         "subscores": subscores,
+        "verdicts": verdicts,
         "revision": {
             "revision_count": rev["revision_count"],
             "has_prior": rev["has_prior"],
