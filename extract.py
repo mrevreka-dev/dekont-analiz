@@ -71,6 +71,7 @@ class Transaction:
     type: str = ""
     channel: str = ""
     description: str = ""
+    sequence_number: str = ""     # banka bazlı sayısal işlem/sorgu numarası (sıra analizi için)
 
 
 @dataclass
@@ -91,6 +92,114 @@ class Extraction:
         d = asdict(self)
         d["raw_text"] = self.raw_text[:4000]
         return d
+
+
+def merge_extractions(primary: "Extraction", others: list) -> "Extraction":
+    """Birden çok OCR varyantından çıkan alanları birleştirir (boşları doldurur).
+    Kötü fotoğraflarda farklı varyantlar farklı alanları okuyabildiği için sonuç iyileşir."""
+    def take_name(a, b):
+        # daha uzun ve geçerli görünen ismi tercih et
+        if not a: return b
+        if not b: return a
+        return a if len(a) >= len(b) else b
+    for o in others:
+        if not o:
+            continue
+        s, r = primary.sender, primary.receiver
+        s.name = take_name(s.name, o.sender.name) if not s.name else s.name
+        for fld in ("iban", "tckn", "customer_no", "branch", "bank"):
+            if not getattr(s, fld) and getattr(o.sender, fld):
+                setattr(s, fld, getattr(o.sender, fld))
+        r.name = r.name or o.receiver.name
+        for fld in ("iban", "bank"):
+            if not getattr(r, fld) and getattr(o.receiver, fld):
+                setattr(r, fld, getattr(o.receiver, fld))
+        if primary.amount.value is None and o.amount.value is not None:
+            primary.amount.value = o.amount.value
+            primary.amount.currency = primary.amount.currency or o.amount.currency
+        for fld in ("fee", "total"):
+            if getattr(primary.amount, fld) is None and getattr(o.amount, fld) is not None:
+                setattr(primary.amount, fld, getattr(o.amount, fld))
+        for fld in ("date", "ref_no", "document_no", "ettn", "type", "channel", "description"):
+            if not getattr(primary.transaction, fld) and getattr(o.transaction, fld):
+                setattr(primary.transaction, fld, getattr(o.transaction, fld))
+        if not primary.bank and o.bank:
+            primary.bank = o.bank
+        primary.all_ibans = primary.all_ibans or o.all_ibans
+    primary.confidence = _confidence(primary)
+    return primary
+
+
+# Dekont içeriği göstergeleri (bir görselin dekont olup olmadığını anlamak için)
+_RECEIPT_KEYWORDS = [
+    "dekont", "işlem", "islem", "tutar", "iban", "gönderen", "gonderen", "alıcı", "alici",
+    "alacaklı", "havale", "eft", "fast", "referans", "banka", "hesap", "komisyon", "masraf",
+    "bsmv", "valör", "valor", "sorgu", "bankası", "bankasi", "tl", "try", "ödeme", "odeme",
+]
+
+
+def ocr_recover(ex: "Extraction", text: str) -> None:
+    """OCR ile bozulmuş metinden ek bilgi kurtarır (banka kodu, IBAN, sıra no).
+    Bulanık fotoğraflarda etiketler bozulsa bile banka kodu/rakam dizileri okunabilir."""
+    if not text:
+        return
+    # Banka kodu: '... Banka 0157 ...' -> 0157 (4 hane) -> IBAN kodu 00157
+    if not ex.receiver.bank:
+        for m in re.finditer(r"[Bb]ank\w{0,3}\W{0,6}(\d{4})\b", text):
+            name = banks.IBAN_BANK_CODES.get("0" + m.group(1))
+            if name:
+                ex.receiver.bank = name
+                break
+    # IBAN kurtarma: TR + 24 haneli dizi (OCR harf karışıklığı toleranslı), gruplu
+    if not ex.receiver.iban or not ex.sender.iban:
+        trans = str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "S": "5", "B": "8",
+                               "Z": "2", "Q": "0", "D": "0", "G": "6", "g": "9"})
+        found = []
+        for m in re.finditer(r"[T7][Rr][ ]?([\dOoIlSBZQDGg][ \dOoIlSBZQDGg]{24,34})", text):
+            digits = re.sub(r"[^0-9]", "", m.group(1).translate(trans))
+            if len(digits) >= 24:
+                cand = "TR" + digits[:24]
+                if cand not in found:
+                    found.append(cand)
+        if found:
+            if not ex.receiver.iban:
+                ex.receiver.iban = found[0]
+            if not ex.sender.iban and len(found) > 1:
+                ex.sender.iban = found[1]
+    # IBAN'dan banka tamamla
+    if not ex.receiver.bank and ex.receiver.iban:
+        ex.receiver.bank = banks.bank_label_from_iban(ex.receiver.iban)
+
+
+def derive_sequence_number(ex: "Extraction") -> str:
+    """Banka bazlı sayısal işlem/sorgu/referans numarasını (sıra analizi için) çıkarır.
+    En uzun bitişik rakam dizisini (>= 6 hane) tercih eder."""
+    cands = [ex.transaction.document_no, ex.transaction.ref_no]
+    best = ""
+    for c in cands:
+        for run in re.findall(r"\d{6,}", c or ""):
+            if len(run) > len(best):
+                best = run
+    return best
+
+
+def receipt_content_score(text: str, ex: "Extraction") -> float:
+    """0-1: metnin/çıkarımın bir banka dekontu olma olasılığı."""
+    if not text:
+        text = ""
+    low = _norm_tr(text)
+    kw = sum(1 for k in _RECEIPT_KEYWORDS if k in low)
+    score = 0.0
+    score += min(kw, 6) / 6 * 0.5          # anahtar kelimeler
+    if ex.all_ibans:
+        score += 0.2
+    if ex.amount.value is not None:
+        score += 0.15
+    if ex.bank:
+        score += 0.1
+    if ex.transaction.date:
+        score += 0.05
+    return round(min(score, 1.0), 2)
 
 
 def extract_text_digital(pdf_bytes: bytes, layout: bool = True) -> str:

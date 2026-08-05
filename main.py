@@ -118,6 +118,79 @@ async def analyze_api(file: UploadFile = File(...), x_api_key: str | None = Head
     return JSONResponse(report)
 
 
+@app.post("/api/v1/compare")
+async def compare_api(files: list[UploadFile] = File(...), x_api_key: str | None = Header(default=None)):
+    """
+    Birden çok dekontu birlikte analiz eder ve ÇAPRAZ tutarlılık (işlem numarası ↔ zaman)
+    değerlendirmesi döndürür. Aynı gönderenin sonraki işleminde numara artmalıdır.
+
+    Analyze multiple receipts together and return a CROSS consistency assessment
+    (transaction number ↔ time). A later transaction from the same sender must carry
+    a higher number.
+
+    - **files**: 2+ PDF veya görsel dosya (multipart)
+    """
+    _check_api_key(x_api_key)
+    if not files or len(files) < 2:
+        raise HTTPException(400, "Provide at least 2 files to compare.")
+    from compare import compare_receipts
+    reports = []
+    for f in files:
+        data = await f.read()
+        if not data:
+            continue
+        if len(data) > MAX_BYTES:
+            raise HTTPException(413, f"File too large: {f.filename}")
+        try:
+            prepared, kind = prepare_input(data, f.filename or "")
+            reports.append(analyze_document(prepared, f.filename or "document.pdf", input_kind=kind))
+        except Exception as e:
+            raise HTTPException(500, f"Analysis failed for {f.filename}: {e}")
+    if len(reports) < 2:
+        raise HTTPException(400, "Need at least 2 valid files.")
+    comparison = compare_receipts(reports)
+    return JSONResponse({
+        "engine_version": ENGINE_VERSION,
+        "comparison": comparison,
+        "reports": reports,
+    })
+
+
+@app.post("/compare", response_class=HTMLResponse)
+async def compare_web(request: Request, files: list[UploadFile] = File(...), lang: str = Form("tr")):
+    L = _lang(request, lang)
+    T = i18n_t(L)
+    if not files or len([f for f in files if f.filename]) < 2:
+        return templates.TemplateResponse("index.html",
+            {"request": request, "L": L, "T": T, "version": ENGINE_VERSION,
+             "error": T.get("err_need_two", "Karşılaştırma için en az 2 dosya yükleyin.")},
+            status_code=400)
+    from compare import compare_receipts
+    reports = []
+    for f in files:
+        data = await f.read()
+        if not data:
+            continue
+        if len(data) > MAX_BYTES:
+            raise HTTPException(413, "File too large")
+        try:
+            prepared, kind = prepare_input(data, f.filename or "")
+            reports.append(analyze_document(prepared, f.filename or "document.pdf", input_kind=kind))
+        except Exception:
+            continue
+    if len(reports) < 2:
+        return templates.TemplateResponse("index.html",
+            {"request": request, "L": L, "T": T, "version": ENGINE_VERSION,
+             "error": T.get("err_need_two", "Karşılaştırma için en az 2 geçerli dosya gerekir.")},
+            status_code=400)
+    comparison = compare_receipts(reports)
+    return templates.TemplateResponse("compare.html", {
+        "request": request, "L": L, "T": T, "version": ENGINE_VERSION,
+        "c": comparison, "reports": reports,
+        "comparison_json": json.dumps(comparison, ensure_ascii=False, indent=2),
+    })
+
+
 @app.get("/api/v1/version", response_class=PlainTextResponse)
 async def version():
     return ENGINE_VERSION

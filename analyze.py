@@ -110,10 +110,11 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     digital_text_len = len((text_layout or "").strip())   # SADECE dijital metin
     struct.text_char_count = digital_text_len
     text_source = "digital"
+    ocr_candidates = []
     if digital_text_len < 40:
-        ocr_text = ocr.ocr_pdf(pdf_bytes) if ocr.ocr_available() else ""
-        if ocr_text and ocr_text.strip():
-            text_layout = text_read = ocr_text
+        ocr_candidates = ocr.ocr_pdf_candidates(pdf_bytes) if ocr.ocr_available() else []
+        if ocr_candidates:
+            text_layout = text_read = max(ocr_candidates, key=len)
             text_source = "ocr"
         else:
             text_source = "none"
@@ -129,7 +130,25 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
 
     # 5) Alan çıkarımı (geometrik çıkarım için pdf_bytes de verilir)
     extraction = extract_fields(text_layout, text_read, pdf_bytes if text_source == "digital" else None)
+    # OCR: birden çok varyanttan alanları birleştir (kötü fotoğraf dayanıklılığı)
+    if text_source == "ocr":
+        from extract import merge_extractions, ocr_recover
+        if len(ocr_candidates) > 1:
+            others = [extract_fields(c, c, None) for c in ocr_candidates if c != text_layout]
+            extraction = merge_extractions(extraction, others)
+        # Bozuk OCR metninden banka kodu / IBAN / rakam dizilerini kurtar
+        for c in ocr_candidates:
+            ocr_recover(extraction, c)
     extraction.text_source = text_source
+
+    # Sıra/işlem numarası (banka bazlı) — sıra analizi için
+    from extract import derive_sequence_number
+    extraction.transaction.sequence_number = derive_sequence_number(extraction)
+
+    # --- Bu bir dekont mu? (özellikle görsel/OCR girdilerinde) ---
+    from extract import receipt_content_score
+    rc_score = receipt_content_score(text_layout, extraction)
+    is_receipt = (doc_type in ("digital_native", "hybrid")) or rc_score >= 0.30
 
     # 6) Görsel adli analiz (görsel içeren belgeler için)
     img_forensics: ImageForensics | None = None
@@ -226,8 +245,18 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 tr=f"Veri tutarlılığı hatası — {c['name']}: {c['detail']}. Alanlardan biri elle değiştirilmiş olabilir.",
                 en=f"Data consistency failure — {c['name']}: {c['detail']}.", detail=""))
 
-    # --- Tek fotoğraftan oluşan PDF => KRİTİK (doğrudan foto yüklemede uygulanmaz) ---
-    if input_kind == "pdf" and doc_type in ("image_only", "scanned"):
+    # --- Bu bir dekont değil ---
+    if not is_receipt and text_source in ("ocr", "none"):
+        findings.append(Finding(
+            "NOT_A_RECEIPT", "high", "content", 0,
+            tr="Yüklenen görselde banka dekontu içeriği tespit EDİLEMEDİ (banka adı, IBAN, tutar, gönderen/alıcı "
+               "gibi alanlar bulunamadı). Bu dosya bir dekont olmayabilir ya da görüntü kalitesi okunamayacak kadar düşük.",
+            en="No bank-receipt content was detected in the uploaded image (no bank name, IBAN, amount, or "
+               "sender/receiver fields). This file may not be a receipt, or the image quality is too low to read.",
+            detail=f"receipt_score={rc_score}"))
+
+    # --- Tek fotoğraftan oluşan PDF => KRİTİK (doğrudan foto/ dekont-değil hariç) ---
+    if input_kind == "pdf" and is_receipt and doc_type in ("image_only", "scanned"):
         findings.append(Finding(
             "SINGLE_PHOTO_PDF", "critical", "content", 45,
             tr="Yüklenen PDF, seçilebilir hiçbir veri içermeyen TEK BİR FOTOĞRAFTAN/GÖRSELDEN oluşuyor. "
@@ -265,6 +294,9 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             "text_source": text_source,
             "is_digital_pdf": doc_type in ("digital_native", "hybrid"),
             "is_image_only": doc_type in ("image_only", "scanned"),
+            "is_receipt": is_receipt,
+            "receipt_score": rc_score,
+            "input_kind": input_kind,
         },
         "score": {
             "authenticity_score": score.authenticity_score,

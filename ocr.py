@@ -88,48 +88,135 @@ def extract_embedded_images(pdf_bytes: bytes):
     return out
 
 
-def ocr_image(img: Image.Image, lang: str | None = None) -> str:
+# ------------------- Görüntü ön-işleme (GENEL, her foto için) -------------------
+def _cv_gray(img: Image.Image):
+    import numpy as np, cv2
+    arr = np.asarray(img.convert("RGB"))[:, :, ::-1].copy()   # RGB -> BGR
+    return cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+
+
+def _detect_document_region(gray):
+    """Fotoğrafta parlak (beyaz) belge kartını bulur; yoksa None."""
+    import numpy as np, cv2
+    H, W = gray.shape
+    _, th = cv2.threshold(gray, 140, 255, cv2.THRESH_BINARY)
+    th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, np.ones((25, 25), np.uint8))
+    cnts, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return None
+    c = max(cnts, key=cv2.contourArea)
+    if cv2.contourArea(c) < 0.12 * H * W:
+        return None
+    x, y, w, h = cv2.boundingRect(c)
+    pad = int(0.01 * max(W, H))
+    x = max(0, x - pad); y = max(0, y - pad)
+    w = min(W - x, w + 2 * pad); h = min(H - y, h + 2 * pad)
+    if w * h > 0.97 * H * W:     # neredeyse tüm görsel => kırpma
+        return None
+    return (x, y, w, h)
+
+
+def _trim_to_ink(gray):
+    """Beyaz kenar boşluklarını atıp koyu metin (mürekkep) bölgesine kırpar."""
+    import cv2, numpy as np
+    _, dark = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY_INV)
+    dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, np.ones((9, 35), np.uint8))
+    ys, xs = np.where(dark > 0)
+    if len(xs) < 60:
+        return gray
+    x0, x1 = max(0, xs.min() - 12), min(gray.shape[1], xs.max() + 12)
+    y0, y1 = max(0, ys.min() - 12), min(gray.shape[0], ys.max() + 12)
+    if (x1 - x0) < 40 or (y1 - y0) < 40:
+        return gray
+    return gray[y0:y1, x0:x1]
+
+
+def _variants(gray):
+    """OCR için birkaç ön-işlenmiş varyant üretir (genel amaçlı, bulanık foto dahil)."""
+    import cv2, numpy as np
+    h, w = gray.shape
+    scale = max(1.0, 2000.0 / max(h, w))       # yüksek çözünürlüğe getir
+    if scale > 1.01:
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    out = []
+    # A: bilateral + CLAHE(3.0) + GÜÇLÜ unsharp — bulanık telefon fotoları için
+    g = cv2.bilateralFilter(gray, 9, 40, 40)
+    g = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(g)
+    blur = cv2.GaussianBlur(g, (0, 0), 3)
+    sharp = cv2.addWeighted(g, 2.2, blur, -1.2, 0)
+    out.append(sharp)
+    # B: denoise + CLAHE + orta unsharp
+    g2 = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
+    g2 = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8)).apply(g2)
+    b2 = cv2.GaussianBlur(g2, (0, 0), 3)
+    out.append(cv2.addWeighted(g2, 1.7, b2, -0.7, 0))
+    # C: Otsu ikili
+    _, otsu = cv2.threshold(sharp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    out.append(otsu)
+    return out
+
+
+def ocr_image_candidates(img: Image.Image, lang: str | None = None) -> list[str]:
+    """Bir görselden birden çok ön-işleme varyantı ile OCR metinleri (aday liste)."""
     if not _HAS_TESS:
-        return ""
+        return []
     import pytesseract
     lang = lang or best_lang()
-    # Ölçekle ve gri tonlama ile OCR doğruluğunu artır
-    w, h = img.size
-    if max(w, h) < 1200:
-        f = 1200 / max(w, h)
-        img = img.resize((int(w * f), int(h * f)))
     try:
-        txt = pytesseract.image_to_string(img, lang=lang)
+        gray = _cv_gray(img)
+        region = _detect_document_region(gray)
+        if region:
+            x, y, w, h = region
+            gray = gray[y:y+h, x:x+w]
+        gray = _trim_to_ink(gray)      # beyaz kenarları at, metne odakla
+        variants = _variants(gray)
     except Exception:
-        try:
-            txt = pytesseract.image_to_string(img, lang="eng")
-        except Exception:
-            return ""
-    for pat, rep in _TR_FIX:
-        txt = re.sub(pat, rep, txt)
-    return txt
+        # CV başarısızsa basit yol
+        w, h = img.size
+        if max(w, h) < 1400:
+            f = 1400 / max(w, h); img = img.resize((int(w*f), int(h*f)))
+        import numpy as np
+        variants = [np.asarray(img.convert("L"))]
+    texts = []
+    for i, v in enumerate(variants):
+        psms = (6, 4) if i == 0 else (6,)      # ilk (keskin) varyantta iki mod
+        for psm in psms:
+            try:
+                t = pytesseract.image_to_string(v, lang=lang, config=f"--oem 1 --psm {psm}")
+            except Exception:
+                t = ""
+            if t and t.strip():
+                for pat, rep in _TR_FIX:
+                    t = re.sub(pat, rep, t)
+                texts.append(t)
+    return texts
+
+
+def ocr_image(img: Image.Image, lang: str | None = None) -> str:
+    cands = ocr_image_candidates(img, lang)
+    return max(cands, key=len) if cands else ""
+
+
+def ocr_pdf_candidates(pdf_bytes: bytes, page_index: int = 0) -> list[str]:
+    """Sayfayı ve gömülü görselleri OCR'layıp tüm aday metinleri döndürür."""
+    cands = []
+    try:
+        img = render_page_to_image(pdf_bytes, page_index, scale=3.0)
+        cands += ocr_image_candidates(img)
+    except Exception:
+        pass
+    try:
+        for im in extract_embedded_images(pdf_bytes)[:1]:
+            if im.size[0] * im.size[1] > 200 * 200:
+                cands += ocr_image_candidates(im)
+    except Exception:
+        pass
+    return [c for c in cands if c and c.strip()]
 
 
 def ocr_pdf(pdf_bytes: bytes, page_index: int = 0) -> str:
-    """Sayfayı render edip OCR uygular; ayrıca gömülü görselleri de dener."""
-    texts = []
-    try:
-        img = render_page_to_image(pdf_bytes, page_index, scale=3.0)
-        texts.append(ocr_image(img))
-    except Exception:
-        pass
-    # Büyük gömülü görselleri de OCR'la (bazı PDF'lerde sayfa render'ı zayıf olabilir)
-    try:
-        for im in extract_embedded_images(pdf_bytes)[:2]:
-            if im.size[0] * im.size[1] > 200 * 200:
-                texts.append(ocr_image(im))
-    except Exception:
-        pass
-    # En uzun (en bilgi dolu) çıktıyı döndür
-    texts = [t for t in texts if t and t.strip()]
-    if not texts:
-        return ""
-    return max(texts, key=len)
+    cands = ocr_pdf_candidates(pdf_bytes, page_index)
+    return max(cands, key=len) if cands else ""
 
 
 def ocr_available() -> bool:

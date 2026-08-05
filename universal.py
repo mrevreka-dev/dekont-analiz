@@ -36,8 +36,8 @@ LABELS: list[tuple[list[str], str, str]] = [
     (["Alıcı IBAN", "Alıcı Hesap No / IBAN", "Alıcı Hesap No/IBAN", "Alıcı Hesap/IBAN",
       "Alıcı Hesap No", "Alıcı Hesap Numarası", "Alıcı Hesap", "Alacaklı IBAN", "Lehtar IBAN",
       "Karşı IBAN", "Hedef IBAN", "Alıcı IBAN No"], "receiver_iban", "r"),
-    # --- ALICI banka ---
-    (["Alıcı Banka", "Alıcı Bankası", "Alacaklı Banka", "Karşı Banka", "Hedef Banka",
+    # --- ALICI banka (Ziraat: 'Alan Banka') ---
+    (["Alıcı Banka", "Alıcı Bankası", "Alan Banka", "Alacaklı Banka", "Karşı Banka", "Hedef Banka",
       "Alıcı Banka Adı"], "receiver_bank", "r"),
     # --- GÖNDEREN (sender) adı ---
     (["Gönderen Ad Soyad/Unvan", "Gönderen Adı Soyadı/Unvanı", "Gönderen Ad Soyad", "Gönderen Adı Soyadı",
@@ -62,8 +62,9 @@ LABELS: list[tuple[list[str], str, str]] = [
     (["Dekont Tarihi", "İşlem Tarihi", "İşlem Zamanı", "Düzenlenme Tarihi", "İşlem Zam./Valör",
       "Valör Tarihi", "Tarih"], "date", ""),
     # --- Referans ---
-    (["Referans Numarası", "Referans No", "Sorgu Numarası", "Sorgu No", "İşlem No", "İşlem Numarası",
-      "Dekont No", "Dekont Numarası", "FAST Ref No", "Fiş No", "Sıra No", "Makbuz No"], "ref_no", ""),
+    (["Fast Sorgu No", "Fast Sorgu Numarası", "FAST Sorgu No", "Referans Numarası", "Referans No",
+      "Sorgu Numarası", "Sorgu No", "İşlem No", "İşlem Numarası", "Dekont No", "Dekont Numarası",
+      "FAST Ref No", "Fast Mesaj Kodu", "Fiş No", "Sıra No", "Makbuz No"], "ref_no", ""),
     # --- Tür / kanal / açıklama ---
     (["Senaryo/Dekont Tipi", "İşlem Türü", "İşlem Tipi", "Dekont Tipi"], "type", ""),
     (["İşlem Yeri", "İşlem Kanalı", "Kanal"], "channel", ""),
