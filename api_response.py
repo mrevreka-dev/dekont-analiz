@@ -143,10 +143,13 @@ def build_summary(report: dict) -> dict:
     if st.get("is_statement"):
         bal = st.get("balance", {}) or {}
         fields = st.get("fields", {}) or {}
+        cc = st.get("count_check", {}) or {}
         summary["hesap_hareketi"] = {
             "hesap_sahibi": fields.get("ad_soyad", ""),
             "iban": fields.get("iban", ""),
             "hesap_tipi": fields.get("hesap_tipi", ""),
+            "hesap_no": fields.get("hesap_no", ""),
+            "sube": fields.get("sube", ""),
             "donem_baslangic": fields.get("donem_baslangic", ""),
             "donem_bitis": fields.get("donem_bitis", ""),
             "seri_sira_no": fields.get("seri_sira_no", ""),
@@ -157,6 +160,8 @@ def build_summary(report: dict) -> dict:
             "bakiye_zinciri_tutarli": bal.get("consistent"),      # true | false | null
             "bakiye_kirilma_sayisi": len(bal.get("breaks", [])),
             "bakiye_kirilmalari": bal.get("breaks", []),
+            "beyan_edilen_kayit": cc.get("beyan"),
+            "satir_sayisi_tutarli": cc.get("tutarli"),            # true | false | null
         }
         # Ortak 'bilgiler' alanına hesap sahibini de yansıt
         if not summary["bilgiler"]["gonderici_ad_soyad"]:

@@ -371,7 +371,8 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     if input_kind == "image":
         timing = _tim.analyze_timing(None, None, _txn_ref, is_aem)
     else:
-        timing = _tim.analyze_timing(struct.creation_dt, struct.mod_dt, _txn_ref, is_aem)
+        timing = _tim.analyze_timing(struct.creation_dt, struct.mod_dt, _txn_ref, is_aem,
+                                     suppress_late_generation=is_statement)
     for tf in timing["findings"]:
         findings.append(Finding(tf["code"], tf["severity"], "metadata", tf["weight"],
                                 tr=tf["tr"], en=tf["en"], detail=tf.get("detail", "")))
@@ -413,9 +414,23 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             findings.append(Finding(
                 "STATEMENT_BALANCE_OK", "info", "content", -6,
                 tr=f"Yürüyen bakiye zinciri tutarlı ({_bal['checked']} işlem doğrulandı): her satırda bakiye, "
-                   f"işlem tutarıyla uyumlu. İçerikte tutar/bakiye oynaması yönünde bir işaret bulunmadı.",
+                   f"işlem tutarıyla uyumlu. Satır silme, tutar ekleme/değiştirme yürüyen bakiyeyi bozardı; "
+                   f"bozulma bulunmadığından içerikte oynama yönünde işaret yok.",
                 en=f"Running balance chain is consistent ({_bal['checked']} transactions verified): each row's "
-                   f"balance matches the amount. No sign of amount/balance tampering.", detail=""))
+                   f"balance matches the amount. Row deletion or amount edits would break the running balance; "
+                   f"no break found, so no sign of tampering.", detail=""))
+
+        # Beyan edilen kayıt sayısı ↔ gerçek satır sayısı (KESİN beyanda satır silme göstergesi)
+        _cc = stmt.get("count_check", {})
+        if _cc.get("tutarli") is False and _cc.get("kesin") and _cc.get("eksik", 0) > 0:
+            findings.append(Finding(
+                "STATEMENT_ROW_COUNT_MISMATCH", "critical", "content", 40,
+                tr=f"Belgede beyan edilen kayıt sayısı ({_cc['beyan']}) ile listelenen işlem sayısı "
+                   f"({_cc['gercek']}) UYUŞMUYOR — {_cc['eksik']} satır eksik. Bu, hareket satırlarından "
+                   f"bir kısmının SİLİNDİĞİNE işarettir.",
+                en=f"Declared record count ({_cc['beyan']}) does not match the listed transactions "
+                   f"({_cc['gercek']}) — {_cc['eksik']} row(s) missing. Indicates rows were DELETED.",
+                detail=f"beyan={_cc['beyan']} gerçek={_cc['gercek']}"))
 
     # --- Bu bir dekont değil ---
     if not is_receipt and not is_statement and extraction.text_source in ("ocr", "none", "vision"):
@@ -493,7 +508,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         doc_type=doc_type, input_kind=input_kind,
         codes={f.code for f in findings}, cons=cons,
         has_pdf_dates=struct.creation_dt is not None,
-        txn_date=ex.transaction.date, seq=ex.transaction.sequence_number,
+        txn_date=_txn_ref, seq=ex.transaction.sequence_number,
         db_checked=bool(use_store and is_receipt), db_count=_db_count, is_receipt=is_receipt,
         doc_kind=doc_kind, balance_state=_bal_state, timing=timing)
 
@@ -694,6 +709,16 @@ def _build_tamper_comparison(codes: set, rev: dict, timing: dict, stmt: dict | N
                 "degistirilmis": f"Belgedeki bakiye: {b.get('gercek_onceki_bakiye')} (fark {b.get('fark')})",
                 "durum": "Yürüyen bakiye zinciri kırık — bir tutar/bakiye değiştirilmiş",
                 "kaynak": "İçerik (bakiye zinciri)",
+                "onem": "kritik",
+            })
+        _cc = stmt.get("count_check", {})
+        if _cc.get("tutarli") is False and _cc.get("kesin") and _cc.get("eksik", 0) > 0:
+            rows.append({
+                "alan": "İşlem satır sayısı",
+                "orijinal": f"Belgede beyan edilen: {_cc['beyan']} kayıt",
+                "degistirilmis": f"Listelenen: {_cc['gercek']} kayıt ({_cc['eksik']} eksik)",
+                "durum": "Beyan edilenden az satır var — hareket satırı SİLİNMİŞ olabilir",
+                "kaynak": "İçerik (satır silme)",
                 "onem": "kritik",
             })
     return rows

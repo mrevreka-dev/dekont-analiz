@@ -23,9 +23,9 @@ from __future__ import annotations
 
 TRUE, FALSE, NEUTRAL = "true", "false", "neutral"
 
-# İçerik oynamasını KESİN kanıtlayan bulgular (revizyon farkı VEYA bakiye zinciri kırılması)
+# İçerik oynamasını KESİN kanıtlayan bulgular (revizyon farkı, bakiye kırılması, satır silme)
 _CONTENT_TAMPER = {"REV_CONTENT_CHANGED", "REV_AMOUNT_CHANGED", "REV_FIELD_CHANGED",
-                   "STATEMENT_BALANCE_BREAK"}
+                   "STATEMENT_BALANCE_BREAK", "STATEMENT_ROW_COUNT_MISMATCH"}
 # Zaman tutarsızlığını gösteren bulgular
 _TIME_BAD = {"TIME_FILE_BEFORE_TXN", "TIME_LATE_GENERATION", "TIME_MODIFIED_AFTER_CREATE",
              "TIME_MOD_BEFORE_CREATE"}

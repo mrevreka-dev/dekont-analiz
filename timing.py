@@ -59,7 +59,8 @@ def _human_delta(sec: float) -> str:
     return " ".join(parts) or "0 sn"
 
 
-def analyze_timing(creation_dt, mod_dt, transaction_date_str, is_aem: bool) -> dict:
+def analyze_timing(creation_dt, mod_dt, transaction_date_str, is_aem: bool,
+                   suppress_late_generation: bool = False) -> dict:
     """
     Zaman analizi. Döndürür:
       timeline: [{label, value}], gaps, findings:[{code,severity,weight,tr,en,detail}]
@@ -112,7 +113,8 @@ def analyze_timing(creation_dt, mod_dt, transaction_date_str, is_aem: bool) -> d
                             f"Dekont işlem anında üretilmiş görünüyor (doğrulayıcı).",
                       "en": f"PDF generation time matches the transaction time (~{_human_delta(delta)}) — corroborating.",
                       "detail": ""})
-        elif delta > 6 * 3600:
+        elif delta > 6 * 3600 and not suppress_late_generation:
+            # Hesap özetinde dönemden SONRA üretim normaldir; bu bulgu yalnızca dekontlarda anlamlı.
             sev = "high" if delta > 24 * 3600 else "medium"
             F.append({"code": "TIME_LATE_GENERATION", "severity": sev, "weight": 18 if sev == "high" else 10,
                       "tr": f"PDF, işlem zamanından çok sonra üretilmiş (~{_human_delta(delta)} sonra). "

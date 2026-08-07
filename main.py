@@ -93,6 +93,8 @@ class HesapHareketi(BaseModel):
     hesap_sahibi: str = ""
     iban: str = ""
     hesap_tipi: str = ""
+    hesap_no: str = ""
+    sube: str = ""
     donem_baslangic: str = ""
     donem_bitis: str = ""
     seri_sira_no: str = ""
@@ -103,6 +105,8 @@ class HesapHareketi(BaseModel):
     bakiye_zinciri_tutarli: Optional[bool] = Field(None, description="Yürüyen bakiye zinciri tutarlı mı (true/false/null)")
     bakiye_kirilma_sayisi: int = 0
     bakiye_kirilmalari: list[BakiyeKirilmasi] = []
+    beyan_edilen_kayit: Optional[int] = Field(None, description="Belgede beyan edilen kayıt sayısı")
+    satir_sayisi_tutarli: Optional[bool] = Field(None, description="Beyan edilen ↔ gerçek satır sayısı tutarlı mı")
 
 
 class Bilgiler(BaseModel):

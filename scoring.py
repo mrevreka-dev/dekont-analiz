@@ -131,6 +131,8 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 12)
     if "STATEMENT_BALANCE_BREAK" in codes:   # hesap hareketinde bakiye zinciri kırık
         score = min(score, 10)
+    if "STATEMENT_ROW_COUNT_MISMATCH" in codes:   # beyan≠gerçek: satır silinmiş
+        score = min(score, 12)
 
     # TUTARLILIK: Kesin karar "GÜVENİLİR DEĞİL" ise puan "güvenilir/düşük risk" olamaz.
     # Kritik geçersizleştirmeler zaten daha düşük çekmişse dokunma; aksi halde en fazla 40

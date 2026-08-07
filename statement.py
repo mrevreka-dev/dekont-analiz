@@ -105,12 +105,19 @@ def check_balance_continuity(text: str) -> dict:
 
 
 _FIELD_PATTERNS = {
-    "ad_soyad": r"[Aa]d\s*soyad\s*[:：]\s*([^\n]+?)(?:\s{2,}|Başlangıç|Baslangic|$)",
+    # "Ad soyad :" (Enpara) veya "Ad Soyad / Unvan :" (Garanti)
+    "ad_soyad": r"[Aa]d\s*[Ss]oyad[^:：]{0,12}[:：]\s*([^\n]+?)(?:\s{2,}|Bakiye|Başlangıç|Baslangic|$)",
     "hesap_tipi": r"[Hh]esap\s*tipi\s*[:：]\s*([^\n]+?)(?:\s{2,}|İşlem|Islem|$)",
+    "hesap_no": r"[Hh]esap\s*[Nn]umaras[ıi]\s*[:：]\s*([^\n]+?)(?:\s{2,}|Kullan|$)",
+    "sube": r"[Şş]ube\s*[:：]\s*([^\n]+?)(?:\s{2,}|$)",
     "donem_baslangic": r"[Bb]aşlangıç\s*tarihi\s*[:：]\s*(\d{4}\d{2}\d{2}|\d{2}[./]\d{2}[./]\d{4})",
     "donem_bitis": r"[Bb]itiş\s*tarihi\s*[:：]\s*(\d{4}\d{2}\d{2}|\d{2}[./]\d{2}[./]\d{4})",
     "seri_sira_no": r"[Ss]eri\s*/?\s*[Ss]ıra\s*[Nn]o\s*[:：]\s*([^\n]+?)(?:\s{2,}|$)",
 }
+# Dönem aralığı: "31/07/2026 - 07/08/2026" (Garanti başlık formatı)
+_PERIOD_RANGE = re.compile(r"(\d{2}[./]\d{2}[./]\d{4})\s*[-–]\s*(\d{2}[./]\d{2}[./]\d{4})")
+# Beyan edilen kayıt sayısı: "150 kayıt" (kesin) ya da "144'ten fazla kayıt" (asgari)
+_DECLARED_COUNT = re.compile(r"(\d+)\s*('?t[ae]n\s*fazla\s*)?kay[ıi]t", re.I)
 _IBAN_RE = re.compile(r"TR\d{2}(?:[ ]?\d{4}){5}[ ]?\d{2}", re.I)
 
 
@@ -123,8 +130,8 @@ def _fmt_period(s: str) -> str:
 
 
 def extract_statement_fields(text: str) -> dict:
-    f = {"ad_soyad": "", "iban": "", "hesap_tipi": "", "donem_baslangic": "",
-         "donem_bitis": "", "seri_sira_no": ""}
+    f = {"ad_soyad": "", "iban": "", "hesap_tipi": "", "hesap_no": "", "sube": "",
+         "donem_baslangic": "", "donem_bitis": "", "seri_sira_no": ""}
     for key, pat in _FIELD_PATTERNS.items():
         m = re.search(pat, text or "")
         if m:
@@ -132,10 +139,24 @@ def extract_statement_fields(text: str) -> dict:
             if key in ("donem_baslangic", "donem_bitis"):
                 val = _fmt_period(val)
             f[key] = val
+    # Dönem başlıkta aralık olarak verilmişse (Garanti)
+    if not f["donem_baslangic"] or not f["donem_bitis"]:
+        rm = _PERIOD_RANGE.search(text or "")
+        if rm:
+            f["donem_baslangic"] = f["donem_baslangic"] or rm.group(1).replace("/", ".")
+            f["donem_bitis"] = f["donem_bitis"] or rm.group(2).replace("/", ".")
     im = _IBAN_RE.search(text or "")
     if im:
         f["iban"] = re.sub(r"\s+", "", im.group(0)).upper()
     return f
+
+
+def declared_count(text: str) -> dict:
+    """Belgede beyan edilen kayıt sayısı: {sayi, kesin}. 'X kayıt' kesin; 'X'ten fazla' asgari."""
+    m = _DECLARED_COUNT.search(text or "")
+    if not m:
+        return {"sayi": None, "kesin": None}
+    return {"sayi": int(m.group(1)), "kesin": not bool(m.group(2))}
 
 
 def analyze(text: str) -> dict:
@@ -144,10 +165,24 @@ def analyze(text: str) -> dict:
     fields = extract_statement_fields(text)
     balance = check_balance_continuity(text)
     tx = parse_transactions(text)
+    dc = declared_count(text)
+
+    # Beyan edilen kayıt sayısı ↔ gerçek satır sayısı (satır silme göstergesi)
+    count_check = {"beyan": dc["sayi"], "kesin": dc["kesin"], "gercek": len(tx),
+                   "tutarli": None, "eksik": 0}
+    if dc["sayi"] is not None and len(tx) > 0:
+        if dc["kesin"]:
+            count_check["tutarli"] = (len(tx) == dc["sayi"])
+            count_check["eksik"] = dc["sayi"] - len(tx)
+        else:  # "X'ten fazla" -> gerçek en az X olmalı
+            count_check["tutarli"] = (len(tx) >= dc["sayi"])
+            count_check["eksik"] = max(0, dc["sayi"] - len(tx))
+
     return {
         "is_statement": score >= 0.5,
         "score": score,
         "fields": fields,
         "islem_sayisi": len(tx),
         "balance": balance,
+        "count_check": count_check,
     }
