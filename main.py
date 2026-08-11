@@ -173,6 +173,17 @@ class AnalyzeResponse(BaseModel):
     bulgular: list[Bulgu] = []
     detay: dict[str, Any] = Field(default_factory=dict, description="Tam ayrıntılı iç rapor (isteğe bağlı)")
 
+
+class UrlBody(BaseModel):
+    url: str = Field(..., description="İndirilecek public dosya adresi (PDF veya görsel), ör. S3 URL'si",
+                     examples=["https://bucket.s3.amazonaws.com/dekont.pdf"])
+
+
+class UrlsBody(BaseModel):
+    urls: list[str] = Field(..., min_length=2,
+                            description="Karşılaştırılacak 2+ public dosya adresi")
+
+
 app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(BASE, "templates"))
 
@@ -285,6 +296,37 @@ async def analyze_api(file: UploadFile = File(...), x_api_key: str | None = Head
     return JSONResponse(build_summary(report))
 
 
+@app.post("/api/v1/analyze-url", response_model=AnalyzeResponse,
+          summary="URL ile tek dekont analizi",
+          response_description="Dekont durumunu değerlendirmeye yeten temiz sonuç")
+async def analyze_url_api(body: UrlBody, x_api_key: str | None = Header(default=None)):
+    """
+    Dosya yüklemek yerine **public bir URL** (ör. S3) verildiğinde, dosyayı sunucu indirip
+    aynı analizi yapar ve `/api/v1/analyze` ile AYNI temiz JSON'u döndürür.
+
+    Güvenlik: yalnızca http/https; iç/özel ağ adreslerine erişim engellenir (SSRF koruması);
+    boyut ve zaman aşımı sınırı uygulanır. İzinli host'lar `DEKONT_URL_ALLOW_HOSTS` ile
+    kısıtlanabilir.
+
+    Gövde (JSON): `{ "url": "https://bucket.s3.amazonaws.com/dekont.pdf" }`
+    """
+    _check_api_key(x_api_key)
+    import url_fetch
+    try:
+        data, fname = url_fetch.fetch(body.url, MAX_BYTES)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        prepared, kind = prepare_input(data, fname)
+    except Exception:
+        raise HTTPException(415, "URL yalnızca PDF veya görsel (JPG/PNG) içermelidir.")
+    try:
+        report = analyze_document(prepared, fname or "document.pdf", input_kind=kind)
+    except Exception as e:
+        raise HTTPException(500, f"Analysis failed: {e}")
+    return JSONResponse(build_summary(report))
+
+
 @app.post("/api/v1/compare")
 async def compare_api(files: list[UploadFile] = File(...), x_api_key: str | None = Header(default=None)):
     """
@@ -315,6 +357,46 @@ async def compare_api(files: list[UploadFile] = File(...), x_api_key: str | None
             raise HTTPException(500, f"Analysis failed for {f.filename}: {e}")
     if len(reports) < 2:
         raise HTTPException(400, "Need at least 2 valid files.")
+    comparison = compare_receipts(reports)
+    return JSONResponse({
+        "basarili": True,
+        "motor_surumu": ENGINE_VERSION,
+        "capraz_degerlendirme": {
+            "karar": comparison.get("verdict"),
+            "aciklama": comparison.get("verdict_tr"),
+            "kritik_sayisi": comparison.get("critical_count", 0),
+            "bulgular": comparison.get("findings", []),
+            "gruplar": comparison.get("groups", []),
+        },
+        "dekontlar": [build_summary(r) for r in reports],
+    })
+
+
+@app.post("/api/v1/compare-url", summary="URL'lerle çapraz karşılaştırma")
+async def compare_url_api(body: UrlsBody, x_api_key: str | None = Header(default=None)):
+    """
+    Birden çok public URL (S3 vb.) verildiğinde dosyaları sunucu indirip ÇAPRAZ karşılaştırma
+    yapar. `/api/v1/compare` ile aynı sonucu döndürür. SSRF koruması uygulanır.
+
+    Gövde (JSON): `{ "urls": ["https://.../dekont1.pdf", "https://.../dekont2.pdf"] }`
+    """
+    _check_api_key(x_api_key)
+    if not body.urls or len(body.urls) < 2:
+        raise HTTPException(400, "En az 2 URL gerekir.")
+    from compare import compare_receipts
+    import url_fetch
+    reports = []
+    for u in body.urls:
+        try:
+            data, fname = url_fetch.fetch(u, MAX_BYTES)
+            prepared, kind = prepare_input(data, fname)
+            reports.append(analyze_document(prepared, fname or "document.pdf", input_kind=kind, use_store=False))
+        except ValueError as e:
+            raise HTTPException(400, f"{u}: {e}")
+        except Exception as e:
+            raise HTTPException(500, f"Analysis failed for {u}: {e}")
+    if len(reports) < 2:
+        raise HTTPException(400, "En az 2 geçerli dosya gerekir.")
     comparison = compare_receipts(reports)
     return JSONResponse({
         "basarili": True,
