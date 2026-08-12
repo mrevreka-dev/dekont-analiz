@@ -448,6 +448,12 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         if not ex.bank:
             ex.bank = banks.bank_from_iban(ex.sender.iban) or banks.bank_from_text(joined) or u["receiver_bank"]
 
+    # --- Tarih/saat normalizasyonu (tüm bankalar) ---
+    # Bazı dekontlarda tarih+saat tek satırda "İşlem tarihi ve saati :12.08.2026 21:26"
+    # biçiminde yer alır; geometrik çıkarım saati düşürüp başta ':' bırakabilir.
+    # Bunu onarır: baştaki çöp temizlenir, saat de yakalanır.
+    ex.transaction.date = _normalize_datetime(ex.transaction.date, rjoined or joined)
+
     # --- IBAN'lardan banka tamamlama ---
     if not ex.receiver.bank and ex.receiver.iban:
         ex.receiver.bank = banks.bank_label_from_iban(ex.receiver.iban)
@@ -631,6 +637,52 @@ def _detect_garanti_kind(text: str) -> str:
     if "HAVALE" in text:
         return "HAVALE"
     return "Dekont"
+
+
+# İşlem tarih/saatini taşıyan olası etiketler (en özgüllü/uzun önce).
+_DT_LABELS = [
+    "İşlem Tarihi ve Saati", "İşlem Tarih ve Saati", "İşlem Tarihi/Saati",
+    "Tarih ve Saat", "Tarih/Saat", "İşlem Zamanı", "Dekont Tarihi",
+    "Düzenlenme Tarihi", "Valör Tarihi", "İşlem Tarihi", "Tarih",
+]
+
+
+def _normalize_datetime(current: str, text: str) -> str:
+    """İşlem tarih/saatini temizler ve tamamlar.
+
+    - Baştaki ':' / boşluk gibi çöpü temizler (DATE_RE ile net tarih ayıklar).
+    - Tarih var ama saat yoksa, metinde aynı tarihi izleyen saati (HH:MM[:SS]) ekler.
+    - Hiç tarih yoksa, tarih+saat taşıyan bir etiketten ya da metindeki ilk tarihten türetir.
+    Mevcut doğru (tarih+saat) değeri asla bozmaz.
+    """
+    cur = (current or "").strip()
+    m = DATE_RE.search(cur)
+    cur_clean = m.group(0) if m else ""
+    if cur_clean and ":" in cur_clean:
+        return cur_clean                      # zaten tarih+saat var; yalnızca çöp temizlendi
+
+    # Tarih+saat içeren bir etiket bul (daha zengin bilgi)
+    for lab in _DT_LABELS:
+        v = _find_label(text, [lab])
+        if v:
+            mm = DATE_RE.search(v)
+            if mm and ":" in mm.group(0):
+                return mm.group(0)
+
+    # Mevcut tarih var ama saat yok: metinde bu tarihi izleyen saati ekle
+    if cur_clean:
+        mm = re.search(re.escape(cur_clean) + r"\s+(\d{2}:\d{2}(?::\d{2})?)", text or "")
+        return cur_clean + " " + mm.group(1) if mm else cur_clean
+
+    # Hiç tarih yok: etiketten (yalnızca tarih) ya da metindeki ilk tarihten
+    for lab in _DT_LABELS:
+        v = _find_label(text, [lab])
+        if v:
+            mm = DATE_RE.search(v)
+            if mm:
+                return mm.group(0)
+    m2 = DATE_RE.search(text or "")
+    return m2.group(0) if m2 else cur
 
 
 def _generic_extract(ex: Extraction, text: str) -> None:
