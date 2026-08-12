@@ -22,6 +22,36 @@ from scoring import compute_score
 
 ENGINE_VERSION = "1.0.0"
 
+import re as _re
+
+# Para birimine (TL/TRY/₺) bitişik yazılmış tutar jetonu (sayı-önce veya sonra)
+_DISP_AMT_RE = _re.compile(
+    r"(-?\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|-?\d+[.,]\d{1,2})\s*(?:TL|TRY|₺)\b"
+    r"|(?:TL|TRY|₺)\s*(-?\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|-?\d+[.,]\d{1,2})",
+    _re.I)
+
+
+def _displayed_amounts(text: str) -> list:
+    """Metinde para birimine bitişik yazılmış tutarları (float) döndürür.
+    Yalnızca gerçekten 'görüntülenen para' değerleri; tarih/referans/sürüm sayıları hariç."""
+    from extract import _parse_money_token
+    out = []
+    for m in _DISP_AMT_RE.finditer(text or ""):
+        v = _parse_money_token(m.group(1) or m.group(2))
+        if v is not None:
+            out.append(v)
+    return out
+
+
+def _fmt_tl(v: float) -> str:
+    """1234567.89 -> '1.234.567,89 TL' (Türk biçimi)."""
+    try:
+        s = f"{v:,.2f}"                      # 1,234,567.89
+    except (ValueError, TypeError):
+        return f"{v} TL"
+    s = s.replace(",", "#").replace(".", ",").replace("#", ".")
+    return s + " TL"
+
 
 def _largest_image_with_raw(pdf_bytes: bytes):
     """En büyük gömülü görseli (PIL, ham_bytes) olarak döndürür."""
@@ -387,6 +417,26 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 "CONSISTENCY_FAIL", "medium", "content", 15,
                 tr=f"Veri tutarlılığı hatası — {c['name']}: {c['detail']}. Alanlardan biri elle değiştirilmiş olabilir.",
                 en=f"Data consistency failure — {c['name']}: {c['detail']}.", detail=""))
+
+    # --- Tutar çapraz-kaynak kontrolü (dekont üzerinde tutar HER YERDE aynı olmalı) ---
+    # Para birimine (TL/TRY/₺) bitişik yazılmış tüm tutarları toplar; işlem tablosundaki tutar
+    # ile özet/etiket tutarı farklıysa bu, tutarın elle değiştirildiğine (tahrifat) işarettir.
+    if not is_statement:
+        disp = _displayed_amounts(text_layout or "")
+        known = {round(v, 2) for v in (ex.amount.fee, ex.amount.total) if v is not None}
+        uniq = sorted({round(v, 2) for v in disp if round(v, 2) not in known})
+        if len(uniq) >= 2:
+            hi, lo = uniq[-1], uniq[0]
+            findings.append(Finding(
+                "AMOUNT_MISMATCH", "critical", "content", 45,
+                tr=f"TUTAR ÇELİŞKİSİ: Dekont üzerinde işlem tutarı farklı yerlerde FARKLI yazılmış — "
+                   f"{_fmt_tl(hi)} ile {_fmt_tl(lo)}. Gerçek bir dekontta işlem tutarı (işlem tablosu, "
+                   f"EFT/özet satırı, açıklama) her yerde AYNI olmak zorundadır. Bu fark, tutarın belge "
+                   f"görüntüsü üzerinde elle değiştirildiğine dair güçlü tahrifat kanıtıdır.",
+                en=f"AMOUNT MISMATCH: the transaction amount is written inconsistently on the receipt "
+                   f"({hi} vs {lo}). In a genuine receipt the amount must be identical in every place "
+                   f"(table, summary/EFT line, description) — strong evidence the amount was altered.",
+                detail=f"displayed_amounts={uniq}"))
 
     # --- HESAP HAREKETİ: yürüyen bakiye sürekliliği (içerik oynaması kesin kanıtı) ---
     if is_statement:

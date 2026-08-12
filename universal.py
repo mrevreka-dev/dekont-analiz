@@ -163,9 +163,10 @@ def universal_extract(pdf_bytes: bytes | None, text: str, reading_text: str = ""
                 out["receiver_iban"] = ib
                 break
 
-    # --- 5) Tutar yedeği: en büyük tutar ---
+    # --- 5) Tutar yedeği: en büyük tutar (TR + US biçimi) ---
     if out["amount"] is None:
-        amts = [geo.clean_amount(m) for m in re.findall(r"-?\d{1,3}(?:\.\d{3})*,\d{2}", txt)]
+        from extract import AMOUNT_RE, _parse_money_token
+        amts = [_parse_money_token(m.group(0)) for m in AMOUNT_RE.finditer(txt)]
         amts = [a for a in amts if a is not None]
         if amts:
             out["amount"] = max(amts)

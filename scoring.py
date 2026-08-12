@@ -121,6 +121,8 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 8)
     elif "REV_CONTENT_CHANGED" in codes:
         score = min(score, 15)
+    if "AMOUNT_MISMATCH" in codes:           # tutar belgede farklı yerlerde farklı yazılmış
+        score = min(score, 8)
     if "TIME_FILE_BEFORE_TXN" in codes:      # geriye tarihleme — imkânsız
         score = min(score, 10)
     if "SINGLE_PHOTO_PDF" in codes:          # PDF içinde tek fotoğraf

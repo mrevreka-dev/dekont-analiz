@@ -22,22 +22,54 @@ import banks
 # ----------------------- Desen tanıyıcılar -----------------------
 IBAN_RE = re.compile(r"\bTR\d{2}(?:[ ]?\d{4}){5}[ ]?\d{2}\b", re.I)
 IBAN_LOOSE_RE = re.compile(r"\bTR\s?\d{2}[\d ]{20,30}\b", re.I)
-# Türk para formatı: 1.234.567,89  (opsiyonel eksi, opsiyonel para birimi)
-AMOUNT_RE = re.compile(r"-?\s?\d{1,3}(?:\.\d{3})*,\d{2}\b")
+# Para tutarı — hem TÜRK (1.234.567,89) hem ULUSLARARASI/US (1,234,567.89) formatını yakalar.
+# Bir tutar sayılması için ya binlik ayraç (3'lü gruplar) ya da ondalık bulunmalıdır;
+# böylece açıklamadaki uzun sayı dizileri (ör. referans 35665290220) tutar sanılmaz.
+# Not: öncesinde/sonrasında başka rakam-ayraç olmamalı; böylece tarih (12.08.2026) ve
+# sürüm (3.3.1) parçaları tutar sanılmaz.
+AMOUNT_RE = re.compile(
+    r"(?<![\d.,])(?:-?\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|-?\d+[.,]\d{1,2})(?![.,]?\d)")
 CURRENCY_RE = re.compile(r"\b(TL|TRY|USD|EUR|GBP)\b", re.I)
 DATE_RE = re.compile(r"\b\d{2}[./]\d{2}[./]\d{4}(?:\s+\d{2}:\d{2}(?::\d{2})?)?")
 TCKN_RE = re.compile(r"\b\d{2,11}\*{2,}\b|\b\d{11}\b")
+
+
+def _parse_money_token(tok: str) -> float | None:
+    """Tek bir para jetonunu (TR veya US biçimi) float'a çevirir.
+    Kural: iki ayraç varsa EN SAĞDAKİ ondalıktır; tek ayraç varsa son grup 3 haneyse
+    binlik, değilse ondalıktır. Böylece '100,000.00', '100.000,00', '100,000',
+    '100.000', '100,00', '100.00' hepsi doğru çözülür."""
+    t = (tok or "").replace(" ", "").strip()
+    neg = t.startswith("-")
+    t = t.lstrip("+-")
+    if not re.search(r"\d", t):
+        return None
+    has_dot, has_com = "." in t, "," in t
+    if has_dot and has_com:
+        if t.rfind(",") > t.rfind("."):      # virgül daha sağda -> TR (virgül ondalık)
+            t = t.replace(".", "").replace(",", ".")
+        else:                                 # nokta daha sağda -> US (nokta ondalık)
+            t = t.replace(",", "")
+    elif has_com:
+        parts = t.split(",")
+        t = t.replace(",", "") if (len(parts) > 2 or len(parts[-1]) == 3) else t.replace(",", ".")
+    elif has_dot:
+        parts = t.split(".")
+        if len(parts) > 2 or len(parts[-1]) == 3:
+            t = t.replace(".", "")            # binlik (ör. 100.000 -> 100000)
+        # aksi halde nokta zaten ondalık (ör. 100.00)
+    try:
+        v = float(t)
+        return -v if neg else v
+    except ValueError:
+        return None
 
 
 def parse_amount(s: str) -> float | None:
     m = AMOUNT_RE.search(s or "")
     if not m:
         return None
-    raw = m.group(0).replace(" ", "").replace(".", "").replace(",", ".")
-    try:
-        return float(raw)
-    except ValueError:
-        return None
+    return _parse_money_token(m.group(0))
 
 
 @dataclass
@@ -255,6 +287,25 @@ def _clean_name(s: str) -> str:
     return s
 
 
+def _after_label(text: str, label: str, stops: list[str]) -> str:
+    """'LABEL: DEĞER  STOP:...' kalıbında, etiketten sonraki değeri BİR SONRAKİ etikete
+    (stops) ya da satır sonuna kadar döndürür. Böylece 'GÖNDEREN: Özgür İnci AÇIKLAMA:...'
+    -> 'Özgür İnci' ve 'ALICI ÜNVANI: Mezher Kaya ALICI IBAN:...' -> 'Mezher Kaya'."""
+    m = re.search(re.escape(label) + r"\s*[:：]\s*(.+)", text)
+    if not m:
+        return ""
+    val = m.group(1)
+    # satır sonunda kes
+    val = val.splitlines()[0]
+    # bir sonraki etikette kes
+    cut = len(val)
+    for st in stops:
+        mm = re.search(r"\b" + re.escape(st), val)
+        if mm and mm.start() < cut:
+            cut = mm.start()
+    return val[:cut].strip(" :：-,")
+
+
 def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = None) -> Extraction:
     ex = Extraction()
     ex.raw_text = text or reading_text
@@ -288,6 +339,10 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     is_isbank = ("isbank.com" in low or "ETTN" in joined
                  or ("e-dekont" in low and "doküman numarası" in low))
     is_garanti = ("HESAPTAN" in up or "garantibbva" in low)
+    # Enpara/QNB FAST dekontu: net satır-içi etiketler ("ALICI ÜNVANI", "EFT TUTARI", ...)
+    is_enpara = ("enpara" in low
+                 or ("ALICI ÜNVANI" in up and "EFT TUTARI" in up)
+                 or ("MÜŞTERİ ÜNVANI" in up and "GIDEN FAST" in up))
 
     if is_vakif:
         ex.bank = "VakıfBank"
@@ -295,6 +350,8 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.bank = "Türkiye İş Bankası"
     elif is_garanti:
         ex.bank = "Garanti BBVA"
+    elif is_enpara:
+        ex.bank = "Enpara.com (QNB)"
 
     # =============================================================
     #  İŞ BANKASI e-Dekont formatı
@@ -419,6 +476,57 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
             if len(ex.all_ibans) > 1:
                 ex.sender.iban = ex.all_ibans[1]
         ex.sender.bank = "VakıfBank"
+
+    # =============================================================
+    #  ENPARA.com / QNB FAST dekontu (net satır-içi etiketler)
+    # =============================================================
+    elif is_enpara:
+        ex.doc_kind = _detect_garanti_kind(joined)  # GIDEN FAST EFT / HAVALE ...
+        rt = rjoined or joined
+        _STOPS = ["ALICI IBAN", "ALICI ÜNVANI", "MÜŞTERİ ÜNVANI", "MUSTERI UNVANI",
+                  "GÖNDEREN", "GONDEREN", "AÇIKLAMA", "ACIKLAMA", "IBAN", "KATILIMCI",
+                  "EFT TUTARI", "EFT ÜCRETİ", "SORGU NO", "SIRA NO", "FİŞ NO", "FIS NO", "B/A"]
+        # Alıcı
+        ex.receiver.name = _clean_name(_after_label(rt, "ALICI ÜNVANI", _STOPS)
+                                       or _after_label(rt, "ALICI UNVANI", _STOPS))
+        ex.receiver.iban = banks.normalize_iban(_after_label(rt, "ALICI IBAN", _STOPS))
+        # Gönderen (MÜŞTERİ ÜNVANI daha güvenilir; yoksa GÖNDEREN)
+        ex.sender.name = _clean_name(_after_label(rt, "MÜŞTERİ ÜNVANI", _STOPS)
+                                     or _after_label(rt, "MUSTERI UNVANI", _STOPS)
+                                     or _after_label(rt, "GÖNDEREN", _STOPS)
+                                     or _after_label(rt, "GONDEREN", _STOPS))
+        # Gönderen IBAN: "MÜŞTERİ ÜNVANI ... IBAN : TR..." satırından ya da tüm IBAN'lardan
+        s_iban = _after_label(rt, "MÜŞTERİ ÜNVANI", ["AÇIKLAMA", "GÖNDEREN"])
+        sm = IBAN_RE.search(s_iban) or (IBAN_RE.search(_find_label(rt, ["IBAN"]) or ""))
+        ex.sender.iban = banks.normalize_iban(sm.group(0)) if sm else ""
+        # IBAN'lar eksikse konumsal ata (alıcı=Halkbank IBAN, gönderen=Enpara/QNB IBAN)
+        for ib in ex.all_ibans:
+            if ib != ex.receiver.iban and not ex.sender.iban:
+                ex.sender.iban = ib
+        # Tutar: "EFT TUTARI : 100,000.0 TL"  (etiketten sonraki İLK para jetonu)
+        eft = _after_label(rt, "EFT TUTARI", ["EFT ÜCRETİ", "EFT UCRETI", "SORGU NO"])
+        ex.amount.value = parse_amount(eft)
+        ex.amount.text = eft
+        cm = CURRENCY_RE.search(eft or "")
+        ex.amount.currency = (cm.group(1).upper() if cm else "TL")
+        fee_txt = _after_label(rt, "EFT ÜCRETİ(BSMV DAHİL)", ["SORGU NO"]) \
+            or _after_label(rt, "EFT ÜCRETİ", ["SORGU NO"])
+        _fee = parse_amount(fee_txt)
+        if _fee is None and re.match(r"\s*0(\s|$|TL)", fee_txt or ""):
+            _fee = 0.0                        # "0 TL" gibi ücretsiz durum
+        ex.amount.fee = _fee
+        # TCKN, açıklama, referans, sıra/fiş no
+        ex.sender.tckn = _find_label(rt, ["TC kimlik numarası", "TC Kimlik"])
+        ex.transaction.description = _after_label(rt, "AÇIKLAMA", ["SIRA NO", "FİŞ NO"]) \
+            or _after_label(rt, "ACIKLAMA", ["SIRA NO", "FIS NO"])
+        ex.transaction.channel = _find_label(rt, ["İşlem yeri", "İşlem Yeri"])
+        sorgu = re.search(r"SORGU NO\s*[:：]?\s*(\d{4,})", rt) or re.search(r"sorgu no[:：]?\s*(\d{4,})", low)
+        ex.transaction.ref_no = sorgu.group(1) if sorgu else ""
+        fis = re.search(r"Fi[şs]\s*No\s*[:：]?\s*(\d{6,})", rt, re.I)
+        ex.transaction.document_no = fis.group(1) if fis else ""
+        sira = re.search(r"S[ıi]ra\s*No\s*[:：]?\s*([\d\-]{6,})", rt, re.I)
+        ex.transaction.receipt_no = sira.group(1) if sira else ""
+        ex.sender.bank = "Enpara.com (QNB)"
 
     # =============================================================
     #  EVRENSEL / diğer tüm bankalar (Ziraat, Akbank, Yapı Kredi, ...)

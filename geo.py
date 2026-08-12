@@ -197,7 +197,9 @@ def label_value_map(words, label_phrases):
 
 # ------------------------- Temizleme yardımcıları -------------------------
 _IBAN_RE = re.compile(r"TR\d{2}(?:[ ]?\d{4}){5}[ ]?\d{2}", re.I)
-_AMT_RE = re.compile(r"-?\d{1,3}(?:\.\d{3})*,\d{2}")
+# TR + US para biçimlerini yakalar (binlik veya ondalık zorunlu); tarih/sürüm parçalarını dışlar
+_AMT_RE = re.compile(
+    r"(?<![\d.,])(?:-?\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|-?\d+[.,]\d{1,2})(?![.,]?\d)")
 
 
 def clean_iban(v: str) -> str:
@@ -214,10 +216,8 @@ def clean_amount(v: str):
     m = _AMT_RE.search(v or "")
     if not m:
         return None
-    try:
-        return float(m.group(0).replace(".", "").replace(",", "."))
-    except ValueError:
-        return None
+    from extract import _parse_money_token
+    return _parse_money_token(m.group(0))
 
 
 def clean_name(v: str) -> str:
