@@ -297,10 +297,11 @@ def _after_label(text: str, label: str, stops: list[str]) -> str:
     val = m.group(1)
     # satır sonunda kes
     val = val.splitlines()[0]
-    # bir sonraki etikette kes
+    # bir sonraki etikette kes — etiket önceki kelimeye BİTİŞİK de olabilir
+    # (ör. "Tolga ŞengülALICI IBAN"), bu yüzden kelime sınırı aranmaz; düz alt-dizi yeter.
     cut = len(val)
     for st in stops:
-        mm = re.search(r"\b" + re.escape(st), val)
+        mm = re.search(re.escape(st), val)
         if mm and mm.start() < cut:
             cut = mm.start()
     return val[:cut].strip(" :：-,")
