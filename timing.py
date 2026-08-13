@@ -24,7 +24,7 @@ def parse_content_datetime(s: str):
     if not s:
         return None, False
     s = s.strip()
-    m = re.search(r"(\d{2})[./](\d{2})[./](\d{4})(?:[ T]+(\d{2}):(\d{2})(?::(\d{2}))?)?", s)
+    m = re.search(r"(\d{2})[./](\d{2})[./](\d{4})(?:[ T\-]+(\d{2}):(\d{2})(?::(\d{2}))?)?", s)
     if not m:
         return None, False
     d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))

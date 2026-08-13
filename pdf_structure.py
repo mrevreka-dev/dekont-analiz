@@ -31,7 +31,6 @@ GENERATOR_PRODUCERS = [
 # Bir belgeyi DÜZENLEYEN / YENİDEN KAYDEDEN yazılımlar (oynama riski yüksek)
 EDITOR_PRODUCERS = {
     "quartz pdfcontext": "macOS Önizleme/Quartz ile yeniden kaydedilmiş (macOS Preview re-save)",
-    "skia/pdf": "Chrome/Skia ile yeniden üretilmiş (browser print/re-save)",
     "cairo": "Cairo (GIMP/Inkscape/LibreOffice export) ile işlenmiş",
     "ilovepdf": "iLovePDF çevrimiçi aracı ile işlenmiş",
     "smallpdf": "Smallpdf çevrimiçi aracı ile işlenmiş",
@@ -51,7 +50,14 @@ EDITOR_PRODUCERS = {
     "canva": "Canva ile oluşturulmuş/düzenlenmiş",
     "word": "Microsoft Word üzerinden dışa aktarılmış",
     "libreoffice": "LibreOffice üzerinden dışa aktarılmış",
-    "chromium": "Chromium/tarayıcı üzerinden basılmış",
+}
+
+# Tarayıcı motorları: birçok banka mobil/internet dekontunu sunucuda headless Chrome
+# (Skia) ile üretir. Bu TEK BAŞINA tahrifat değildir; yalnızca artımlı kayıt / önce-üretici-
+# sonra-editör / içerik revizyonu gibi başka sinyallerle birlikte anlam kazanır.
+BROWSER_PRODUCERS = {
+    "skia/pdf": "Tarayıcı motoru (Chrome/Skia) ile üretilmiş — banka mobil/İnternet dekontlarında olağan",
+    "chromium": "Chromium tabanlı tarayıcı motoru ile üretilmiş — olağan",
 }
 
 
@@ -343,12 +349,15 @@ def classify_producer(producer: str, creator: str) -> dict:
     p = (producer or "").lower()
     c = (creator or "").lower()
     combo = p + " || " + c
-    result = {"editor_hits": [], "generator_hits": [], "append_mode": False}
+    result = {"editor_hits": [], "generator_hits": [], "browser_hits": [], "append_mode": False}
     if "appendmode" in combo.replace(" ", ""):
         result["append_mode"] = True
     for key, desc in EDITOR_PRODUCERS.items():
         if key in combo:
             result["editor_hits"].append({"key": key, "desc": desc})
+    for key, desc in BROWSER_PRODUCERS.items():
+        if key in combo:
+            result["browser_hits"].append({"key": key, "desc": desc})
     for g in GENERATOR_PRODUCERS:
         if g in combo:
             result["generator_hits"].append(g)

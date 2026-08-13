@@ -24,23 +24,37 @@ ENGINE_VERSION = "1.0.0"
 
 import re as _re
 
-# Para birimine (TL/TRY/₺) bitişik yazılmış tutar jetonu (sayı-önce veya sonra)
-_DISP_AMT_RE = _re.compile(
-    r"(-?\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|-?\d+[.,]\d{1,2})\s*(?:TL|TRY|₺)\b"
-    r"|(?:TL|TRY|₺)\s*(-?\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|-?\d+[.,]\d{1,2})",
-    _re.I)
+_MONEY_TOK = r"-?\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|-?\d+[.,]\d{1,2}"
+
+# YALNIZCA işlem/transfer tutarını taşıyan etiketler. Ücret/komisyon/BSMV/masraf/toplam
+# DAHİL DEĞİL — çünkü bunlar dekontta meşru olarak FARKLI değerlerdir.
+_TRANSFER_LABELS = [
+    "Toplam İşlem Tutarı", "İşlem Tutarı", "İşlem Miktarı", "Gönderilen Tutar",
+    "Transfer Tutarı", "Havale Tutarı", "EFT Tutarı", "FAST Tutarı", "Ödeme Tutarı",
+]
+# "12.000,00 TRY tutarında ..." gibi tekrar/teyit ifadesi
+_RESTATE_RE = _re.compile(r"(" + _MONEY_TOK + r")\s*(?:TL|TRY|₺)?\s*tutar", _re.I)
 
 
-def _displayed_amounts(text: str) -> list:
-    """Metinde para birimine bitişik yazılmış tutarları (float) döndürür.
-    Yalnızca gerçekten 'görüntülenen para' değerleri; tarih/referans/sürüm sayıları hariç."""
-    from extract import _parse_money_token
-    out = []
-    for m in _DISP_AMT_RE.finditer(text or ""):
-        v = _parse_money_token(m.group(1) or m.group(2))
-        if v is not None:
-            out.append(v)
-    return out
+def _transfer_amounts(text: str) -> list:
+    """İŞLEM/TRANSFER tutarının belgede geçtiği tüm yerleri (float) döndürür.
+    Gerçek bir dekontta bunların HEPSİ aynı olmalıdır; farklılık = tutar oynaması.
+    Ücret/komisyon/BSMV/masraf gibi kalemler KASITLI olarak hariç tutulur."""
+    from extract import _find_label, _parse_money_token, AMOUNT_RE
+    vals = []
+    for lab in _TRANSFER_LABELS:
+        v = _find_label(text or "", [lab])
+        if v:
+            m = AMOUNT_RE.search(v)
+            if m:
+                pv = _parse_money_token(m.group(0))
+                if pv is not None:
+                    vals.append(pv)
+    for m in _RESTATE_RE.finditer(text or ""):
+        pv = _parse_money_token(m.group(1))
+        if pv is not None:
+            vals.append(pv)
+    return vals
 
 
 def _fmt_tl(v: float) -> str:
@@ -418,25 +432,26 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 tr=f"Veri tutarlılığı hatası — {c['name']}: {c['detail']}. Alanlardan biri elle değiştirilmiş olabilir.",
                 en=f"Data consistency failure — {c['name']}: {c['detail']}.", detail=""))
 
-    # --- Tutar çapraz-kaynak kontrolü (dekont üzerinde tutar HER YERDE aynı olmalı) ---
-    # Para birimine (TL/TRY/₺) bitişik yazılmış tüm tutarları toplar; işlem tablosundaki tutar
-    # ile özet/etiket tutarı farklıysa bu, tutarın elle değiştirildiğine (tahrifat) işarettir.
+    # --- İŞLEM TUTARI çapraz-kaynak kontrolü (aynı tutar her yerde aynı olmalı) ---
+    # Yalnızca İŞLEM/TRANSFER tutarının farklı yazımlarını karşılaştırır; ücret, komisyon,
+    # BSMV, mesaj ücreti, toplam masraf ve toplam çekilen tutar gibi MEŞRU farklı kalemler
+    # bu kontrole DAHİL EDİLMEZ (yanlış "oynama" tespitini önler).
     if not is_statement:
-        disp = _displayed_amounts(text_layout or "")
-        known = {round(v, 2) for v in (ex.amount.fee, ex.amount.total) if v is not None}
-        uniq = sorted({round(v, 2) for v in disp if round(v, 2) not in known})
+        tvals = _transfer_amounts(text_layout or "")
+        uniq = sorted({round(v, 2) for v in tvals})
         if len(uniq) >= 2:
             hi, lo = uniq[-1], uniq[0]
             findings.append(Finding(
                 "AMOUNT_MISMATCH", "critical", "content", 45,
-                tr=f"TUTAR ÇELİŞKİSİ: Dekont üzerinde işlem tutarı farklı yerlerde FARKLI yazılmış — "
-                   f"{_fmt_tl(hi)} ile {_fmt_tl(lo)}. Gerçek bir dekontta işlem tutarı (işlem tablosu, "
-                   f"EFT/özet satırı, açıklama) her yerde AYNI olmak zorundadır. Bu fark, tutarın belge "
-                   f"görüntüsü üzerinde elle değiştirildiğine dair güçlü tahrifat kanıtıdır.",
-                en=f"AMOUNT MISMATCH: the transaction amount is written inconsistently on the receipt "
-                   f"({hi} vs {lo}). In a genuine receipt the amount must be identical in every place "
-                   f"(table, summary/EFT line, description) — strong evidence the amount was altered.",
-                detail=f"displayed_amounts={uniq}"))
+                tr=f"TUTAR ÇELİŞKİSİ: İşlem tutarı dekont üzerinde farklı yerlerde FARKLI yazılmış — "
+                   f"{_fmt_tl(hi)} ile {_fmt_tl(lo)}. Gerçek bir dekontta İŞLEM TUTARI (etiketli tutar ve "
+                   f"'… tutarında …' teyit ifadesi) her yerde AYNI olmak zorundadır. Bu fark, tutarın belge "
+                   f"üzerinde elle değiştirildiğine dair güçlü tahrifat kanıtıdır. (Not: komisyon, BSMV, "
+                   f"mesaj ücreti gibi ayrı kalemler bu kontrole dahil edilmez.)",
+                en=f"AMOUNT MISMATCH: the transaction amount is written inconsistently ({hi} vs {lo}). "
+                   f"The transfer amount (labeled amount and the '… tutarında …' restatement) must be "
+                   f"identical everywhere. Fees/commission/BSMV are excluded from this check.",
+                detail=f"transfer_amounts={uniq}"))
 
     # --- HESAP HAREKETİ: yürüyen bakiye sürekliliği (içerik oynaması kesin kanıtı) ---
     if is_statement:
