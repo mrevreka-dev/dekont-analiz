@@ -181,7 +181,8 @@ def record(report: dict) -> bool:
     # numaralandırma kullanmadığından (ör. Garanti), bu yalnızca 'incelenmeli' tavsiyesidir
     # ve kaydı engellemez — aksi halde veritabanı gerçek dekontlarla dolamaz.
     _BAD = {"REV_AMOUNT_CHANGED", "REV_CONTENT_CHANGED", "TIME_FILE_BEFORE_TXN", "SINGLE_PHOTO_PDF",
-            "QR_MISMATCH", "SEQ_DB_DUPLICATE"}
+            "QR_MISMATCH", "SEQ_DB_DUPLICATE", "RECEIPT_NO_DATE_MISMATCH", "PRODUCER_MISMATCH",
+            "AMOUNT_MISMATCH"}
     if codes & _BAD:
         return False
     f = _fields(report)

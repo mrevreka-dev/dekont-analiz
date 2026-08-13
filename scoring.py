@@ -123,6 +123,10 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 15)
     if "AMOUNT_MISMATCH" in codes:           # tutar belgede farklı yerlerde farklı yazılmış
         score = min(score, 8)
+    if "RECEIPT_NO_DATE_MISMATCH" in codes:  # fiş numarasındaki tarih ≠ işlem tarihi (tarihleme)
+        score = min(score, 8)
+    if "PRODUCER_MISMATCH" in codes:         # bankanın gerçek kütüphanesiyle üretilmemiş
+        score = min(score, 30)
     if "TIME_FILE_BEFORE_TXN" in codes:      # geriye tarihleme — imkânsız
         score = min(score, 10)
     if "SINGLE_PHOTO_PDF" in codes:          # PDF içinde tek fotoğraf

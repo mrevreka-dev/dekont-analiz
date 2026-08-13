@@ -563,6 +563,27 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                "presented instead of the original digital receipt. High forgery risk.",
             detail=f"doc_type={doc_type}"))
 
+    # 6.85) ÖZGÜNLÜK DENETİMLERİ — tek belgede sahteciliği yakalayan banka-bilinçli sinyaller
+    #   (a) belge/fiş numarasındaki gömülü tarih ↔ işlem tarihi
+    #   (b) üretici (producer) kütüphanesi ↔ bankanın gerçek imzası
+    if is_receipt:
+        try:
+            import authenticity as _auth
+            _bkey = _auth.bank_key(ex.bank)
+            _txn_dt, _ = _tim.parse_content_datetime(ex.transaction.date or "")
+            _rn = _auth.check_receipt_number_date(
+                _bkey, ex.transaction.document_no, ex.transaction.ref_no,
+                ex.transaction.sequence_number, _txn_dt)
+            if _rn:
+                findings.append(Finding(_rn["code"], _rn["severity"], "content", _rn["weight"],
+                                        tr=_rn["tr"], en=_rn["en"], detail=_rn.get("detail", "")))
+            _pr = _auth.check_producer(_bkey, struct.producer)
+            if _pr:
+                findings.append(Finding(_pr["code"], _pr["severity"], "metadata", _pr["weight"],
+                                        tr=_pr["tr"], en=_pr["en"], detail=_pr.get("detail", "")))
+        except Exception:
+            pass
+
     # 6.9) KALICI VERİTABANI KARŞILAŞTIRMASI (banka bazlı numara geçmişi)
     db_findings: list = []
     if use_store and is_receipt:

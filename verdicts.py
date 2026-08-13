@@ -25,10 +25,11 @@ TRUE, FALSE, NEUTRAL = "true", "false", "neutral"
 
 # İçerik oynamasını KESİN kanıtlayan bulgular (revizyon farkı, bakiye kırılması, satır silme)
 _CONTENT_TAMPER = {"REV_CONTENT_CHANGED", "REV_AMOUNT_CHANGED", "REV_FIELD_CHANGED",
-                   "STATEMENT_BALANCE_BREAK", "STATEMENT_ROW_COUNT_MISMATCH", "AMOUNT_MISMATCH"}
+                   "STATEMENT_BALANCE_BREAK", "STATEMENT_ROW_COUNT_MISMATCH", "AMOUNT_MISMATCH",
+                   "RECEIPT_NO_DATE_MISMATCH", "PRODUCER_MISMATCH"}
 # Zaman tutarsızlığını gösteren bulgular
 _TIME_BAD = {"TIME_FILE_BEFORE_TXN", "TIME_LATE_GENERATION", "TIME_MODIFIED_AFTER_CREATE",
-             "TIME_MOD_BEFORE_CREATE"}
+             "TIME_MOD_BEFORE_CREATE", "RECEIPT_NO_DATE_MISMATCH"}
 
 _MODE_TR = {
     "digital": "Gerçek dijital PDF (içerik ve yapı doğrulanabilir)",
@@ -60,6 +61,13 @@ def _time_reason(codes: set, timing: dict, is_statement: bool) -> tuple[str, str
     modified = t.get("mod_local") or "—"
     txn = t.get("transaction_local") or "—"
     islem = "dönem/işlem" if is_statement else "işlem"
+    if "RECEIPT_NO_DATE_MISMATCH" in codes:
+        tr = ("Fiş/belge numarasının kodladığı (bankaca verilen) tarih ile belge üzerindeki işlem "
+              "tarihi UYUŞMUYOR. Fiş numarasındaki tarih değiştirilemez; belge üzerindeki tarih "
+              "sonradan değiştirilmiş görünüyor (ileri/geri tarihleme) — güçlü SAHTECİLİK işareti.")
+        en = ("The bank-assigned date encoded in the receipt number does NOT match the transaction "
+              "date shown on the document — the visible date was altered (forgery signal).")
+        return tr, en
     if "TIME_FILE_BEFORE_TXN" in codes:
         tr = (f"PDF {created} tarihinde ÜRETİLMİŞ görünüyor, ancak belge {txn} tarihli {islem} "
               f"içeriyor. Bir dosya, içerdiği işlemlerden ÖNCE oluşturulamaz — bu İMKÂNSIZDIR. "
@@ -140,10 +148,24 @@ def compute_verdicts(*, doc_type: str, input_kind: str, codes: set, cons: dict,
 
     # 2) İçerik değiştirilmemiş mi? (oynama yok mu)
     if codes & _CONTENT_TAMPER:
+        if "RECEIPT_NO_DATE_MISMATCH" in codes:
+            _ci_tr = ("Fiş/belge numarasındaki bankaca verilmiş tarih ile belge üzerindeki işlem "
+                      "tarihi UYUŞMUYOR — belgenin tarihi sonradan değiştirilmiş (olası SAHTE).")
+            _ci_en = ("The bank-assigned date embedded in the receipt number does NOT match the "
+                      "transaction date shown — the date was altered (possible forgery).")
+        elif "PRODUCER_MISMATCH" in codes:
+            _ci_tr = ("Belge, bankanın gerçek dekont üretim kütüphanesiyle üretilmemiş — düzenlenip "
+                      "yeniden dışa aktarılmış olabilir (olası SAHTE).")
+            _ci_en = ("The document was not produced by the bank's genuine receipt-generation library — "
+                      "it may have been edited and re-exported (possible forgery).")
+        elif "AMOUNT_MISMATCH" in codes:
+            _ci_tr = "İşlem tutarı belgede farklı yerlerde FARKLI yazılmış — tutar oynaması."
+            _ci_en = "The transaction amount is written inconsistently across the document — amount tampering."
+        else:
+            _ci_tr = "PDF revizyonları arasında içerik/tutar DEĞİŞTİRİLMİŞ — kesin oynama tespiti."
+            _ci_en = "Content/amount was CHANGED between PDF revisions — definitive tampering."
         add("content_integrity", "İçerik değiştirilmemiş mi (oynama yok mu)?",
-            "Is the content unaltered (no tampering)?", FALSE,
-            "PDF revizyonları arasında içerik/tutar DEĞİŞTİRİLMİŞ — kesin oynama tespiti.",
-            "Content/amount was CHANGED between PDF revisions — definitive tampering.")
+            "Is the content unaltered (no tampering)?", FALSE, _ci_tr, _ci_en)
     elif mode == "digital":
         add("content_integrity", "İçerik değiştirilmemiş mi (oynama yok mu)?",
             "Is the content unaltered (no tampering)?", TRUE,
