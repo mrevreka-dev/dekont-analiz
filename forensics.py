@@ -76,12 +76,11 @@ def detect(s: StructureReport, text_len: int, doc_type: str) -> list[Finding]:
     # ---------------------------------------------------------------
     # 1) ÜRETİCİ/OLUŞTURUCU TUTARSIZLIĞI — düzenleyici yazılım izi
     # ---------------------------------------------------------------
-    if cp["editor_hits"]:
-        # Bir üretim aracı (JasperReports vb.) tarafından oluşturulmuş ama
-        # sonradan bir düzenleyici (Quartz/Preview vb.) tarafından yeniden
-        # kaydedilmişse bu güçlü bir oynama işaretidir.
-        gen = cp["generator_hits"]
-        for hit in cp["editor_hits"]:
+    gen = cp["generator_hits"]
+    # Yeniden-kayıt (oynama) sinyali YALNIZCA SON YAZAN (producer) bir editörse geçerlidir.
+    # Aspose gibi üreticiler Creator'a "Word" yazar; bu tek başına düzenleme DEĞİLDİR.
+    if cp.get("producer_is_editor"):
+        for hit in cp["producer_editor_hits"]:
             if gen:
                 F.append(Finding(
                     "PRODUCER_RESAVE", "high", "metadata", 30,
@@ -95,14 +94,15 @@ def detect(s: StructureReport, text_len: int, doc_type: str) -> list[Finding]:
             else:
                 F.append(Finding(
                     "EDITOR_PRODUCER", "medium", "metadata", 18,
-                    tr=f"Üretici bilgisi bir düzenleme/dışa aktarma aracına işaret ediyor: {hit['desc']}.",
-                    en=f"Producer indicates an editing/export tool: {hit['desc']}.",
+                    tr=f"Üretici (son yazan) bir düzenleme/dışa aktarma aracına işaret ediyor: {hit['desc']}.",
+                    en=f"Producer (last writer) indicates an editing/export tool: {hit['desc']}.",
                     detail=f"Producer={s.producer}",
                 ))
 
-        # Tarayıcı motoru (Skia/Chromium): banka dekontlarında OLAĞAN üretim biçimi.
-        # Yalnızca önce bir üretim sistemi varsa (sonra tarayıcıyla yeniden basılmış) şüphelidir.
-        for hit in cp.get("browser_hits", []):
+    # Tarayıcı motoru (Skia/Chromium): banka dekontlarında OLAĞAN üretim biçimi.
+    # Yalnızca önce bir üretim sistemi varsa (sonra tarayıcıyla yeniden basılmış) şüphelidir.
+    if cp.get("browser_hits"):
+        for hit in cp["browser_hits"]:
             if gen:
                 F.append(Finding(
                     "PRODUCER_RESAVE", "high", "metadata", 30,
@@ -239,12 +239,16 @@ def detect(s: StructureReport, text_len: int, doc_type: str) -> list[Finding]:
     # ---------------------------------------------------------------
     # 7) ANNOTATION / ACROFORM — üzerine eklenen içerik
     # ---------------------------------------------------------------
-    if s.annotation_count > 0 and doc_type in ("digital_native", "hybrid"):
+    # Yalnızca MARKUP/üzerine-ekleme türü annotation'lar şüphelidir. Köprü (Link — ör. bankanın
+    # kendi web adresi), Popup ve form alanı (Widget) olağandır ve işaretlenmez.
+    if s.markup_annotation_count > 0 and doc_type in ("digital_native", "hybrid"):
         F.append(Finding(
             "ANNOTATIONS_PRESENT", "low", "content", 8,
-            tr=f"Belgede {s.annotation_count} adet not/annotation nesnesi var. Nihai bir dekontta "
-               f"bulunmaması beklenir; üzerine eklenmiş içerik olabilir.",
-            en=f"{s.annotation_count} annotation object(s) present — unexpected on a finalized receipt.",
+            tr=f"Belgede {s.markup_annotation_count} adet MARKUP (metin kutusu/damga/vurgu/redaksiyon "
+               f"gibi) annotation nesnesi var. Nihai bir dekontta bulunmaması beklenir; üzerine eklenmiş "
+               f"içerik olabilir. (Köprü/bağlantı ve form alanları bu sayıya dahil değildir.)",
+            en=f"{s.markup_annotation_count} markup annotation object(s) present — unexpected on a "
+               f"finalized receipt (hyperlinks and form fields are excluded).",
             detail="",
         ))
     if s.js_present:

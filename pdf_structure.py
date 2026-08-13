@@ -25,7 +25,8 @@ GENERATOR_PRODUCERS = [
     "jasperreports", "openpdf", "itext", "adobe experience manager",
     "adobe livecycle", "reportlab", "pdfbox", "prince", "wkhtmltopdf",
     "pdftools sdk", "oracle", "sap", "crystal reports", "birt",
-    "microsoft report", "telerik", "fastreport",
+    "microsoft report", "telerik", "fastreport", "aspose", "docotic",
+    "dynamicpdf", "spire.pdf", "syncfusion",
 ]
 
 # Bir belgeyi DÜZENLEYEN / YENİDEN KAYDEDEN yazılımlar (oynama riski yüksek)
@@ -48,7 +49,8 @@ EDITOR_PRODUCERS = {
     "acrobat": "Adobe Acrobat ile düzenlenmiş (üretim değil düzenleme)",
     "photoshop": "Adobe Photoshop üzerinden geçmiş (görsel düzenleme)",
     "canva": "Canva ile oluşturulmuş/düzenlenmiş",
-    "word": "Microsoft Word üzerinden dışa aktarılmış",
+    "microsoft office word": "Microsoft Word üzerinden dışa aktarılmış",
+    "microsoft word": "Microsoft Word üzerinden dışa aktarılmış",
     "libreoffice": "LibreOffice üzerinden dışa aktarılmış",
 }
 
@@ -137,6 +139,7 @@ class StructureReport:
     has_acroform: bool = False
     fields_flattened: Any = None
     annotation_count: int = 0
+    markup_annotation_count: int = 0
     image_count: int = 0
     images: list = field(default_factory=list)
     fonts: list = field(default_factory=list)
@@ -256,11 +259,22 @@ def analyze_structure_bytes(data: bytes) -> StructureReport:
                         rep.has_signature = True
             except Exception:
                 pass
-        # Sayfa annotation'ları
+        # Sayfa annotation'ları.
+        # Link (köprü, ör. bankanın kendi web adresi), Popup ve Widget (form alanı) OLAĞANDIR;
+        # oynama şüphesi asıl MARKUP/üzerine-ekleme türlerindedir (metin kutusu, damga, vurgu,
+        # karalama, redaksiyon, yapışkan not, dosya eki ...). Bu ayrım yanlış alarmı önler.
+        _BENIGN_ANNOTS = {"/Link", "/Popup", "/Widget"}
         try:
             for pg in pdf.pages:
                 annots = pg.get("/Annots", [])
                 rep.annotation_count += len(annots)
+                for a in annots:
+                    try:
+                        sub = str(a.get("/Subtype", ""))
+                    except Exception:
+                        sub = ""
+                    if sub and sub not in _BENIGN_ANNOTS:
+                        rep.markup_annotation_count += 1
         except Exception:
             pass
 
@@ -345,20 +359,39 @@ def _collect_images_fonts(pdf: "pikepdf.Pdf", rep: StructureReport) -> None:
 
 
 def classify_producer(producer: str, creator: str) -> dict:
-    """Üretici/oluşturucu dizesini sınıflandırır: üretim mi düzenleme mi?"""
+    """Üretici/oluşturucu dizesini ALAN BAZLI sınıflandırır.
+
+    Producer = PDF'i EN SON yazan yazılım; Creator = belgeyi ilk oluşturan uygulama.
+    Yeniden-kayıt (oynama) sinyali için ÖNEMLİ olan SON YAZANDIR (producer). Örneğin
+    Aspose.Words ürettiği PDF'te Creator'ı varsayılan "Microsoft Office Word" yazar —
+    bu bir 'Word'de düzenleme' DEĞİLDİR; son yazan (producer) bir üretim kütüphanesidir."""
     p = (producer or "").lower()
     c = (creator or "").lower()
     combo = p + " || " + c
-    result = {"editor_hits": [], "generator_hits": [], "browser_hits": [], "append_mode": False}
+
+    def _hits(s, table):
+        return [{"key": k, "desc": d} for k, d in table.items() if k in s]
+
+    def _ghits(s):
+        return [g for g in GENERATOR_PRODUCERS if g in s]
+
+    prod_editor = _hits(p, EDITOR_PRODUCERS)
+    prod_browser = _hits(p, BROWSER_PRODUCERS)
+    prod_gen = _ghits(p)
+    cre_editor = _hits(c, EDITOR_PRODUCERS)
+
+    # geriye dönük uyum: editor_hits (birleşik) + kaynak-bilinçli bayraklar
+    editor_all = prod_editor + [h for h in cre_editor if h not in prod_editor]
+    result = {
+        "editor_hits": editor_all,
+        "generator_hits": list(dict.fromkeys(_ghits(p) + _ghits(c))),
+        "browser_hits": prod_browser,
+        "producer_is_editor": bool(prod_editor),      # SON YAZAN bir editör mü?
+        "producer_is_generator": bool(prod_gen),      # SON YAZAN bir üretim kütüphanesi mi?
+        "producer_is_browser": bool(prod_browser),    # SON YAZAN bir tarayıcı motoru mu?
+        "producer_editor_hits": prod_editor,
+        "append_mode": False,
+    }
     if "appendmode" in combo.replace(" ", ""):
         result["append_mode"] = True
-    for key, desc in EDITOR_PRODUCERS.items():
-        if key in combo:
-            result["editor_hits"].append({"key": key, "desc": desc})
-    for key, desc in BROWSER_PRODUCERS.items():
-        if key in combo:
-            result["browser_hits"].append({"key": key, "desc": desc})
-    for g in GENERATOR_PRODUCERS:
-        if g in combo:
-            result["generator_hits"].append(g)
     return result

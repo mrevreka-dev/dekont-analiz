@@ -342,35 +342,36 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     # karşı-taraf banka adının metinde geçmesi tetiklememeli.
     low = joined.lower()
     up = joined.upper()
-    is_vakif = ("vakifbank.com" in low or "vakıflar bankası" in low
-                or ("VAKIFBANK" in up and "İŞLEM BİLGİLERİ" in up))
-    is_isbank = ("isbank.com" in low or "ETTN" in joined
-                 or ("e-dekont" in low and "doküman numarası" in low))
-    # ZİRAAT: "HESAPTAN FAST" başlığını Garanti ile paylaşabilir; Ziraat imzası öncelikli.
-    is_ziraat = ("ziraatbank.com" in low or "ziraat bankası" in low or "ziraat bankasi" in low
-                 or "ziraat süper şube" in low or "ziraat mobil" in low
-                 or ("ZİRAAT" in up and "FAST" in up))
-    is_garanti = (not is_ziraat) and ("garantibbva" in low
-                  or ("HESAPTAN" in up and "GARANTİ" in up)
-                  or ("HESAPTAN" in up and "ALACAKLI" in up))
-    # Enpara/QNB FAST dekontu: Enpara'nın KENDİ belge yapısı (etiketleri) esas alınır.
-    # Dikkat: sadece "enpara" kelimesi KARŞI-TARAF banka adında da geçebilir (ör. Ziraat
-    # dekontunda alıcı bankası Enpara) — bu yüzden bare kelime yeterli DEĞİLDİR.
-    is_enpara = (not is_ziraat) and (
-        ("ALICI ÜNVANI" in up and "EFT TUTARI" in up)
-        or ("MÜŞTERİ ÜNVANI" in up and "GIDEN FAST" in up)
-        or ("enpara şubesi" in low))
+    # ÖNEMLİ: Her banka İHRAÇ EDENİN KENDİ imzasıyla (web adresi/footer/kendine özgü etiket)
+    # tanınır. Karşı-taraf banka adı (ör. "ALICI BANKA :Vakıflar Bankası") ve genel alanlar
+    # (ör. ETTN — tüm e-Dekontlarda var) tetiklememelidir. Aşağıdaki imzalar ÖNCELİK sırasıyla
+    # değerlendirilir; yalnızca BİR banka seçilir (karşılıklı dışlayan).
+    _sig_yapikredi = ("yapikredi.com" in low or "yapı ve kredi bankası" in low
+                      or "yapi ve kredi bankasi" in low)
+    _sig_ziraat = ("ziraatbank.com" in low or "t.c. ziraat" in low or "ziraat bankası a.ş" in low
+                   or "ziraat bankasi a.s" in low or "ziraat süper şube" in low
+                   or "ziraat mobil" in low)
+    _sig_isbank = ("isbank.com" in low or "türkiye iş bankası" in low
+                   or ("e-dekont" in low and "doküman numarası" in low))
+    _sig_vakif = ("vakifbank.com" in low or ("VAKIFBANK" in up and "İŞLEM BİLGİLERİ" in up))
+    _sig_garanti = ("garantibbva" in low or "garanti bbva" in low
+                    or ("HESAPTAN" in up and ("GARANTİ" in up or "ALACAKLI" in up)))
+    _sig_enpara = ("enpara şubesi" in low
+                   or ("ALICI ÜNVANI" in up and "EFT TUTARI" in up)
+                   or ("MÜŞTERİ ÜNVANI" in up and "GIDEN FAST" in up))
+    issuer = ("yapikredi" if _sig_yapikredi else "ziraat" if _sig_ziraat
+              else "isbank" if _sig_isbank else "vakif" if _sig_vakif
+              else "garanti" if _sig_garanti else "enpara" if _sig_enpara else "")
+    is_yapikredi = issuer == "yapikredi"
+    is_ziraat = issuer == "ziraat"
+    is_isbank = issuer == "isbank"
+    is_vakif = issuer == "vakif"
+    is_garanti = issuer == "garanti"
+    is_enpara = issuer == "enpara"
 
-    if is_vakif:
-        ex.bank = "VakıfBank"
-    elif is_isbank:
-        ex.bank = "Türkiye İş Bankası"
-    elif is_ziraat:
-        ex.bank = "T.C. Ziraat Bankası"
-    elif is_garanti:
-        ex.bank = "Garanti BBVA"
-    elif is_enpara:
-        ex.bank = "Enpara.com (QNB)"
+    ex.bank = {"yapikredi": "Yapı ve Kredi Bankası", "ziraat": "T.C. Ziraat Bankası",
+               "isbank": "Türkiye İş Bankası", "vakif": "VakıfBank",
+               "garanti": "Garanti BBVA", "enpara": "Enpara.com (QNB)"}.get(issuer, "")
 
     # =============================================================
     #  İŞ BANKASI e-Dekont formatı
@@ -592,7 +593,61 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.sender.bank = "T.C. Ziraat Bankası"
 
     # =============================================================
-    #  EVRENSEL / diğer tüm bankalar (Akbank, Yapı Kredi, ...)
+    #  YAPI VE KREDİ BANKASI (FAST GÖNDERİMİ / EFT e-Dekont)
+    # =============================================================
+    elif is_yapikredi:
+        ex.doc_kind = "e-Dekont"
+        rt = joined                                  # hizalı layout metni
+        _YS = ["GÖNDEREN ADI", "ALICI ADI", "ALICI BANKA", "ALICI ŞUBE", "ALICI HESAP",
+               "ALICI TCKN", "GÖNDEREN HESAP", "İŞLEM REF", "SIRA NO", "PERSONEL", "BELGE",
+               "VALÖR", "DEKONT TİPİ", "SENARYO", "ETTN", "GİDEN FAST TUTARI", "VERGİ",
+               "KOMİSYON", "DÖVİZ", "TOPLAM TAHSILAT", "ÖDEMENİN", "MESAJ TÜRÜ", "SORGU NO",
+               "KOLAY ADRES", "AÇIKLAMA", "MÜŞTERİ NO", "IBAN", "TCKN", "VD", "VKN"]
+
+        def _yk_amt(lbl):
+            raw = _after_label(rt, lbl, _YS)
+            mm = re.search(r"-?\d[\d.,]*", raw or "")
+            v = _parse_money_token(mm.group(0)) if mm else None
+            return abs(v) if v is not None else None
+
+        # Taraflar
+        ex.sender.name = _clean_name(_after_label(rt, "GÖNDEREN ADI", _YS))
+        ex.receiver.name = _clean_name(_after_label(rt, "ALICI ADI", _YS))
+        ex.receiver.bank = _clean_name(_after_label(rt, "ALICI BANKA", _YS))
+        # IBAN'lar
+        r_ib = IBAN_RE.search(_after_label(rt, "ALICI HESAP", _YS) or "")
+        ex.receiver.iban = banks.normalize_iban(r_ib.group(0)) if r_ib else ""
+        s_ib = IBAN_RE.search(_after_label(rt, "GÖNDEREN HESAP NO", _YS) or "") \
+            or IBAN_RE.search(_find_label(rt, ["IBAN NO", "IBAN"]) or "")
+        ex.sender.iban = banks.normalize_iban(s_ib.group(0)) if s_ib else \
+            (ex.all_ibans[0] if ex.all_ibans else "")
+        if ex.sender.iban == ex.receiver.iban:
+            for ib in ex.all_ibans:
+                if ib != ex.receiver.iban:
+                    ex.sender.iban = ib
+                    break
+        # Tutar ve masraf kalemleri (negatif/ondalık: -22700, -22716.76, -15.96, -0.80)
+        ex.amount.value = _yk_amt("GİDEN FAST TUTARI")
+        ex.amount.currency = (_after_label(rt, "DÖVİZ CİNSİ", _YS) or "TL").split()[0] if \
+            _after_label(rt, "DÖVİZ CİNSİ", _YS) else "TL"
+        _kom = _yk_amt("KOMİSYON")
+        _ver = _yk_amt("VERGİ")
+        if _kom is not None or _ver is not None:
+            ex.amount.fee = round((_kom or 0) + (_ver or 0), 2)
+        ex.amount.total = _yk_amt("TOPLAM TAHSILAT TUTARI")
+        # Zaman / referans / kanal / kimlik
+        ex.transaction.date = _find_label(rt, ["İŞLEM TARİHİ", "ISLEM TARIHI"])
+        ex.transaction.value_date = _find_label(rt, ["VALÖR", "VALOR"])
+        ex.transaction.ref_no = _find_label(rt, ["İŞLEM REF", "ISLEM REF"])
+        ex.transaction.document_no = _find_label(rt, ["BELGE NUMARASI"])
+        ex.transaction.ettn = _find_label(rt, ["ETTN"])
+        ex.transaction.type = _find_label(rt, ["DEKONT TİPİ", "MESAJ TÜRÜ"])
+        ex.transaction.channel = _clean_name(_after_label(rt, "ÖDEMENİN KAYNAĞI", _YS))
+        ex.sender.customer_no = _find_label(rt, ["MÜŞTERİ NO"])
+        ex.sender.bank = "Yapı ve Kredi Bankası"
+
+    # =============================================================
+    #  EVRENSEL / diğer tüm bankalar (Akbank, ...)
     # =============================================================
     else:
         ex.doc_kind = "Dekont"

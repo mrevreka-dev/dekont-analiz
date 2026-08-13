@@ -399,8 +399,13 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
 
     # --- Tarih/saat derin analizi ---
     import timing as _tim
-    is_aem = any(g in ("adobe experience manager", "adobe livecycle")
-                 for g in classify_producer(struct.producer, struct.creator)["generator_hits"])
+    _gen_hits = classify_producer(struct.producer, struct.creator)["generator_hits"]
+    is_aem = any(g in ("adobe experience manager", "adobe livecycle") for g in _gen_hits)
+    # Sunucu tarafı RAPOR/ŞABLON üreticileri (Aspose, JasperReports, iText, AEM, ...) PDF
+    # metadata zaman damgalarını çoğu zaman ŞABLONDAN/KÜTÜPHANEDEN sabit yazar — bunlar
+    # gerçek üretim zamanını YANSITMAZ. Bu durumda metadata'ya dayalı zaman kontrolü
+    # (geriye tarihleme / geç üretim) yanlış alarm üretir; bu yüzden baskılanır.
+    unreliable_meta_dates = bool(_gen_hits)
     # Doğrudan fotoğraf yüklemesinde PDF oluşturma/değiştirme zamanı = yükleme anı (anlamsız);
     # işlem↔üretim kıyaslaması yapılmaz (yanlış "geç üretim" sinyalini önler).
     # Hesap hareketinde referans tarih = DÖNEM SONU / en geç işlem tarihi. Böylece
@@ -412,8 +417,22 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             _rows = stmt.get("balance", {}) and _stmt.parse_transactions(text_layout or "")
             if _rows:
                 _txn_ref = _rows[0]["tarih"]   # en üstteki = en yeni işlem
-    if input_kind == "image":
+    if input_kind == "image" or unreliable_meta_dates:
+        # Metadata tarihleri güvenilmez/anlamsız -> yalnızca zaman çizelgesi, kıyas bulgusu yok
         timing = _tim.analyze_timing(None, None, _txn_ref, is_aem)
+        if unreliable_meta_dates and struct.creation_dt:
+            timing["creation_local"] = _tim._fmt(struct.creation_dt, _tim.TR_OFFSET)
+            timing["mod_local"] = _tim._fmt(struct.mod_dt, _tim.TR_OFFSET) if struct.mod_dt else ""
+            findings.append(Finding(
+                "GENERATOR_TEMPLATE_DATES", "info", "metadata", 0,
+                tr="Belge bir sunucu-tarafı rapor/şablon üreticisiyle üretilmiş; PDF metadata "
+                   "oluşturma/değiştirme tarihleri şablon/kütüphane kaynaklıdır ve gerçek üretim "
+                   "zamanını yansıtmaz. Bu nedenle metadata'ya dayalı zaman (geriye tarihleme) "
+                   "kontrolü uygulanmadı — bu tek başına bir tahrifat işareti DEĞİLDİR.",
+                en="Document produced by a server-side report/template generator; PDF metadata "
+                   "creation/modification dates are template/library artifacts and do not reflect "
+                   "real generation time. Metadata-based timing checks were skipped.",
+                detail=f"Producer={struct.producer}"))
     else:
         timing = _tim.analyze_timing(struct.creation_dt, struct.mod_dt, _txn_ref, is_aem,
                                      suppress_late_generation=is_statement)
