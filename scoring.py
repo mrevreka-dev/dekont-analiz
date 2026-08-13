@@ -127,6 +127,12 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 8)
     if "PRODUCER_MISMATCH" in codes:         # bankanın gerçek kütüphanesiyle üretilmemiş
         score = min(score, 30)
+    if codes & {"BROWSER_RERENDER", "FONT_BROWSER_RERENDER"}:  # tarayıcıyla yeniden basım
+        score = min(score, 8)
+    if "FONT_SET_MISMATCH" in codes:         # font kümesi bankanın şablonuyla uyuşmuyor
+        score = min(score, 20)
+    if "INTERNAL_DATE_MISMATCH" in codes:    # belge içi tarihler çelişiyor
+        score = min(score, 12)
     if "TIME_FILE_BEFORE_TXN" in codes:      # geriye tarihleme — imkânsız
         score = min(score, 10)
     if "SINGLE_PHOTO_PDF" in codes:          # PDF içinde tek fotoğraf

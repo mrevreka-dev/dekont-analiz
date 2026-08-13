@@ -182,7 +182,8 @@ def record(report: dict) -> bool:
     # ve kaydı engellemez — aksi halde veritabanı gerçek dekontlarla dolamaz.
     _BAD = {"REV_AMOUNT_CHANGED", "REV_CONTENT_CHANGED", "TIME_FILE_BEFORE_TXN", "SINGLE_PHOTO_PDF",
             "QR_MISMATCH", "SEQ_DB_DUPLICATE", "RECEIPT_NO_DATE_MISMATCH", "PRODUCER_MISMATCH",
-            "AMOUNT_MISMATCH"}
+            "AMOUNT_MISMATCH", "BROWSER_RERENDER", "FONT_BROWSER_RERENDER", "FONT_SET_MISMATCH",
+            "INTERNAL_DATE_MISMATCH"}
     if codes & _BAD:
         return False
     f = _fields(report)

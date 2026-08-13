@@ -26,7 +26,8 @@ TRUE, FALSE, NEUTRAL = "true", "false", "neutral"
 # İçerik oynamasını KESİN kanıtlayan bulgular (revizyon farkı, bakiye kırılması, satır silme)
 _CONTENT_TAMPER = {"REV_CONTENT_CHANGED", "REV_AMOUNT_CHANGED", "REV_FIELD_CHANGED",
                    "STATEMENT_BALANCE_BREAK", "STATEMENT_ROW_COUNT_MISMATCH", "AMOUNT_MISMATCH",
-                   "RECEIPT_NO_DATE_MISMATCH", "PRODUCER_MISMATCH"}
+                   "RECEIPT_NO_DATE_MISMATCH", "PRODUCER_MISMATCH", "BROWSER_RERENDER",
+                   "FONT_BROWSER_RERENDER", "FONT_SET_MISMATCH", "INTERNAL_DATE_MISMATCH"}
 # Zaman tutarsızlığını gösteren bulgular
 _TIME_BAD = {"TIME_FILE_BEFORE_TXN", "TIME_LATE_GENERATION", "TIME_MODIFIED_AFTER_CREATE",
              "TIME_MOD_BEFORE_CREATE", "RECEIPT_NO_DATE_MISMATCH"}
@@ -153,6 +154,20 @@ def compute_verdicts(*, doc_type: str, input_kind: str, codes: set, cons: dict,
                       "tarihi UYUŞMUYOR — belgenin tarihi sonradan değiştirilmiş (olası SAHTE).")
             _ci_en = ("The bank-assigned date embedded in the receipt number does NOT match the "
                       "transaction date shown — the date was altered (possible forgery).")
+        elif codes & {"BROWSER_RERENDER", "FONT_BROWSER_RERENDER"}:
+            _ci_tr = ("Belge, bankanın sunucu kütüphanesiyle değil bir TARAYICI ile üretilmiş (font/üretici "
+                      "imzası tarayıcı yeniden-basımına işaret ediyor) — bankanın sisteminden çıkmamış, "
+                      "olası SAHTE.")
+            _ci_en = ("The document was produced by a browser, not the bank's server library (font/producer "
+                      "signature indicates a browser re-render) — did not come from the bank; possible forgery.")
+        elif "FONT_SET_MISMATCH" in codes:
+            _ci_tr = ("Belgedeki font kümesi bankanın orijinal dekont şablonuyla uyuşmuyor — belge orijinal "
+                      "olmayabilir (olası SAHTE).")
+            _ci_en = ("The font set does not match the bank's original receipt template — possible forgery.")
+        elif "INTERNAL_DATE_MISMATCH" in codes:
+            _ci_tr = ("Belge içindeki/metadata'daki tarihler birbiriyle çelişiyor — belgenin tarihiyle "
+                      "oynanmış olabilir (olası SAHTE).")
+            _ci_en = ("Dates inside the document/metadata conflict with each other — possible date tampering.")
         elif "PRODUCER_MISMATCH" in codes:
             _ci_tr = ("Belge, bankanın gerçek dekont üretim kütüphanesiyle üretilmemiş — düzenlenip "
                       "yeniden dışa aktarılmış olabilir (olası SAHTE).")

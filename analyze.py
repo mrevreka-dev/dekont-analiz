@@ -581,6 +581,19 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _pr:
                 findings.append(Finding(_pr["code"], _pr["severity"], "metadata", _pr["weight"],
                                         tr=_pr["tr"], en=_pr["en"], detail=_pr.get("detail", "")))
+            # Font alt-küme parmak izi (tarayıcı yeniden basımı / eksik font)
+            _ft = _auth.check_fonts(_bkey, pdf_bytes)
+            if _ft:
+                findings.append(Finding(_ft["code"], _ft["severity"], "fonts", _ft["weight"],
+                                        tr=_ft["tr"], en=_ft["en"], detail=_ft.get("detail", "")))
+            # Belge içi + XMP çapraz-tarih tutarlılığı
+            _unrel_meta = bool(classify_producer(struct.producer, struct.creator)["generator_hits"])
+            _idt = _auth.check_internal_dates(text_layout, pdf_bytes, _txn_dt,
+                                              ex.transaction.value_date or "",
+                                              use_meta=not _unrel_meta)
+            if _idt:
+                findings.append(Finding(_idt["code"], _idt["severity"], "content", _idt["weight"],
+                                        tr=_idt["tr"], en=_idt["en"], detail=_idt.get("detail", "")))
         except Exception:
             pass
 
