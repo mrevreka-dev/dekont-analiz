@@ -594,30 +594,49 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     elif is_ziraat:
         ex.doc_kind = _detect_garanti_kind(joined)  # HESAPTAN FAST / EFT / HAVALE
         rt = joined                                  # Ziraat'ta hizalı layout metni daha güvenilir
-        _ZS = ["Alan Banka", "Alıcı Hesap", "Alıcı", "Gönderen", "İşlem Tutarı", "Komisyon",
-               "BSMV", "Mesaj Ücreti", "Toplam Masraf", "Fast Sorgu No", "Fast Mesaj Kodu",
-               "VALÖR", "İŞLEM YERİ", "IBAN", "HESAP NUMARASI", "VERGİ"]
-        # Taraflar
-        ex.sender.name = _clean_name(_after_label(rt, "Gönderen", _ZS))
-        ex.receiver.name = _clean_name(_after_label(rt, "Alıcı", _ZS))
+        # İki Ziraat formatı desteklenir:
+        #  (a) HESAPTAN FAST/EFT: 'Gönderen', 'Alıcı', 'Alan Banka', 'İşlem Tutarı'
+        #  (b) Hesaptan Hesaba Havale: gönderen adı IBAN satırı sonunda; alıcı 'Alacaklı Adı
+        #      Soyadı'/'Alacaklı IBAN', tutar 'Havale Tutarı', ücret 'Komisyon'
+        _ZS = ["Alan Banka", "Alacaklı Adı Soyadı", "Alacaklı IBAN", "Alacaklı Hesap",
+               "Alacaklı Şube", "Alacaklı Vergi", "Alıcı Hesap", "Alıcı", "Gönderen",
+               "İşlem Tutarı", "Havale Tutarı", "Komisyon", "BSMV", "Mesaj Ücreti",
+               "Toplam Masraf", "Fast Sorgu No", "Fast Mesaj Kodu", "VALÖR", "İŞLEM YERİ",
+               "IBAN", "HESAP NUMARASI", "VERGİ", "SAYIN", "Açıklama"]
+        # --- Gönderen adı: 'Gönderen' etiketi ya da GÖNDEREN IBAN satırının sonundaki isim ---
+        s_name = _clean_name(_after_label(rt, "Gönderen", _ZS))
+        if not s_name:
+            iban_line = _after_label(rt, "IBAN", ["HESAP NUMARASI", "VERGİ", "İŞLEM", "Alacaklı"])
+            iban_line = IBAN_RE.sub(" ", iban_line or "")
+            iban_line = re.sub(r"\bSAYIN\b", " ", iban_line, flags=re.I)
+            s_name = _clean_name(iban_line)
+        ex.sender.name = s_name
+        # --- Alıcı adı: 'Alacaklı Adı Soyadı' (havale) ya da 'Alıcı' (FAST) ---
+        ex.receiver.name = _clean_name(_after_label(rt, "Alacaklı Adı Soyadı", _ZS)
+                                       or _after_label(rt, "Alacaklı Adı Soyadı", _ZS)
+                                       or _after_label(rt, "Alıcı", _ZS))
         ex.receiver.bank = _clean_name(_after_label(rt, "Alan Banka", _ZS))
-        # IBAN'lar: alıcı "Alıcı Hesap : TR..", gönderen üstteki "IBAN : TR.."
-        r_ib = IBAN_RE.search(_after_label(rt, "Alıcı Hesap", ["Alıcı", "Alan Banka"]) or "")
+        ex.receiver.branch = _clean_name(_after_label(rt, "Alacaklı Şube", _ZS))
+        # IBAN'lar: alıcı 'Alacaklı IBAN'/'Alıcı Hesap', gönderen üstteki 'IBAN :'
+        r_ib = IBAN_RE.search(_after_label(rt, "Alacaklı IBAN", _ZS) or "") \
+            or IBAN_RE.search(_after_label(rt, "Alıcı Hesap", ["Alıcı", "Alan Banka"]) or "")
         ex.receiver.iban = banks.normalize_iban(r_ib.group(0)) if r_ib else ""
         s_ib = _first_iban_after(rt, ["IBAN"])
         ex.sender.iban = s_ib or (ex.all_ibans[0] if ex.all_ibans else "")
-        # gönderen/alıcı IBAN çakışırsa düzelt
         if ex.sender.iban and ex.sender.iban == ex.receiver.iban:
             for ib in ex.all_ibans:
                 if ib != ex.receiver.iban:
                     ex.sender.iban = ib
                     break
-        # Tutar ve masraf kalemleri (Türk biçimi: 12.000,00)
-        ex.amount.value = parse_amount(_after_label(rt, "İşlem Tutarı", _ZS))
-        cur = CURRENCY_RE.search(_after_label(rt, "İşlem Tutarı", _ZS) or "")
+        # Tutar: 'İşlem Tutarı' (FAST) ya da 'Havale Tutarı' (havale)
+        _amt_txt = _after_label(rt, "İşlem Tutarı", _ZS) or _after_label(rt, "Havale Tutarı", _ZS)
+        ex.amount.value = parse_amount(_amt_txt)
+        cur = CURRENCY_RE.search(_amt_txt or "")
         ex.amount.currency = (cur.group(1).upper() if cur else "TRY")
-        ex.amount.fee = parse_amount(_after_label(rt, "Toplam Masraf", _ZS))
-        # toplam çekilen ("Hesabınızdan 12.008,38 TL ... Çekilmiştir")
+        # Ücret: 'Toplam Masraf' (FAST) ya da 'Komisyon' (havale)
+        ex.amount.fee = parse_amount(_after_label(rt, "Toplam Masraf", _ZS)) \
+            or parse_amount(_after_label(rt, "Komisyon", _ZS))
+        # toplam çekilen ("Hesabınızdan 15.640,00 TL ... Çekilmiştir")
         tm = re.search(r"Hesab[ıi]n[ıi]zdan\s+(" + AMOUNT_RE.pattern + r")", rt)
         if tm:
             ex.amount.total = parse_amount(tm.group(1))
