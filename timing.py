@@ -60,7 +60,8 @@ def _human_delta(sec: float) -> str:
 
 
 def analyze_timing(creation_dt, mod_dt, transaction_date_str, is_aem: bool,
-                   suppress_late_generation: bool = False) -> dict:
+                   suppress_late_generation: bool = False,
+                   suppress_negative: bool = False) -> dict:
     """
     Zaman analizi. Döndürür:
       timeline: [{label, value}], gaps, findings:[{code,severity,weight,tr,en,detail}]
@@ -99,7 +100,9 @@ def analyze_timing(creation_dt, mod_dt, transaction_date_str, is_aem: bool,
     if gen and txn_utc:
         delta = (gen - txn_utc).total_seconds()   # + : üretim işlemden sonra
         out["gaps"]["txn_to_generation_sec"] = int(delta)
-        if delta < -300:
+        if delta < -300 and suppress_negative:
+            pass                                   # üretici şablon tarihi -> geriye tarihleme sayma
+        elif delta < -300:
             F.append({"code": "TIME_FILE_BEFORE_TXN", "severity": "critical", "weight": 40,
                       "tr": f"PDF, dekonttaki işlem zamanından ÖNCE üretilmiş görünüyor "
                             f"(dosya ~{_human_delta(delta)} önce). Bir dekont, işlem gerçekleşmeden üretilemez — "
@@ -113,7 +116,7 @@ def analyze_timing(creation_dt, mod_dt, transaction_date_str, is_aem: bool,
                             f"Dekont işlem anında üretilmiş görünüyor (doğrulayıcı).",
                       "en": f"PDF generation time matches the transaction time (~{_human_delta(delta)}) — corroborating.",
                       "detail": ""})
-        elif delta > 6 * 3600 and not suppress_late_generation:
+        elif delta > 6 * 3600 and not suppress_late_generation and not suppress_negative:
             # Hesap özetinde dönemden SONRA üretim normaldir; bu bulgu yalnızca dekontlarda anlamlı.
             sev = "high" if delta > 24 * 3600 else "medium"
             F.append({"code": "TIME_LATE_GENERATION", "severity": sev, "weight": 18 if sev == "high" else 10,
@@ -125,7 +128,7 @@ def analyze_timing(creation_dt, mod_dt, transaction_date_str, is_aem: bool,
                       "detail": f"işlem(UTC)={txn_utc} üretim(UTC)={gen}"})
 
     # 2) Oluşturma ↔ değiştirme
-    if creation_dt and mod_dt and creation_dt.year >= 2020:
+    if creation_dt and mod_dt and creation_dt.year >= 2020 and not suppress_negative:
         dmod = (mod_dt - creation_dt).total_seconds()
         out["gaps"]["creation_to_mod_sec"] = int(dmod)
         if dmod > 300:

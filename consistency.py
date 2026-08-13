@@ -27,13 +27,9 @@ _TR_FOLD = str.maketrans({"İ": "i", "I": "i", "ı": "i", "Ü": "u", "ü": "u", 
                           "ğ": "g", "Â": "a", "â": "a"})
 
 
-def parse_turkish_words(s: str):
-    """'KırkAltıBin' -> 46000. Bilinmiyorsa None."""
-    if not s:
-        return None
-    # Türkçe -> ASCII katla (İ/ı sorununu önler), sonra küçült
-    t = s.translate(_TR_FOLD).lower().replace("tl", "").replace("lirasi", "").replace("lira", "")
-    tokens = _TOKEN_RE.findall(t)
+def _words_to_int(t: str):
+    """Yalnızca tam-sayı Türkçe kelime dizisini sayıya çevirir. Yoksa None."""
+    tokens = _TOKEN_RE.findall(t or "")
     if not tokens:
         return None
     total = 0
@@ -52,6 +48,28 @@ def parse_turkish_words(s: str):
             else:  # yüz
                 current = (current or 1) * sc
     return total + current
+
+
+def parse_turkish_words(s: str):
+    """'KırkAltıBin TL' -> 46000.0; 'ONBİN ONALTI TL YETMİŞALTI KR' -> 10016.76.
+    LİRA (TL'den önce) ve KURUŞ (TL sonrası, KR'den önce) ayrı çözülür. Bilinmiyorsa None."""
+    if not s:
+        return None
+    t = s.translate(_TR_FOLD).lower().replace("lirasi", "").replace("lira", "")
+    kurus = 0.0
+    if "kr" in t or "kurus" in t:
+        parts = re.split(r"\btl\b", t, maxsplit=1)
+        if len(parts) == 2:
+            kurus_part = re.split(r"\bkr\b|\bkurus\b", parts[1])[0]
+            kurus = (_words_to_int(kurus_part) or 0) / 100.0
+            t = parts[0]                       # yalnızca lira kısmı
+        else:
+            t = t.replace("kurus", "").replace("kr", "")
+    t = t.replace("tl", "")
+    lira = _words_to_int(t)
+    if lira is None and kurus == 0:
+        return None
+    return round((lira or 0) + kurus, 2)
 
 
 def _close(a, b, tol=0.02):
@@ -92,13 +110,21 @@ def check_consistency(amount, fee, total, bsmv_str, amount_words) -> dict:
             checks.append({"name": "Toplam tutarlılığı", "ok": ok,
                            "detail": f"Toplam {tot:.2f} ↔ ({best})"})
 
-    # Yazıyla tutar ↔ rakamla tutar
-    if amount_words and amt is not None:
+    # Yazıyla tutar ↔ rakamla tutar. Yazı; İŞLEM tutarını, TOPLAM'ı ya da (İşlem+Masraf)'ı
+    # ifade edebilir (bankaya göre değişir) — herhangi biriyle uyuşuyorsa TUTARLIDIR.
+    if amount_words and (amt is not None or tot is not None):
         wv = parse_turkish_words(amount_words)
         if wv is not None:
-            ok = _close(wv, abs(amt), tol=0.5)
+            cands = []
+            if amt is not None:
+                cands.append(abs(amt))
+            if tot is not None:
+                cands.append(abs(tot))
+            if amt is not None and masraf is not None:
+                cands.append(abs(amt) + masraf)
+            ok = any(_close(wv, c, tol=0.5) for c in cands)
             checks.append({"name": "Yazıyla tutar ↔ rakam", "ok": ok,
-                           "detail": f"'{amount_words}' = {wv} ↔ {abs(amt):.2f}"})
+                           "detail": f"'{amount_words}' = {wv} ↔ {', '.join(f'{c:.2f}' for c in cands)}"})
 
     fail = sum(1 for c in checks if not c["ok"])
     return {"checks": checks, "fail_count": fail, "check_count": len(checks)}

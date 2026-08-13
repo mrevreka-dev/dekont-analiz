@@ -26,7 +26,8 @@ GENERATOR_PRODUCERS = [
     "adobe livecycle", "reportlab", "pdfbox", "prince", "wkhtmltopdf",
     "pdftools sdk", "oracle", "sap", "crystal reports", "birt",
     "microsoft report", "telerik", "fastreport", "aspose", "docotic",
-    "dynamicpdf", "spire.pdf", "syncfusion",
+    "dynamicpdf", "spire.pdf", "syncfusion", "evopdf", "html to pdf",
+    "pdfsharp", "migradoc", "flying saucer", "weasyprint", "puppeteer",
 ]
 
 # Bir belgeyi DÜZENLEYEN / YENİDEN KAYDEDEN yazılımlar (oynama riski yüksek)

@@ -417,12 +417,15 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             _rows = stmt.get("balance", {}) and _stmt.parse_transactions(text_layout or "")
             if _rows:
                 _txn_ref = _rows[0]["tarih"]   # en üstteki = en yeni işlem
-    if input_kind == "image" or unreliable_meta_dates:
-        # Metadata tarihleri güvenilmez/anlamsız -> yalnızca zaman çizelgesi, kıyas bulgusu yok
+    if input_kind == "image":
         timing = _tim.analyze_timing(None, None, _txn_ref, is_aem)
-        if unreliable_meta_dates and struct.creation_dt:
-            timing["creation_local"] = _tim._fmt(struct.creation_dt, _tim.TR_OFFSET)
-            timing["mod_local"] = _tim._fmt(struct.mod_dt, _tim.TR_OFFSET) if struct.mod_dt else ""
+    elif unreliable_meta_dates:
+        # Üretici/şablon metadata tarihleri güvenilmez: OLUMSUZ bulgular (geriye tarihleme,
+        # geç üretim, sonradan değiştirme) BASKILANIR; ancak tarih işlem anıyla ÖRTÜŞÜYORSA
+        # olumlu doğrulama (TIME_CONSISTENT) korunur — ör. OpenPDF gerçek zaman damgası yazar.
+        timing = _tim.analyze_timing(struct.creation_dt, struct.mod_dt, _txn_ref, is_aem,
+                                     suppress_negative=True)
+        if struct.creation_dt:
             findings.append(Finding(
                 "GENERATOR_TEMPLATE_DATES", "info", "metadata", 0,
                 tr="Belge bir sunucu-tarafı rapor/şablon üreticisiyle üretilmiş; PDF metadata "

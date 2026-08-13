@@ -297,7 +297,7 @@ def _after_label(text: str, label: str, stops: list[str]) -> str:
     Eşleşme AKSAN/BÜYÜK-KÜÇÜK DUYARSIZDIR (İ/ı, ş/s ... ve PDF kodlama farkları için);
     değer ORİJİNAL metinden alınır (normalize uzunluk-koruyandır, span aynıdır)."""
     ntext = _norm_tr(text)
-    m = re.search(re.escape(_norm_tr(label)) + r"\s*[:：]\s*", ntext)
+    m = re.search(re.escape(_norm_tr(label)) + r"\s*[:：][ \t]*", ntext)
     if not m:
         return ""
     start = m.end()
@@ -312,6 +312,40 @@ def _after_label(text: str, label: str, stops: list[str]) -> str:
         if mm and mm.start() < cut:
             cut = mm.start()
     return text[start:start + cut].strip(" :：-,")
+
+
+def _label_values(text: str, label: str, stops: list[str]) -> list[str]:
+    """Bir etiketin TÜM tekrarları için değer listesi (iki-sütunlu düzenlerde sol/sağ).
+    Ör. Akbank'ta 'Adı Soyadı/Unvan' aynı satırda iki kez geçer -> [gönderici, alıcı]."""
+    ntext = _norm_tr(text)
+    nlab = _norm_tr(label)
+    out = []
+    for m in re.finditer(re.escape(nlab) + r"\s*[:：][ \t]*", ntext):
+        start = m.end()
+        nl = text.find("\n", start)
+        end = nl if nl != -1 else len(text)
+        nval = ntext[start:end]
+        cut = len(nval)
+        for st in stops:
+            mm = re.search(re.escape(_norm_tr(st)), nval)
+            if mm and mm.start() < cut:
+                cut = mm.start()
+        v = text[start:start + cut].strip(" :：-,")
+        if v:
+            out.append(v)
+    return out
+
+
+def _row_amount(text: str, label: str) -> float | None:
+    """Etiketi içeren satırdaki EN BÜYÜK para tutarını döndürür (tablo satırları için)."""
+    nlab = _norm_tr(label)
+    for ln in (text or "").splitlines():
+        if nlab in _norm_tr(ln):
+            vals = [_parse_money_token(m.group(0)) for m in AMOUNT_RE.finditer(ln)]
+            vals = [v for v in vals if v is not None]
+            if vals:
+                return max(vals)
+    return None
 
 
 def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = None) -> Extraction:
@@ -359,8 +393,11 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     _sig_enpara = ("enpara şubesi" in low
                    or ("ALICI ÜNVANI" in up and "EFT TUTARI" in up)
                    or ("MÜŞTERİ ÜNVANI" in up and "GIDEN FAST" in up))
+    _sig_akbank = ("akbank.com" in low or "akbank t.a" in low or "akbank direkt" in low)
+    _sig_ing = ("ing.com.tr" in low or "ing bank a.ş" in low or "ing bank anonim" in low)
     issuer = ("yapikredi" if _sig_yapikredi else "ziraat" if _sig_ziraat
               else "isbank" if _sig_isbank else "vakif" if _sig_vakif
+              else "akbank" if _sig_akbank else "ing" if _sig_ing
               else "garanti" if _sig_garanti else "enpara" if _sig_enpara else "")
     is_yapikredi = issuer == "yapikredi"
     is_ziraat = issuer == "ziraat"
@@ -368,10 +405,13 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     is_vakif = issuer == "vakif"
     is_garanti = issuer == "garanti"
     is_enpara = issuer == "enpara"
+    is_akbank = issuer == "akbank"
+    is_ing = issuer == "ing"
 
     ex.bank = {"yapikredi": "Yapı ve Kredi Bankası", "ziraat": "T.C. Ziraat Bankası",
                "isbank": "Türkiye İş Bankası", "vakif": "VakıfBank",
-               "garanti": "Garanti BBVA", "enpara": "Enpara.com (QNB)"}.get(issuer, "")
+               "garanti": "Garanti BBVA", "enpara": "Enpara.com (QNB)",
+               "akbank": "Akbank T.A.Ş.", "ing": "ING Bank A.Ş."}.get(issuer, "")
 
     # =============================================================
     #  İŞ BANKASI e-Dekont formatı
@@ -647,7 +687,90 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.sender.bank = "Yapı ve Kredi Bankası"
 
     # =============================================================
-    #  EVRENSEL / diğer tüm bankalar (Akbank, ...)
+    #  AKBANK (EFT/HAVALE dekontu — iki sütunlu GÖNDERİCİ | ALICI)
+    # =============================================================
+    elif is_akbank:
+        ex.doc_kind = _detect_garanti_kind(joined)
+        rt = joined
+        _AS = ["Adı Soyadı", "Adres", "Alacaklı", "Borçlu", "Müşteri No", "Karşı Şube",
+               "VKN", "Vergi", "Hesap No", "TUTAR", "İşlem"]
+        # İki sütunlu 'Adı Soyadı/Unvan' -> [gönderici, alıcı]
+        names = _label_values(rt, "Adı Soyadı/Unvan", _AS) or _label_values(rt, "Adı Soyadı", _AS)
+        if names:
+            ex.sender.name = _clean_name(names[0])
+            if len(names) > 1:
+                ex.receiver.name = _clean_name(names[1])
+        # IBAN'lar: alıcı 'Alacaklı Hesap No :TR..', gönderen serbest TR.. (kendi satırında)
+        r_ib = IBAN_RE.search(_after_label(rt, "Alacaklı Hesap No", _AS) or "")
+        ex.receiver.iban = banks.normalize_iban(r_ib.group(0)) if r_ib else ""
+        for ib in ex.all_ibans:
+            if ib != ex.receiver.iban:
+                ex.sender.iban = ib
+                break
+        # Tutarlar: tablo satırlarından (ŞCH=transfer, KOMİSYON+BSMV=masraf, TOPLAM=toplam)
+        _kom = _row_amount(rt, "KOMİSYON") or 0
+        _bsmv = _row_amount(rt, "BSMV") or 0
+        ex.amount.fee = round(_kom + _bsmv, 2) if (_kom or _bsmv) else None
+        ex.amount.total = _row_amount(rt, "TOPLAM")
+        _transfer = _row_amount(rt, "ŞCH")
+        if _transfer is None and ex.amount.total is not None:
+            _transfer = round(ex.amount.total - (_kom + _bsmv), 2)
+        ex.amount.value = _transfer
+        ex.amount.currency = "TL"
+        # Zaman / referans / kimlik
+        ex.transaction.date = _find_label(rt, ["İşlem Tarihi/Saati", "İşlem Tarihi"])
+        ex.transaction.value_date = _find_label(rt, ["Valör"])
+        ex.transaction.ref_no = _after_label(rt, "Referans", ["İşlemi", "Valör"])
+        ex.sender.branch = _find_label(rt, ["Düzenleyen Şube"])
+        ex.sender.customer_no = _find_label(rt, ["Müşteri No"])
+        ex.sender.tckn = _find_label(rt, ["İşlemi Yapan TCKN"])
+        ex.sender.account_no = _find_label(rt, ["Borçlu Hesap No"])
+        ex.sender.bank = "Akbank T.A.Ş."
+
+    # =============================================================
+    #  ING BANK (FAST/EFT dekontu — alıcı bilgisi açıklamaya gömülü)
+    # =============================================================
+    elif is_ing:
+        ex.doc_kind = _detect_garanti_kind(joined)
+        rt = joined
+        # Gönderen (hesap sahibi): "Sayın KAYRA TANRIKULU" (aynı satır) ya da
+        # "KULLANILAN HESAP :TANRIKULU KAYRA". Satır atlamamak için [^\n]+ kullanılır.
+        sm = re.search(r"Say[ıi]n\s+([^\n]+)", rt)
+        _sraw = re.split(r"\s{2,}", sm.group(1).strip())[0] if sm else ""
+        ex.sender.name = _clean_name(_sraw) or \
+            _clean_name(_after_label(rt, "KULLANILAN HESAP", ["FAST", "TOPLAM", "Açıklama"]))
+        # Tutar (US biçimi: 10,000.00)
+        ex.amount.value = parse_amount(_find_label(rt, ["FAST TUTARI", "İşlem Tutarı", "Tutar"]))
+        ex.amount.total = parse_amount(_find_label(rt, ["TOPLAM", "Toplam"]))
+        ex.amount.currency = "TL"
+        # Açıklamaya gömülü alıcı: "... Sorgu No:XXXX <IBAN> <Alıcı Banka A.Ş.> <Alıcı Ad Soyad>"
+        acik = ""
+        for ln in rt.splitlines():
+            if "sorgu no" in _norm_tr(ln) and IBAN_RE.search(ln):
+                acik = ln
+                break
+        if not acik:
+            acik = _after_label(rt, "Açıklama", []) or ""
+        sq = re.search(r"[Ss]orgu\s*No\s*[:：]?\s*(\d{6,})", acik)
+        ex.transaction.ref_no = sq.group(1) if sq else _find_label(rt, ["Sorgu No"])
+        rib = IBAN_RE.search(acik)
+        if rib:
+            ex.receiver.iban = banks.normalize_iban(rib.group(0))
+            tail = acik[rib.end():].strip()
+            mb = re.match(r"(.+?A\.?\s?Ş\.?)\s+(.+)", tail)
+            if mb:
+                ex.receiver.bank = _clean_name(mb.group(1))
+                ex.receiver.name = _clean_name(mb.group(2))
+            else:
+                ex.receiver.name = _clean_name(tail)
+        # Zaman: işlem tarihi (içerik) — 'İşlem Tarihi :13/08/2026'
+        ex.transaction.date = _find_label(rt, ["İşlem Tarihi"])
+        ex.transaction.document_no = _find_label(rt, ["Dekont No"])
+        ex.sender.tckn = _find_label(rt, ["Vergi No"])
+        ex.sender.bank = "ING Bank A.Ş."
+
+    # =============================================================
+    #  EVRENSEL / diğer tüm bankalar
     # =============================================================
     else:
         ex.doc_kind = "Dekont"
@@ -691,8 +814,13 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     # --- Alıcı/gönderici IBAN ayrımı (eksikse) ---
     if not ex.receiver.iban and len(ex.all_ibans) >= 2:
         ex.receiver.iban = ex.all_ibans[1]
-    if not ex.sender.iban and ex.all_ibans:
-        ex.sender.iban = ex.all_ibans[0]
+    # Gönderen IBAN'ı yalnızca ALICI'nınkinden FARKLI bir IBAN varsa ata; tek IBAN alıcıya
+    # aitse gönderene yazma (ör. ING'de yalnızca alıcı IBAN'ı görünür).
+    if not ex.sender.iban:
+        for ib in ex.all_ibans:
+            if ib != ex.receiver.iban:
+                ex.sender.iban = ib
+                break
 
     ex.confidence = _confidence(ex)
     return ex
