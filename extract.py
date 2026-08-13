@@ -380,21 +380,21 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     # tanınır. Karşı-taraf banka adı (ör. "ALICI BANKA :Vakıflar Bankası") ve genel alanlar
     # (ör. ETTN — tüm e-Dekontlarda var) tetiklememelidir. Aşağıdaki imzalar ÖNCELİK sırasıyla
     # değerlendirilir; yalnızca BİR banka seçilir (karşılıklı dışlayan).
-    _sig_yapikredi = ("yapikredi.com" in low or "yapı ve kredi bankası" in low
-                      or "yapi ve kredi bankasi" in low)
-    _sig_ziraat = ("ziraatbank.com" in low or "t.c. ziraat" in low or "ziraat bankası a.ş" in low
-                   or "ziraat bankasi a.s" in low or "ziraat süper şube" in low
-                   or "ziraat mobil" in low)
-    _sig_isbank = ("isbank.com" in low or "türkiye iş bankası" in low
-                   or ("e-dekont" in low and "doküman numarası" in low))
+    # İmzalar İHRAÇÇIYA-ÖZGÜ olmalı: web adresi (footer) ve YALNIZCA ihraç edende geçen
+    # kanal/şube ifadeleri. Banka TAM ADLARI (ör. "Yapı ve Kredi Bankası A.Ş.") KULLANILMAZ;
+    # çünkü bunlar karşı-tarafta (Alan Banka / Alıcı Banka / KATILIMCI) da geçer ve yanlış
+    # bankaya yönlendirir.
+    _sig_yapikredi = "yapikredi.com" in low
+    _sig_ziraat = ("ziraatbank.com" in low or "ziraat süper şube" in low
+                   or "ziraat mobil" in low or "ziraat süper" in low)
+    _sig_isbank = ("isbank.com" in low or ("e-dekont" in low and "doküman numarası" in low))
     _sig_vakif = ("vakifbank.com" in low or ("VAKIFBANK" in up and "İŞLEM BİLGİLERİ" in up))
-    _sig_garanti = ("garantibbva" in low or "garanti bbva" in low
-                    or ("HESAPTAN" in up and ("GARANTİ" in up or "ALACAKLI" in up)))
+    _sig_garanti = ("garantibbva" in low or ("HESAPTAN" in up and "GARANTİ" in up))
     _sig_enpara = ("enpara şubesi" in low
                    or ("ALICI ÜNVANI" in up and "EFT TUTARI" in up)
                    or ("MÜŞTERİ ÜNVANI" in up and "GIDEN FAST" in up))
-    _sig_akbank = ("akbank.com" in low or "akbank t.a" in low or "akbank direkt" in low)
-    _sig_ing = ("ing.com.tr" in low or "ing bank a.ş" in low or "ing bank anonim" in low)
+    _sig_akbank = ("akbank.com" in low or "akbank direkt" in low)
+    _sig_ing = ("ing.com.tr" in low or "ing bank anonim" in low)
     issuer = ("yapikredi" if _sig_yapikredi else "ziraat" if _sig_ziraat
               else "isbank" if _sig_isbank else "vakif" if _sig_vakif
               else "akbank" if _sig_akbank else "ing" if _sig_ing
