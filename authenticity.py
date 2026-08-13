@@ -101,6 +101,27 @@ def check_producer(bkey: str, producer: str) -> dict | None:
     }
 
 
+def check_pdfium(producer: str) -> dict | None:
+    """GLOBAL kural (banka bağımsız): Üretici PDFium ise dekont SAHTE kabul edilir.
+
+    PDFium, Chrome/Chromium'un PDF GÖRÜNTÜLEME ve YENİDEN-BASMA motorudur; mevcut bir PDF'i
+    açıp yeniden kaydetmek/basmak için kullanılır. Hiçbir banka orijinal dekontunu PDFium ile
+    ÜRETMEZ (HTML'den üreten bankalar 'Skia/PDF' kullanır — PDFium değil). Bu yüzden üreticisi
+    PDFium olan bir "banka dekontu", mutlaka açılıp yeniden kaydedilmiş/düzenlenmiştir."""
+    if "pdfium" not in (producer or "").lower():
+        return None
+    return {
+        "code": "PDFIUM_PRODUCED", "severity": "critical", "weight": 55,
+        "tr": f"SAHTE (PDFium ile üretilmiş): Belgenin üreticisi ‘{producer}’. PDFium, Chrome'un PDF "
+              f"görüntüleme/yeniden-basma motorudur; hiçbir banka orijinal dekontu bununla ÜRETMEZ. "
+              f"Bu, mevcut bir PDF'in açılıp yeniden kaydedildiğini/düzenlendiğini gösterir — belge SAHTEDİR.",
+        "en": f"FORGERY (produced by PDFium): the producer is '{producer}'. PDFium is Chrome's PDF "
+              f"viewer/re-print engine; no bank generates an original receipt with it. This means an "
+              f"existing PDF was reopened and re-saved/edited — the document is a forgery.",
+        "detail": f"producer={producer}",
+    }
+
+
 # --- (A) Font alt-küme parmak izi ---------------------------------------------------------
 # Her banka dekontlarını belirli bir font kümesiyle ve belirli bir ALT-KÜME ÖNEK stiliyle
 # üretir. iText/Aspose/OpenPDF gibi kütüphaneler RASTGELE 6-harfli önek (ör. INZCGU+) kullanır;

@@ -571,6 +571,11 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             import authenticity as _auth
             _bkey = _auth.bank_key(ex.bank)
             _txn_dt, _ = _tim.parse_content_datetime(ex.transaction.date or "")
+            # GLOBAL kural (banka bağımsız): PDFium ile üretilmiş dekont = SAHTE
+            _pf = _auth.check_pdfium(struct.producer)
+            if _pf:
+                findings.append(Finding(_pf["code"], _pf["severity"], "metadata", _pf["weight"],
+                                        tr=_pf["tr"], en=_pf["en"], detail=_pf.get("detail", "")))
             _rn = _auth.check_receipt_number_date(
                 _bkey, ex.transaction.document_no, ex.transaction.ref_no,
                 ex.transaction.sequence_number, _txn_dt)

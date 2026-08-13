@@ -127,6 +127,8 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 8)
     if "PRODUCER_MISMATCH" in codes:         # bankanın gerçek kütüphanesiyle üretilmemiş
         score = min(score, 30)
+    if "PDFIUM_PRODUCED" in codes:            # PDFium = yeniden basım (global sahte kuralı)
+        score = min(score, 5)
     if codes & {"BROWSER_RERENDER", "FONT_BROWSER_RERENDER"}:  # tarayıcıyla yeniden basım
         score = min(score, 8)
     if "FONT_SET_MISMATCH" in codes:         # font kümesi bankanın şablonuyla uyuşmuyor
