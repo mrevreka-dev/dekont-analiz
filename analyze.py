@@ -793,6 +793,18 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         except Exception:
             pass
 
+    # 8.95) ÜRETİCİ DEĞERLENDİRMESİ: bankanın beklenen derleyicisi ↔ bu PDF'in gerçek derleyicisi
+    if is_receipt:
+        try:
+            import authenticity as _auth
+            _md = report["metadata"]
+            _resaved = bool(report["tamper"].get("append_mode"))
+            report["metadata"]["producer_check"] = _auth.producer_assessment(
+                _auth.bank_key(report["extracted"].get("bank", "")),
+                _md.get("producer", ""), _md.get("creator", ""), _resaved)
+        except Exception:
+            pass
+
     # 9) Doğrulanmışsa numaralarını kalıcı veritabanına kaydet (banka bazlı)
     if use_store:
         try:

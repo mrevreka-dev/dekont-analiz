@@ -38,7 +38,10 @@ _BANK_KEY = {
 
 
 def bank_key(bank_display: str) -> str:
-    return _BANK_KEY.get((bank_display or "").strip().lower(), "")
+    # Türkçe 'İ'.lower() birleşik noktalı 'i̇' (i + U+0307) üretir; bunu temizle ki
+    # 'Türkiye İş Bankası' -> 'türkiye iş bankası' anahtarıyla eşleşsin.
+    s = (bank_display or "").strip().lower().replace("̇", "")
+    return _BANK_KEY.get(s, "")
 
 
 # --- (2) Bankanın GERÇEK dekont üretim imzası (producer alt-dizeleri, küçük harf) ---
@@ -378,3 +381,63 @@ def document_no_parts(bkey: str, document_no: str) -> dict | None:
         "length": len(digits),
         "length_ok": len(digits) == spec["total_len"],
     }
+
+
+# Bankaların gerçek PDF derleyicisi için insan-okur etiketler (gösterim amaçlı).
+PRODUCER_LABEL = {
+    "enpara":    "iText",
+    "ziraat":    "Skia/PDF (Chromium tarayıcı motoru)",
+    "yapikredi": "Aspose.Words",
+    "akbank":    "OpenPDF",
+    "ing":       "EvoPdf (HTML-to-PDF)",
+    "isbank":    "OpenPDF / JasperReports",
+}
+
+
+def producer_assessment(bkey: str, producer: str, creator: str = "", resaved: bool = False) -> dict:
+    """Yüklenen PDF'in ÜRETİCİSİ ile bankanın BEKLENEN derleyicisini karşılaştırır ve karar üretir.
+    Döner: {actual, expected_label, expected_list, bank_known, status, tr, en}.
+
+    status: match | resave | mismatch | no_producer | unknown_bank
+    'resave': PDF, bankanın derleyicisinden çıkmış gibi gelmiyor; başka bir programda (tarayıcı/
+    editör/Quartz vb.) açılıp yeniden kaydedilmiş. 'mismatch': bambaşka bir üretim kütüphanesi."""
+    prod = (producer or "").strip()
+    exp = EXPECTED_PRODUCERS.get(bkey)
+    exp_label = PRODUCER_LABEL.get(bkey) or (", ".join(exp) if exp else "")
+    out = {"actual": prod or "—", "expected_label": exp_label, "expected_list": exp or [],
+           "bank_known": bool(exp), "status": "", "tr": "", "en": ""}
+    if not exp:
+        out["status"] = "unknown_bank"
+        out["tr"] = "Bu banka için beklenen PDF derleyicisi henüz tanımlı değil; karşılaştırma yapılamadı."
+        out["en"] = "No expected PDF compiler is defined for this bank yet; no comparison made."
+        return out
+    if not prod:
+        out["status"] = "no_producer"
+        out["tr"] = (f"PDF'te üretici bilgisi yok. {exp_label} ile üretilen orijinal banka dekontunda "
+                     f"üretici bilgisi bulunur; eksik olması şüphelidir.")
+        out["en"] = "No producer metadata; a genuine bank output carries a producer. Its absence is suspicious."
+        return out
+    pl = prod.lower()
+    # ÜRETİCİ (son yazan) bankanın kütüphanesiyle eşleşiyorsa uyumludur. Creator alanı
+    # ('Microsoft Office Word' gibi) DEĞERLENDİRİLMEZ — bazı üretim kütüphaneleri (Aspose)
+    # Creator'ı Word yazar; bu bir 'Word'de düzenleme' değildir.
+    matched = any(x in pl for x in exp)
+    rerender = any(x in pl for x in _RERENDER_PRODUCERS) and bkey not in _BANK_USES_BROWSER
+    if matched:
+        out["status"] = "match"
+        out["tr"] = f"Uyumlu: PDF, {exp_label} ile üretilmiş — bu bankanın kullandığı derleyici."
+        out["en"] = f"Match: produced by {exp_label} — the compiler this bank uses."
+    elif resaved or rerender:
+        out["status"] = "resave"
+        out["tr"] = (f"UYUMSUZ: Bu PDF, bankanın derleyicisinden ({exp_label}) çıkmış gibi GELMİYOR; "
+                     f"‘{prod}’ ile açılıp yeniden kaydedilmiş. Orijinal dekont başka bir programda "
+                     f"düzenlenmiş/yeniden basılmış olabilir — sahtecilik şüphesi.")
+        out["en"] = (f"MISMATCH: this PDF does NOT come as delivered from the bank's compiler ({exp_label}); "
+                     f"it was re-saved with '{prod}'. The original may have been edited/re-printed elsewhere.")
+    else:
+        out["status"] = "mismatch"
+        out["tr"] = (f"UYUMSUZ: Bu banka {exp_label} kullanır; bu PDF ise ‘{prod}’ ile üretilmiş. "
+                     f"Farklı bir derleyici — bankanın orijinal çıktısı değil, sahtecilik şüphesi.")
+        out["en"] = (f"MISMATCH: this bank uses {exp_label}; this PDF was produced by '{prod}'. "
+                     f"Different compiler — not the bank's original output.")
+    return out
