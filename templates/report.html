@@ -330,6 +330,13 @@
             <span style="color:var(--critical);font-weight:800">{{ ex.transaction.document_no }}</span>
             <div style="color:var(--critical);font-weight:800;font-size:12px;line-height:1.4;margin-top:4px;white-space:normal">⚠ {% if L=='tr' %}Bu numara {{ rnd.embedded.split('-')[2] }}.{{ rnd.embedded.split('-')[1] }}.{{ rnd.embedded.split('-')[0] }} tarihini taşıyor; dekonttaki işlem saati ({{ ex.transaction.date }}) ile UYUŞMUYOR — tarih sonradan değiştirilmiş olabilir (sahtecilik şüphesi).{% else %}This number carries the date {{ rnd.embedded }}; it does NOT match the transaction time shown ({{ ex.transaction.date }}) — the date may have been altered (forgery risk).{% endif %}</div>
           {% else %}{{ ex.transaction.document_no }}{% endif %}
+          {% if ex.transaction.document_no_parts %}{% set dp = ex.transaction.document_no_parts %}
+            <div style="color:var(--text-muted);font-size:11px;margin-top:3px;white-space:normal">
+              {% if L=='tr' %}Tarih kısmı{% else %}Date part{% endif %}: <b>{{ dp.date_part }}</b>{% if dp.date_fmt %} ({{ dp.date_fmt }}){% endif %}
+              &nbsp;·&nbsp; {% if L=='tr' %}Sayaç{% else %}Counter{% endif %}: <b>{{ dp.counter }}</b>
+              {% if not dp.length_ok or not dp.date_ok %}<span style="color:var(--serious)">&nbsp;⚠ {% if L=='tr' %}beklenen yapı 8 hane tarih + sayaç değil{% else %}unexpected structure (not 8-digit date + counter){% endif %}</span>{% endif %}
+            </div>
+          {% endif %}
           </td></tr>{% endif %}
         {% if ex.transaction.ettn %}<tr><td class="k">ETTN</td><td class="v mono">{{ ex.transaction.ettn }}</td></tr>{% endif %}
         {% if ex.transaction.type %}<tr><td class="k">{{ T.txn_type }}</td><td class="v">{{ ex.transaction.type }}</td></tr>{% endif %}
