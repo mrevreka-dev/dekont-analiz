@@ -395,9 +395,11 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
                    or ("MÜŞTERİ ÜNVANI" in up and "GIDEN FAST" in up))
     _sig_akbank = ("akbank.com" in low or "akbank direkt" in low)
     _sig_ing = ("ing.com.tr" in low or "ing bank anonim" in low)
+    _sig_fiba = ("fibabanka.com" in low or "fibabanka" in _norm_tr(low))
     issuer = ("yapikredi" if _sig_yapikredi else "ziraat" if _sig_ziraat
               else "isbank" if _sig_isbank else "vakif" if _sig_vakif
               else "akbank" if _sig_akbank else "ing" if _sig_ing
+              else "fiba" if _sig_fiba
               else "garanti" if _sig_garanti else "enpara" if _sig_enpara else "")
     is_yapikredi = issuer == "yapikredi"
     is_ziraat = issuer == "ziraat"
@@ -407,11 +409,13 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     is_enpara = issuer == "enpara"
     is_akbank = issuer == "akbank"
     is_ing = issuer == "ing"
+    is_fiba = issuer == "fiba"
 
     ex.bank = {"yapikredi": "Yapı ve Kredi Bankası", "ziraat": "T.C. Ziraat Bankası",
                "isbank": "Türkiye İş Bankası", "vakif": "VakıfBank",
                "garanti": "Garanti BBVA", "enpara": "Enpara.com (QNB)",
-               "akbank": "Akbank T.A.Ş.", "ing": "ING Bank A.Ş."}.get(issuer, "")
+               "akbank": "Akbank T.A.Ş.", "ing": "ING Bank A.Ş.",
+               "fiba": "Fibabanka A.Ş."}.get(issuer, "")
 
     # =============================================================
     #  İŞ BANKASI e-Dekont formatı
@@ -827,6 +831,71 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.transaction.document_no = _find_label(rt, ["Dekont No"])
         ex.sender.tckn = _find_label(rt, ["Vergi No"])
         ex.sender.bank = "ING Bank A.Ş."
+
+    # =============================================================
+    #  FİBABANKA E-Dekont (iki-sütun etiket/değer; alıcı açıklamaya gömülü)
+    # =============================================================
+    elif is_fiba:
+        ex.doc_kind = "E-Dekont"
+        rt = rjoined or joined                # okuma-sırası metni bu formatta daha temiz
+        low_rt = rt.lower()
+        # Tarih + saat -> tek işlem zamanı
+        _d = re.search(r"\b(\d{2}/\d{2}/\d{4})\b", rt)
+        _tm = re.search(r"Saat\s*[:：]\s*(\d{2}:\d{2}(?::\d{2})?)", rt, re.I)
+        ex.transaction.date = ((_d.group(1) if _d else "")
+                               + ((" " + _tm.group(1)) if _tm else "")).strip()
+        # Gönderen adı: 'FULL NAME' etiketinin altındaki değer (aynı satırda tarih olabilir)
+        m = re.search(r"FULL NAME[^\n]*\n\s*(?:\d{2}/\d{2}/\d{4}\s+)?([^\n]+)", rt)
+        ex.sender.name = _clean_name(m.group(1)) if m else ""
+        # Hesap no + valör (aynı değer satırında yan yana)
+        m = re.search(r"ACCOUNT NUMBER[^\n]*\n\s*(\d{4,})", rt)
+        ex.sender.account_no = m.group(1) if m else ""
+        m = re.search(r"VALUE DATE[^\n]*\n\s*(?:\d+\s+)?(\d{2}/\d{2}/\d{4})", rt)
+        ex.transaction.value_date = m.group(1) if m else ""
+        # Şube (BRANCH etiketinin altındaki değer; araya VERGİ NO etiketi girebilir)
+        m = re.search(r"BRANCH\s*\n(?:[^\n]*TAX NUMBER[^\n]*\n)?\s*([^\n]+)", rt)
+        ex.sender.branch = _clean_name(m.group(1)) if m else ""
+        ex.transaction.channel = ex.sender.branch
+        # Dekont no (00100-639758365) + referans
+        m = re.search(r"\b(\d{4,6}-\d{6,})\b", rt)
+        ex.transaction.document_no = m.group(1) if m else ""
+        ex.transaction.receipt_no = ex.transaction.document_no
+        m = re.search(r"Referans[ıiİI]?\s*[:：]\s*(\d{6,})", rt, re.I)
+        ex.transaction.ref_no = m.group(1) if m else ""
+        # Tutar: '(-)TRY 10,000.00'
+        am = re.search(r"\(-\)\s*(TRY|TL|USD|EUR|GBP)\s*([0-9][0-9.,]*)", rt, re.I) \
+            or re.search(r"\b(TRY|TL|USD|EUR|GBP)\s*([0-9][0-9.,]*)", rt)
+        if am:
+            ex.amount.currency = am.group(1).upper()
+            ex.amount.value = _parse_money_token(am.group(2))
+            ex.amount.text = am.group(0).strip()
+        # Alıcı adı: 'ALICI: <ad> -' ('ALICI IBAN' değil)
+        m = re.search(r"ALICI\s*[:：]\s*(?!IBAN)([^\-\n]+?)\s*-", rt, re.I)
+        ex.receiver.name = _clean_name(m.group(1)) if m else ""
+        # Alıcı banka: 'BANKAADI:<banka> -'
+        m = re.search(r"BANKAADI\s*[:：]\s*([^\-\n]+)", rt, re.I)
+        ex.receiver.bank = _clean_name(m.group(1)) if m else ""
+        # Alıcı IBAN: 'ALICI IBAN:TR...' (araya \n girebilir)
+        m = re.search(r"ALICI\s*IBAN\s*[:：]\s*(TR[0-9 ]{20,34})", rt, re.I)
+        if m:
+            ex.receiver.iban = banks.normalize_iban(m.group(1))
+        elif ex.all_ibans:
+            ex.receiver.iban = ex.all_ibans[0]
+        # Gönderen IBAN: TR83 ... (Fibabanka); son 2 hane ayrı satıra düşmüş olabilir ->
+        # Türk IBAN'ının son haneleri hesap numarasıdır; hesap no ile tamamla.
+        sm = re.search(r"TR\d{2}(?:[ ]?\d{4}){5}(?:[ ]?\d{2})?", rt)
+        if sm:
+            cand = re.sub(r"\s", "", sm.group(0)).upper()
+            if len(cand) < 26 and ex.sender.account_no:
+                need = 26 - len(cand)
+                acc = ex.sender.account_no
+                if need <= len(acc) and cand.endswith(acc[:-need] if len(acc) > need else acc):
+                    cand = cand + acc[-need:]
+            if len(cand) == 26 and cand != banks.normalize_iban(ex.receiver.iban):
+                ex.sender.iban = banks.normalize_iban(cand)
+        ex.transaction.type = "GİDEN FAST" if "giden fast" in low_rt else \
+            ("GELEN FAST" if "gelen fast" in low_rt else "")
+        ex.sender.bank = "Fibabanka A.Ş."
 
     # =============================================================
     #  EVRENSEL / diğer tüm bankalar

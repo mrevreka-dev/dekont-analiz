@@ -34,6 +34,7 @@ _BANK_KEY = {
     "garanti bbva": "garanti",
     "akbank t.a.ş.": "akbank",
     "ing bank a.ş.": "ing",
+    "fibabanka a.ş.": "fiba",
 }
 
 
@@ -54,6 +55,7 @@ EXPECTED_PRODUCERS = {
     "akbank":    ["openpdf", "itext"],        # Akbank -> OpenPDF (iText türevi)
     "ing":       ["evopdf", "html to pdf"],   # ING -> EvoPdf HTML-to-PDF
     "isbank":    ["openpdf", "jasperreports", "itext"],  # İş Bankası -> JasperReports + OpenPDF
+    "fiba":      ["aspose"],                   # Fibabanka -> Aspose.Words
 }
 
 # Belgeyi yeniden basmak/düzenlemek için kullanılan tipik TARAYICI/EDİTÖR üreticileri.
@@ -391,6 +393,7 @@ PRODUCER_LABEL = {
     "akbank":    "OpenPDF",
     "ing":       "EvoPdf (HTML-to-PDF)",
     "isbank":    "OpenPDF / JasperReports",
+    "fiba":      "Aspose.Words",
 }
 
 
