@@ -325,13 +325,14 @@ def check_receipt_number_date(bkey: str, document_no: str, ref_no: str,
     if txn_dt is None:
         return None
     txn_date = txn_dt.date() if hasattr(txn_dt, "date") else txn_dt
-    # Tarih taşıyan aday numaralar (banka kuralı varsa onu, yoksa genel)
+    # SADECE gömülü tarih taşıdığını DOĞRULADIĞIMIZ bankalarda çalış. Genel geri-dönüş
+    # (her banka numarasını YYYYAAGG sanmak) yanlış-pozitif üretir: ör. VakıfBank 'İŞLEM NO'
+    # 2026010724333986 tarih değildir; '20260107' olarak çözülüp işlem tarihiyle çelişir.
     srcs = RECEIPT_DATE_SOURCE.get(bkey)
+    if not srcs:
+        return None
     field_vals = {"document_no": document_no, "ref_no": ref_no, "seq_number": seq_number}
-    if srcs:
-        cands = [(s, field_vals.get(s, "")) for s in srcs]
-    else:
-        cands = [("document_no", document_no), ("seq_number", seq_number)]
+    cands = [(s, field_vals.get(s, "")) for s in srcs]
     for fname, num in cands:
         ed = _embedded_date(num)
         if not ed:
