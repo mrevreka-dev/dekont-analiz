@@ -543,38 +543,78 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     elif is_enpara:
         ex.doc_kind = _detect_garanti_kind(joined)  # GIDEN FAST EFT / HAVALE ...
         rt = rjoined or joined
-        _STOPS = ["ALICI IBAN", "ALICI ÜNVANI", "MÜŞTERİ ÜNVANI", "MUSTERI UNVANI",
-                  "GÖNDEREN", "GONDEREN", "AÇIKLAMA", "ACIKLAMA", "IBAN", "KATILIMCI",
-                  "EFT TUTARI", "EFT ÜCRETİ", "SORGU NO", "SIRA NO", "FİŞ NO", "FIS NO", "B/A"]
-        # Alıcı
-        ex.receiver.name = _clean_name(_after_label(rt, "ALICI ÜNVANI", _STOPS)
-                                       or _after_label(rt, "ALICI UNVANI", _STOPS))
-        ex.receiver.iban = banks.normalize_iban(_after_label(rt, "ALICI IBAN", _STOPS))
-        # Gönderen (MÜŞTERİ ÜNVANI daha güvenilir; yoksa GÖNDEREN)
-        ex.sender.name = _clean_name(_after_label(rt, "MÜŞTERİ ÜNVANI", _STOPS)
-                                     or _after_label(rt, "MUSTERI UNVANI", _STOPS)
-                                     or _after_label(rt, "GÖNDEREN", _STOPS)
-                                     or _after_label(rt, "GONDEREN", _STOPS))
-        # Gönderen IBAN: "MÜŞTERİ ÜNVANI ... IBAN : TR..." satırından ya da tüm IBAN'lardan
-        s_iban = _after_label(rt, "MÜŞTERİ ÜNVANI", ["AÇIKLAMA", "GÖNDEREN"])
-        sm = IBAN_RE.search(s_iban) or (IBAN_RE.search(_find_label(rt, ["IBAN"]) or ""))
-        ex.sender.iban = banks.normalize_iban(sm.group(0)) if sm else ""
-        # IBAN'lar eksikse konumsal ata (alıcı=Halkbank IBAN, gönderen=Enpara/QNB IBAN)
-        for ib in ex.all_ibans:
-            if ib != ex.receiver.iban and not ex.sender.iban:
-                ex.sender.iban = ib
-        # Tutar: "EFT TUTARI : 100,000.0 TL"  (etiketten sonraki İLK para jetonu)
-        eft = _after_label(rt, "EFT TUTARI", ["EFT ÜCRETİ", "EFT UCRETI", "SORGU NO"])
-        ex.amount.value = parse_amount(eft)
-        ex.amount.text = eft
-        cm = CURRENCY_RE.search(eft or "")
-        ex.amount.currency = (cm.group(1).upper() if cm else "TL")
-        fee_txt = _after_label(rt, "EFT ÜCRETİ(BSMV DAHİL)", ["SORGU NO"]) \
-            or _after_label(rt, "EFT ÜCRETİ", ["SORGU NO"])
-        _fee = parse_amount(fee_txt)
-        if _fee is None and re.match(r"\s*0(\s|$|TL)", fee_txt or ""):
-            _fee = 0.0                        # "0 TL" gibi ücretsiz durum
-        ex.amount.fee = _fee
+        _nrt = _norm_tr(rt)
+        if "havaleyi alan" in _nrt or "havaleyi gonderen" in _nrt:
+            # ---- Enpara HESAPTAN HESABA HAVALE alt-formatı --------------------
+            #  Gönderen: 'HAVALEYİ GÖNDEREN HESAP UNVANI:...' (ya da üstteki 'Sayın ...')
+            #  Alıcı:    'HAVALEYİ ALAN MUSTERİ UNVANI:...'; IBAN 'HAVALEYİ ALAN HESAP NO:.. IBAN: TR..'
+            #  Tutar:    işlem tablosu satırının (hesap IBAN'ı + tutar) sonundaki para jetonu
+            _HS = ["HAVALEYİ ALAN", "HAVALEYİ GÖNDEREN", "AÇIKLAMA", "ACIKLAMA",
+                   "HESAP NO", "IBAN", "YETKİ", "YETKI", "SIRA NO", "FİŞ NO", "FIS NO"]
+            ex.sender.name = _clean_name(
+                _after_label(rt, "HAVALEYİ GÖNDEREN HESAP UNVANI", _HS)
+                or _after_label(rt, "HAVALEYI GONDEREN HESAP UNVANI", _HS)
+                or _after_label(rt, "Sayın", ["TC kimlik", "TC Kimlik", "İşlem", "Şube", "Vergi"]))
+            ex.receiver.name = _clean_name(
+                _after_label(rt, "HAVALEYİ ALAN MUSTERİ UNVANI", _HS)
+                or _after_label(rt, "HAVALEYİ ALAN MÜŞTERİ ÜNVANI", _HS)
+                or _after_label(rt, "HAVALEYI ALAN MUSTERI UNVANI", _HS))
+            # Alıcı IBAN: 'HAVALEYİ ALAN HESAP NO:.. IBAN: TR..' satırından
+            _ral = _after_label(rt, "HAVALEYİ ALAN HESAP NO", ["SIRA NO", "FİŞ NO", "FIS NO"]) \
+                or _after_label(rt, "HAVALEYI ALAN HESAP NO", ["SIRA NO", "FIS NO"])
+            rm = IBAN_RE.search(_ral or "")
+            ex.receiver.iban = banks.normalize_iban(rm.group(0)) if rm else ""
+            # Gönderen IBAN: işlem satırındaki (alıcıdan farklı) IBAN
+            for ib in ex.all_ibans:
+                if ib and ib != ex.receiver.iban:
+                    ex.sender.iban = ib
+                    break
+            # Tutar: IBAN + para jetonu içeren işlem satırı (ilk eşleşen)
+            for ln in rt.splitlines():
+                if IBAN_RE.search(ln):
+                    vals = [_parse_money_token(m.group(0)) for m in AMOUNT_RE.finditer(ln)]
+                    vals = [v for v in vals if v is not None]
+                    if vals:
+                        ex.amount.value = max(vals)
+                        ex.amount.text = re.sub(r"\s{2,}", " ", ln.strip())
+                        break
+            cm = CURRENCY_RE.search(ex.amount.text or rt)
+            ex.amount.currency = (cm.group(1).upper() if cm else "TL")
+            ex.amount.fee = None
+        else:
+            # ---- standart EFT/FAST formatı -----------------------------------
+            _STOPS = ["ALICI IBAN", "ALICI ÜNVANI", "MÜŞTERİ ÜNVANI", "MUSTERI UNVANI",
+                      "GÖNDEREN", "GONDEREN", "AÇIKLAMA", "ACIKLAMA", "IBAN", "KATILIMCI",
+                      "EFT TUTARI", "EFT ÜCRETİ", "SORGU NO", "SIRA NO", "FİŞ NO", "FIS NO", "B/A"]
+            # Alıcı
+            ex.receiver.name = _clean_name(_after_label(rt, "ALICI ÜNVANI", _STOPS)
+                                           or _after_label(rt, "ALICI UNVANI", _STOPS))
+            ex.receiver.iban = banks.normalize_iban(_after_label(rt, "ALICI IBAN", _STOPS))
+            # Gönderen (MÜŞTERİ ÜNVANI daha güvenilir; yoksa GÖNDEREN)
+            ex.sender.name = _clean_name(_after_label(rt, "MÜŞTERİ ÜNVANI", _STOPS)
+                                         or _after_label(rt, "MUSTERI UNVANI", _STOPS)
+                                         or _after_label(rt, "GÖNDEREN", _STOPS)
+                                         or _after_label(rt, "GONDEREN", _STOPS))
+            # Gönderen IBAN: "MÜŞTERİ ÜNVANI ... IBAN : TR..." satırından ya da tüm IBAN'lardan
+            s_iban = _after_label(rt, "MÜŞTERİ ÜNVANI", ["AÇIKLAMA", "GÖNDEREN"])
+            sm = IBAN_RE.search(s_iban) or (IBAN_RE.search(_find_label(rt, ["IBAN"]) or ""))
+            ex.sender.iban = banks.normalize_iban(sm.group(0)) if sm else ""
+            # IBAN'lar eksikse konumsal ata (alıcı=Halkbank IBAN, gönderen=Enpara/QNB IBAN)
+            for ib in ex.all_ibans:
+                if ib != ex.receiver.iban and not ex.sender.iban:
+                    ex.sender.iban = ib
+            # Tutar: "EFT TUTARI : 100,000.0 TL"  (etiketten sonraki İLK para jetonu)
+            eft = _after_label(rt, "EFT TUTARI", ["EFT ÜCRETİ", "EFT UCRETI", "SORGU NO"])
+            ex.amount.value = parse_amount(eft)
+            ex.amount.text = eft
+            cm = CURRENCY_RE.search(eft or "")
+            ex.amount.currency = (cm.group(1).upper() if cm else "TL")
+            fee_txt = _after_label(rt, "EFT ÜCRETİ(BSMV DAHİL)", ["SORGU NO"]) \
+                or _after_label(rt, "EFT ÜCRETİ", ["SORGU NO"])
+            _fee = parse_amount(fee_txt)
+            if _fee is None and re.match(r"\s*0(\s|$|TL)", fee_txt or ""):
+                _fee = 0.0                        # "0 TL" gibi ücretsiz durum
+            ex.amount.fee = _fee
         # TCKN, açıklama, referans, sıra/fiş no
         ex.sender.tckn = _find_label(rt, ["TC kimlik numarası", "TC Kimlik"])
         ex.transaction.description = _after_label(rt, "AÇIKLAMA", ["SIRA NO", "FİŞ NO"]) \
