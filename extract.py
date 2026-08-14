@@ -403,10 +403,13 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     _nlow = _norm_tr(low)
     _sig_qnb = ("qnb.com" in low or "qnb telefon bankaciligi" in _nlow
                 or "qnb internet bankaciligi" in _nlow)
+    # Halkbank: web adresi ihracçı-özgüdür. DİKKAT: "Halk Bankası" ADI karşı-tarafta (ALICI BANKA)
+    # da geçer; bu yüzden yalnızca 'halkbank.com' imza sayılır.
+    _sig_halk = ("halkbank.com" in low)
     issuer = ("yapikredi" if _sig_yapikredi else "ziraat" if _sig_ziraat
               else "isbank" if _sig_isbank else "vakif" if _sig_vakif
               else "akbank" if _sig_akbank else "ing" if _sig_ing
-              else "fiba" if _sig_fiba else "qnb" if _sig_qnb
+              else "fiba" if _sig_fiba else "qnb" if _sig_qnb else "halk" if _sig_halk
               else "garanti" if _sig_garanti else "enpara" if _sig_enpara else "")
     is_yapikredi = issuer == "yapikredi"
     is_ziraat = issuer == "ziraat"
@@ -418,12 +421,14 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     is_ing = issuer == "ing"
     is_fiba = issuer == "fiba"
     is_qnb = issuer == "qnb"
+    is_halk = issuer == "halk"
 
     ex.bank = {"yapikredi": "Yapı ve Kredi Bankası", "ziraat": "T.C. Ziraat Bankası",
                "isbank": "Türkiye İş Bankası", "vakif": "VakıfBank",
                "garanti": "Garanti BBVA", "enpara": "Enpara.com (QNB)",
                "akbank": "Akbank T.A.Ş.", "ing": "ING Bank A.Ş.",
-               "fiba": "Fibabanka A.Ş.", "qnb": "QNB Bank A.Ş."}.get(issuer, "")
+               "fiba": "Fibabanka A.Ş.", "qnb": "QNB Bank A.Ş.",
+               "halk": "Türkiye Halk Bankası"}.get(issuer, "")
 
     # =============================================================
     #  İŞ BANKASI e-Dekont formatı
@@ -933,6 +938,47 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.transaction.type = "GİDEN FAST" if "giden fast" in low_rt else \
             ("GELEN FAST" if "gelen fast" in low_rt else "")
         ex.sender.bank = "Fibabanka A.Ş."
+
+    # =============================================================
+    #  HALKBANK (İnternet/Mobil Şube dekontu — tek sütun, net etiketli)
+    # =============================================================
+    elif is_halk:
+        ex.doc_kind = _detect_garanti_kind(joined) or "Dekont"
+        rt = joined
+        ex.sender.customer_no = _find_label(rt, ["MÜŞTERİ NO"])
+        ex.sender.tckn = _find_label(rt, ["TCKN/VKN/YKN", "TCKN"])
+        # İşlem tarihi: "15/08/2026 - 01:06" -> tire ayracını boşluğa çevir
+        _dt = _after_label(rt, "İŞLEM TARİHİ", ["VALÖR", "BELGE", "MÜŞTERİ"])
+        ex.transaction.date = re.sub(r"\s*-\s*", " ", _dt).strip() if _dt else ""
+        ex.transaction.value_date = _after_label(rt, "VALÖR TARİHİ", ["BELGE", "IBAN", "ETTN"])
+        ex.transaction.channel = _after_label(rt, "İŞLEM KANALI", ["İŞLEM TÜRÜ", "GÖNDEREN"])
+        ex.transaction.type = _after_label(rt, "İŞLEM TÜRÜ", ["GÖNDEREN", "AÇIKLAMA"])
+        # Gönderen / Alıcı (etiketli, tek satır)
+        ex.sender.name = _clean_name(_after_label(rt, "GÖNDEREN", ["IBAN", "ALICI"]))
+        ex.sender.iban = banks.normalize_iban(_after_label(rt, "GÖNDEREN IBAN", ["ALICI"]))
+        if not ex.sender.iban:
+            ex.sender.iban = banks.normalize_iban(_after_label(rt, "IBAN", ["BELGE", "ETTN", "GÖNDEREN"]))
+        ex.receiver.name = _clean_name(_after_label(rt, "ALICI", ["IBAN", "BANKA", "ÖDEME"]))
+        ex.receiver.iban = banks.normalize_iban(_after_label(rt, "ALICI IBAN", ["ALICI BANKA", "ÖDEME", "BANKA"]))
+        ex.receiver.bank = _clean_name(_after_label(rt, "ALICI BANKA", ["ÖDEME", "SORGU", "AÇIKLAMA"]))
+        ex.transaction.description = _after_label(rt, "ÖDEME AMACI", ["SORGU", "İŞLEM TUTARI"])
+        ex.transaction.ref_no = _find_label(rt, ["SORGU NO"])
+        # BİMREF-SERİSIRANO: M-2026-08-15-01.06.10.075702  (dekont referansı)
+        _sr = re.search(r"SER[İIİ]?S[İIİ]?RANO\s*[:：]?\s*([A-Z0-9\.\-]{10,})", rt, re.I)
+        ex.transaction.receipt_no = _sr.group(1) if _sr else ""
+        _bn = _after_label(rt, "BELGE NO", ["ETTN", "İŞLEM KANALI"])
+        ex.transaction.document_no = _bn if (_bn and _bn not in ("-", "—")) else ""
+        # Tutar / ücret / toplam (US biçimi: 75,000.00). Ücret = FAST ÜCRETİ + BSMV (toplam kesinti)
+        def _hmon(pat):
+            m = re.search(pat + r"\s*[:：]?\s*(-?[\d.,]+)", rt)
+            return _parse_money_token(m.group(1)) if m else None
+        ex.amount.value = _hmon(r"İŞLEM TUTARI\s*\(TL\)")
+        _uc = _hmon(r"FAST ÜCRET[İIİ]\s*\(TL\)") or _hmon(r"ÜCRET[İIİ]?\s*\(TL\)")
+        _bsmv = _hmon(r"BSMV\s*\(TL\)")
+        ex.amount.fee = round((_uc or 0) + (_bsmv or 0), 2) if (_uc is not None or _bsmv is not None) else None
+        ex.amount.total = _hmon(r"TOPLAM\s*\(TL\s*\)")
+        ex.amount.currency = "TL"
+        ex.sender.bank = "Türkiye Halk Bankası"
 
     # =============================================================
     #  EVRENSEL / diğer tüm bankalar

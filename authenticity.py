@@ -36,6 +36,7 @@ _BANK_KEY = {
     "akbank t.a.ş.": "akbank",
     "ing bank a.ş.": "ing",
     "fibabanka a.ş.": "fiba",
+    "türkiye halk bankası": "halk",
 }
 
 
@@ -60,6 +61,7 @@ EXPECTED_PRODUCERS = {
     "fiba":      ["aspose"],                   # Fibabanka -> Aspose.Words
     "garanti":   ["adobe experience manager", "skia"],  # Garanti: web=Adobe AEM, mobil=Skia
     "vakif":     ["skia", "chromium", "quartz"],  # VakıfBank: web=Skia/Chromium, mobil=iOS Quartz
+    "halk":      ["ironpdf"],                  # Halkbank -> IronPdf (HTML-to-PDF, .NET)
 }
 
 # Belgeyi yeniden basmak/düzenlemek için kullanılan tipik TARAYICI/EDİTÖR üreticileri.
@@ -146,6 +148,7 @@ BANK_FONT_PROFILE = {
     "ing":       {"style": "none"},                             # gömülü font yok
     "isbank":    {"style": "random", "require": {"arialmt"}},   # OpenPDF/JasperReports: ArialMT + Consolas
     "fiba":      {"style": "random"},                           # Aspose: FreeSans
+    "halk":      {"style": "seq"},                              # IronPdf (Chromium): DejaVu, sıralı önek
 }
 
 _SEQ_PREFIXES = {"AAAAAA", "BAAAAA", "CAAAAA", "DAAAAA", "EAAAAA", "FAAAAA", "GAAAAA", "HAAAAA"}
@@ -407,6 +410,7 @@ PRODUCER_LABEL = {
     "fiba":      "Aspose.Words",
     "garanti":   "Adobe AEM (web) / Skia (mobil)",
     "vakif":     "Skia/Chromium (web) / iOS Quartz (mobil)",
+    "halk":      "IronPdf",
 }
 
 
