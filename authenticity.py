@@ -50,6 +50,7 @@ EXPECTED_PRODUCERS = {
     "yapikredi": ["aspose"],                  # Yapı Kredi -> Aspose.Words
     "akbank":    ["openpdf", "itext"],        # Akbank -> OpenPDF (iText türevi)
     "ing":       ["evopdf", "html to pdf"],   # ING -> EvoPdf HTML-to-PDF
+    "isbank":    ["openpdf", "jasperreports", "itext"],  # İş Bankası -> JasperReports + OpenPDF
 }
 
 # Belgeyi yeniden basmak/düzenlemek için kullanılan tipik TARAYICI/EDİTÖR üreticileri.

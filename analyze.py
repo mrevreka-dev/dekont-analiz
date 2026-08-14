@@ -32,6 +32,10 @@ _TRANSFER_LABELS = [
     "Toplam İşlem Tutarı", "İşlem Tutarı", "İşlem Miktarı", "Gönderilen Tutar",
     "Transfer Tutarı", "Havale Tutarı", "EFT Tutarı", "FAST Tutarı", "Ödeme Tutarı",
 ]
+# Bu ifadeleri İÇEREN satır transfer tutarı DEĞİLDİR (toplam = transfer+ücret; ya da
+# ücret/komisyon/BSMV/vergi/masraf). _norm_tr ile karşılaştırılır (aksan-duyarsız).
+_NON_TRANSFER_IN_LINE = ("toplam", "ucret", "komisyon", "bsmv", "vergi",
+                         "masraf", "kesinti", "fee", "commission", "tax")
 # "12.000,00 TRY tutarında ..." gibi tekrar/teyit ifadesi
 _RESTATE_RE = _re.compile(r"(" + _MONEY_TOK + r")\s*(?:TL|TRY|₺)?\s*tutar", _re.I)
 
@@ -39,18 +43,28 @@ _RESTATE_RE = _re.compile(r"(" + _MONEY_TOK + r")\s*(?:TL|TRY|₺)?\s*tutar", _r
 def _transfer_amounts(text: str) -> list:
     """İŞLEM/TRANSFER tutarının belgede geçtiği tüm yerleri (float) döndürür.
     Gerçek bir dekontta bunların HEPSİ aynı olmalıdır; farklılık = tutar oynaması.
-    Ücret/komisyon/BSMV/masraf gibi kalemler KASITLI olarak hariç tutulur."""
-    from extract import _find_label, _parse_money_token, AMOUNT_RE
+
+    ÖNEMLİ: 'Toplam İşlem Tutarı' (transfer + ücret) ve ücret/komisyon/BSMV/vergi/masraf
+    satırları MEŞRU olarak farklı tutar taşır; bunlar transfer tutarı DEĞİLDİR ve karşılaştırmaya
+    KATILMAZ. Aksi halde ücret ayrı yazan bankalarda (İş Bankası, Ziraat, ...) yanlış 'oynama'
+    tespiti oluşur. Bu yüzden kontrol satır-bazlıdır ve bu kalemleri içeren satırlar elenir."""
+    from extract import _parse_money_token, AMOUNT_RE, _norm_tr
+    nlabels = [_norm_tr(l) for l in _TRANSFER_LABELS]
     vals = []
-    for lab in _TRANSFER_LABELS:
-        v = _find_label(text or "", [lab])
-        if v:
-            m = AMOUNT_RE.search(v)
+    for ln in (text or "").splitlines():
+        nln = _norm_tr(ln)
+        if any(x in nln for x in _NON_TRANSFER_IN_LINE):
+            continue                          # toplam/ücret/komisyon/BSMV/vergi/masraf satırı: hariç
+        if any(lab in nln for lab in nlabels):
+            m = AMOUNT_RE.search(ln)          # etiketli transfer satırındaki İLK para jetonu
             if m:
                 pv = _parse_money_token(m.group(0))
                 if pv is not None:
                     vals.append(pv)
-    for m in _RESTATE_RE.finditer(text or ""):
+    for m in _RESTATE_RE.finditer(text or ""):   # '… X TL tutarında …' teyit ifadesi
+        seg = (text or "")[max(0, m.start() - 40):m.start()]
+        if any(x in _norm_tr(seg) for x in _NON_TRANSFER_IN_LINE):
+            continue
         pv = _parse_money_token(m.group(1))
         if pv is not None:
             vals.append(pv)
