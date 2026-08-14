@@ -347,3 +347,33 @@ def check_receipt_number_date(bkey: str, document_no: str, ref_no: str,
             "detail": f"embedded={ed.isoformat()} txn={txn_date.isoformat()} field={fname} num={num}",
         }
     return None
+
+
+# Belge/fiş numarasının YAPISI: baş 8 hane = iş günü (YYYYAAGG), kalan hane = artan
+# global işlem sayacı (zamanla monoton artar; saatten türetilmez). Görüntüleme/denetim için.
+RECEIPT_NO_STRUCTURE = {
+    "enpara": {"date_len": 8, "total_len": 15},   # 20260812 + 7 haneli sayaç = 15
+}
+
+
+def document_no_parts(bkey: str, document_no: str) -> dict | None:
+    """Belge/doküman numarasını 'tarih kısmı' + 'sayaç' olarak ayrıştırır (banka kuralı varsa).
+    Döner: {date_part, date_fmt, date_ok, counter, length, length_ok} ya da None (kural yoksa/rakam yoksa)."""
+    spec = RECEIPT_NO_STRUCTURE.get(bkey)
+    if not spec:
+        return None
+    digits = re.sub(r"\D", "", document_no or "")
+    if not digits:
+        return None
+    dl = spec["date_len"]
+    date_part = digits[:dl]
+    counter = digits[dl:]
+    ed = _embedded_date(date_part)
+    return {
+        "date_part": date_part,
+        "date_fmt": ed.strftime("%d.%m.%Y") if ed else "",
+        "date_ok": bool(ed),
+        "counter": counter,
+        "length": len(digits),
+        "length_ok": len(digits) == spec["total_len"],
+    }

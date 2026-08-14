@@ -767,6 +767,18 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         },
     }
 
+    # 8.9) Belge/doküman numarasının yapısını ayrıştır (görüntüleme için): tarih kısmı + sayaç
+    if is_receipt:
+        try:
+            import authenticity as _auth
+            _tr = report["extracted"]["transaction"]
+            _parts = _auth.document_no_parts(_auth.bank_key(report["extracted"].get("bank", "")),
+                                             _tr.get("document_no", ""))
+            if _parts:
+                _tr["document_no_parts"] = _parts
+        except Exception:
+            pass
+
     # 9) Doğrulanmışsa numaralarını kalıcı veritabanına kaydet (banka bazlı)
     if use_store:
         try:
