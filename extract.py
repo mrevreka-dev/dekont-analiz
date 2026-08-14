@@ -396,10 +396,17 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     _sig_akbank = ("akbank.com" in low or "akbank direkt" in low)
     _sig_ing = ("ing.com.tr" in low or "ing bank anonim" in low)
     _sig_fiba = ("fibabanka.com" in low or "fibabanka" in _norm_tr(low))
+    # QNB: Enpara ile AYNI altyapı/format (Ibtech+iText); QNB markası ayrı etiketlensin.
+    # QNB'ye ÖZGÜ imza: web adresi + QNB kanal ifadeleri. DİKKAT: 'QNB Bank' salt-metin olarak
+    # Enpara belgelerinde tarihsel dipnotta geçebilir ("Enpara'nın QNB Bank A.Ş. ...") — bu yüzden
+    # 'qnb bank' tek başına KULLANILMAZ; yalnız qnb.com / QNB Telefon|İnternet Bankacılığı sayılır.
+    _nlow = _norm_tr(low)
+    _sig_qnb = ("qnb.com" in low or "qnb telefon bankaciligi" in _nlow
+                or "qnb internet bankaciligi" in _nlow)
     issuer = ("yapikredi" if _sig_yapikredi else "ziraat" if _sig_ziraat
               else "isbank" if _sig_isbank else "vakif" if _sig_vakif
               else "akbank" if _sig_akbank else "ing" if _sig_ing
-              else "fiba" if _sig_fiba
+              else "fiba" if _sig_fiba else "qnb" if _sig_qnb
               else "garanti" if _sig_garanti else "enpara" if _sig_enpara else "")
     is_yapikredi = issuer == "yapikredi"
     is_ziraat = issuer == "ziraat"
@@ -410,12 +417,13 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     is_akbank = issuer == "akbank"
     is_ing = issuer == "ing"
     is_fiba = issuer == "fiba"
+    is_qnb = issuer == "qnb"
 
     ex.bank = {"yapikredi": "Yapı ve Kredi Bankası", "ziraat": "T.C. Ziraat Bankası",
                "isbank": "Türkiye İş Bankası", "vakif": "VakıfBank",
                "garanti": "Garanti BBVA", "enpara": "Enpara.com (QNB)",
                "akbank": "Akbank T.A.Ş.", "ing": "ING Bank A.Ş.",
-               "fiba": "Fibabanka A.Ş."}.get(issuer, "")
+               "fiba": "Fibabanka A.Ş.", "qnb": "QNB Bank A.Ş."}.get(issuer, "")
 
     # =============================================================
     #  İŞ BANKASI e-Dekont formatı
@@ -544,7 +552,9 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     # =============================================================
     #  ENPARA.com / QNB FAST dekontu (net satır-içi etiketler)
     # =============================================================
-    elif is_enpara:
+    elif is_enpara or is_qnb:
+        # Enpara ve QNB AYRI bankalardır; dekont düzenleri (Ibtech+iText) birebir aynı olduğu
+        # için ÇIKARIM KODU ortaktır. Banka etiketi/kuralları issuer'a göre ayrışır.
         ex.doc_kind = _detect_garanti_kind(joined)  # GIDEN FAST EFT / HAVALE ...
         rt = rjoined or joined
         _nrt = _norm_tr(rt)
@@ -630,7 +640,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.transaction.document_no = fis.group(1) if fis else ""
         sira = re.search(r"S[ıi]ra\s*No\s*[:：]?\s*([\d\-]{6,})", rt, re.I)
         ex.transaction.receipt_no = sira.group(1) if sira else ""
-        ex.sender.bank = "Enpara.com (QNB)"
+        ex.sender.bank = ex.bank or ("QNB Bank A.Ş." if is_qnb else "Enpara.com (QNB)")
 
     # =============================================================
     #  T.C. ZİRAAT BANKASI (HESAPTAN FAST / EFT / HAVALE)

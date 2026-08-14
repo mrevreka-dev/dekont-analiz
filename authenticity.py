@@ -27,6 +27,7 @@ import datetime as _dt
 # --- Banka görünen adı -> iç anahtar ---
 _BANK_KEY = {
     "enpara.com (qnb)": "enpara",
+    "qnb bank a.ş.": "qnb",
     "t.c. ziraat bankası": "ziraat",
     "yapı ve kredi bankası": "yapikredi",
     "türkiye iş bankası": "isbank",
@@ -50,6 +51,7 @@ def bank_key(bank_display: str) -> str:
 # kullanabilir. Eşleşme YOKSA belge bankanın sisteminden çıkmamış demektir.
 EXPECTED_PRODUCERS = {
     "enpara":    ["itext", "1t3xt"],          # Enpara -> iText (6 doğrulanmış örnek)
+    "qnb":       ["itext", "1t3xt"],          # QNB -> iText (Enpara ile aynı altyapı)
     "ziraat":    ["skia", "chromium"],        # Ziraat mobil -> tarayıcı motoru (Skia)
     "yapikredi": ["aspose"],                  # Yapı Kredi -> Aspose.Words
     "akbank":    ["openpdf", "itext"],        # Akbank -> OpenPDF (iText türevi)
@@ -135,6 +137,7 @@ def check_pdfium(producer: str) -> dict | None:
 # stili 'random' iken belge 'seq' (Skia) ise -> tarayıcıyla yeniden basılmış = SAHTE.
 BANK_FONT_PROFILE = {
     "enpara":    {"style": "random", "require": {"arialmt"}},   # iText: ArialMT + Tahoma(+Bold)
+    "qnb":       {"style": "random", "require": {"arialmt"}},   # QNB: iText, ArialMT
     "ziraat":    {"style": "seq"},                              # Skia (sıralı önek NORMAL)
     "yapikredi": {"style": "random"},                           # Aspose: Calibri + CourierNew
     "akbank":    {"style": "random"},                           # OpenPDF: ArialNarrow
@@ -301,6 +304,7 @@ def check_internal_dates(text: str, pdf_bytes: bytes, txn_dt, value_date_str: st
 # Hangi alanın tarih taşıdığı banka bazlı ayarlanabilir; yoksa genel sezgi uygulanır.
 RECEIPT_DATE_SOURCE = {
     "enpara": ["document_no"],                 # Fiş No: YYYYAAGG + sayaç
+    "qnb": ["document_no"],                    # QNB Fiş No: aynı YYYYAAGG + sayaç yapısı
 }
 
 
@@ -360,6 +364,7 @@ def check_receipt_number_date(bkey: str, document_no: str, ref_no: str,
 # global işlem sayacı (zamanla monoton artar; saatten türetilmez). Görüntüleme/denetim için.
 RECEIPT_NO_STRUCTURE = {
     "enpara": {"date_len": 8, "total_len": 15},   # 20260812 + 7 haneli sayaç = 15
+    "qnb": {"date_len": 8, "total_len": 15},      # QNB Fiş No: aynı yapı
 }
 
 
@@ -389,6 +394,7 @@ def document_no_parts(bkey: str, document_no: str) -> dict | None:
 # Bankaların gerçek PDF derleyicisi için insan-okur etiketler (gösterim amaçlı).
 PRODUCER_LABEL = {
     "enpara":    "iText",
+    "qnb":       "iText",
     "ziraat":    "Skia/PDF (Chromium tarayıcı motoru)",
     "yapikredi": "Aspose.Words",
     "akbank":    "OpenPDF",
