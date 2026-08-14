@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="{{ L }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ T.app_title }} — {{ r.file.name }}</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+</head>
+<body>
+{% set risk = r.score.risk_level %}
+{% set riskcolor = {'authentic':'var(--good)','low':'var(--good)','medium':'var(--warning)','high':'var(--serious)','critical':'var(--critical)'}[risk] %}
+{% set sevcolor = {'critical':'var(--critical)','high':'var(--serious)','medium':'var(--warning)','low':'var(--text-muted)','info':'var(--accent)'} %}
+{% set findings = r.findings_tr if L=='tr' else r.findings_en %}
+{# Belge/fiş numarasındaki gömülü tarih ↔ işlem tarihi çelişkisi: ilgili alanı kırmızı işaretlemek için ayrıştır #}
+{% set rnd = namespace(hit=false, field='', embedded='', txn='') %}
+{% for f in findings %}
+  {% if f.code == 'RECEIPT_NO_DATE_MISMATCH' and f.detail %}
+    {% set rnd.hit = true %}
+    {% for part in f.detail.split(' ') %}
+      {% if part.startswith('field=') %}{% set rnd.field = part[6:] %}{% endif %}
+      {% if part.startswith('embedded=') %}{% set rnd.embedded = part[9:] %}{% endif %}
+      {% if part.startswith('txn=') %}{% set rnd.txn = part[4:] %}{% endif %}
+    {% endfor %}
+  {% endif %}
+{% endfor %}
+{% set circ = 552.92 %}
+
+<header class="topbar"><div class="container">
+  <div class="brand"><span class="logo">D</span><span>{{ T.app_title }}</span></div>
+  <div class="toolbar">
+    <a class="pill {{ 'active' if L=='tr' }}" href="?lang=tr">TR</a>
+    <a class="pill {{ 'active' if L=='en' }}" href="?lang=en">EN</a>
+    <a class="pill" href="/?lang={{ L }}">＋ {{ T.new_analysis }}</a>
+  </div>
+</div></header>
+
+<main class="container report">
+
+  {% if r.score.not_a_receipt %}
+  <div class="card" style="border:2px solid var(--critical);background:rgba(220,38,38,0.06)">
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="font-size:38px">⛔</div>
+      <div>
+        <div class="section-title" style="margin:0;color:var(--critical)">
+          {{ 'BU BİR DEKONT DEĞİL' if L=='tr' else 'NOT A RECEIPT' }}</div>
+        <div class="verdict" style="margin-top:4px">{{ r.score.verdict_tr if L=='tr' else r.score.verdict_en }}</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- SCORE HERO -->
+  <div class="card">
+    <div class="scorehero">
+      <div class="gauge">
+        <svg width="200" height="200" viewBox="0 0 200 200">
+          <circle cx="100" cy="100" r="88" fill="none" stroke="var(--surface-2)" stroke-width="16"/>
+          <circle cx="100" cy="100" r="88" fill="none" stroke="{{ riskcolor }}" stroke-width="16"
+            stroke-linecap="round" stroke-dasharray="{{ circ }}"
+            stroke-dashoffset="{{ circ - (circ * r.score.authenticity_score / 100) }}"/>
+        </svg>
+        <div class="val">
+          <div class="num" style="color:{{ riskcolor }}">{{ r.score.authenticity_score }}</div>
+          <div class="max">/ 100</div>
+        </div>
+      </div>
+      <div>
+        <div class="section-title" style="margin-top:0">{{ T.score }}</div>
+        <span class="riskbadge bg-{{ risk }}"><span class="dot" style="background:{{ riskcolor }}"></span>
+          {{ T.risk_label[risk] }}</span>
+        <div class="verdict">{{ r.score.verdict_tr if L=='tr' else r.score.verdict_en }}</div>
+        {% if r.score.max_possible < 100 %}
+        <div class="subline">{{ T.max_note }}: {{ r.score.max_possible }}/100</div>
+        {% endif %}
+        <div class="subline" style="margin-top:10px">
+          <span class="badge-soft">{{ T.doc_type }}: {{ r.classification.doc_type_label_tr if L=='tr' else r.classification.doc_type_label_en }}</span>
+          <span class="badge-soft">{{ r.file.name }}</span>
+          <span class="badge-soft">{{ (r.file.size_bytes/1024)|round(1) }} KB</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- KESİN CEVAPLAR (true/false/nötr) -->
+  {% set vd = r.verdicts %}
+  {% set vstate = {'true':'var(--good)','false':'var(--critical)','neutral':'var(--text-muted)'} %}
+  {% set vword_tr = {'true':'EVET','false':'HAYIR','neutral':'NÖTR'} %}
+  {% set vword_en = {'true':'YES','false':'NO','neutral':'NEUTRAL'} %}
+  {% set ov = vd.overall.state %}
+  <div class="card" style="border-left:5px solid {{ vstate[ov] }}">
+    <div class="section-title" style="margin-top:0">
+      {{ 'KESİN CEVAPLAR' if L=='tr' else 'DEFINITIVE ANSWERS' }}</div>
+    <div class="subline" style="margin-top:-4px;margin-bottom:12px">
+      {{ 'Doğrulama modu' if L=='tr' else 'Verification mode' }}:
+      <strong>{{ vd.mode_label_tr if L=='tr' else vd.mode_label_en }}</strong></div>
+
+    <div style="display:flex;align-items:flex-start;gap:12px;padding:12px;border-radius:10px;
+         background:rgba(128,128,128,0.06);margin-bottom:14px">
+      <span style="font-weight:800;font-size:15px;color:{{ vstate[ov] }};min-width:78px;text-align:center;
+            border:2px solid {{ vstate[ov] }};border-radius:8px;padding:6px 4px">
+        {{ (vword_tr[ov] if L=='tr' else vword_en[ov]) }}</span>
+      <div>
+        <div style="font-weight:700;margin-bottom:2px">
+          {{ 'Dekont güvenilir mi (sahte değil)?' if L=='tr' else 'Is the receipt trustworthy (not forged)?' }}</div>
+        <div class="subline" style="margin:0">{{ vd.overall.label_tr if L=='tr' else vd.overall.label_en }}</div>
+      </div>
+    </div>
+
+    <table class="tbl">
+      <tbody>
+      {% for c in vd['checks'] %}
+        <tr>
+          <td style="width:96px">
+            <span style="display:inline-block;font-weight:800;font-size:13px;color:{{ vstate[c.state] }};
+                  border:1.5px solid {{ vstate[c.state] }};border-radius:6px;padding:3px 10px">
+              {{ (vword_tr[c.state] if L=='tr' else vword_en[c.state]) }}</span>
+          </td>
+          <td>
+            <div style="font-weight:600">{{ c.question_tr if L=='tr' else c.question_en }}</div>
+            <div class="subline" style="margin:2px 0 0">{{ c.reason_tr if L=='tr' else c.reason_en }}</div>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- TAHRİFAT / DEĞİŞİKLİK KARŞILAŞTIRMASI (Alan · Orijinal · Değiştirilmiş) -->
+  {% if r.tamper_comparison %}
+  {% set ocolor = {'kritik':'var(--critical)','yuksek':'var(--serious)'} %}
+  <div class="card" style="border-left:5px solid var(--critical)">
+    <div class="section-title" style="margin-top:0">
+      {{ 'DEĞİŞİKLİK / TAHRİFAT KARŞILAŞTIRMASI' if L=='tr' else 'TAMPERING COMPARISON' }}</div>
+    <div class="subline" style="margin-top:-4px;margin-bottom:14px">
+      {{ 'Hangi alan, orijinal hâli ve değiştirilmiş/çelişen hâli:' if L=='tr' else 'Which field, its original and altered/conflicting value:' }}</div>
+    {% for t in r.tamper_comparison %}
+    <div style="border:1px solid var(--surface-2);border-radius:12px;padding:14px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px">
+        <div style="font-weight:700">{{ t.alan }}</div>
+        <span style="font-size:11px;font-weight:700;color:{{ ocolor.get(t.onem,'var(--serious)') }};
+              border:1.5px solid {{ ocolor.get(t.onem,'var(--serious)') }};border-radius:6px;padding:2px 8px">
+          {{ t.kaynak }}</span>
+      </div>
+      <div style="display:flex;align-items:stretch;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px;background:rgba(34,197,94,0.08);border:1px solid var(--good);
+             border-radius:10px;padding:10px">
+          <div style="font-size:11px;font-weight:700;color:var(--good);margin-bottom:4px">
+            {{ 'ORİJİNAL / OLMASI GEREKEN' if L=='tr' else 'ORIGINAL / EXPECTED' }}</div>
+          <div style="font-family:monospace;font-size:13px">{{ t.orijinal }}</div>
+        </div>
+        <div style="display:flex;align-items:center;font-size:22px;color:var(--critical);font-weight:800">→</div>
+        <div style="flex:1;min-width:200px;background:rgba(220,38,38,0.08);border:1px solid var(--critical);
+             border-radius:10px;padding:10px">
+          <div style="font-size:11px;font-weight:700;color:var(--critical);margin-bottom:4px">
+            {{ 'DEĞİŞTİRİLMİŞ / BELGEDEKİ' if L=='tr' else 'ALTERED / IN DOCUMENT' }}</div>
+          <div style="font-family:monospace;font-size:13px">{{ t.degistirilmis }}</div>
+        </div>
+      </div>
+      <div class="subline" style="margin:10px 0 0;color:{{ ocolor.get(t.onem,'var(--serious)') }}">
+        ⚠ {{ t.durum }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <!-- HESAP HAREKETİ -->
+  {% if r.classification.is_statement and r.statement %}
+  {% set stf = r.statement.fields %}
+  {% set bal = r.statement.balance %}
+  {% set balcolor = 'var(--good)' if bal.consistent else ('var(--critical)' if bal.consistent == false else 'var(--text-muted)') %}
+  <div class="card" style="border-left:5px solid {{ balcolor }}">
+    <div class="section-title" style="margin-top:0">
+      {{ 'HESAP HAREKETİ' if L=='tr' else 'ACCOUNT STATEMENT' }}</div>
+    <div class="subline" style="margin-top:-4px;margin-bottom:12px">
+      <span class="badge-soft">{{ 'Hesap sahibi' if L=='tr' else 'Holder' }}: {{ stf.ad_soyad or '—' }}</span>
+      <span class="badge-soft">IBAN: {{ stf.iban or '—' }}</span>
+      <span class="badge-soft">{{ stf.hesap_tipi or '—' }}</span>
+      <span class="badge-soft">{{ 'Dönem' if L=='tr' else 'Period' }}: {{ stf.donem_baslangic }} – {{ stf.donem_bitis }}</span>
+      <span class="badge-soft">{{ r.statement.islem_sayisi }} {{ 'işlem' if L=='tr' else 'txns' }}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:10px;
+         background:rgba(128,128,128,0.06)">
+      <span style="font-weight:800;font-size:14px;color:{{ balcolor }};min-width:78px;text-align:center;
+            border:2px solid {{ balcolor }};border-radius:8px;padding:6px 4px">
+        {% if bal.consistent %}{{ 'TUTARLI' if L=='tr' else 'CONSISTENT' }}
+        {% elif bal.consistent == false %}{{ 'KIRIK' if L=='tr' else 'BROKEN' }}
+        {% else %}{{ 'BELİRSİZ' if L=='tr' else 'N/A' }}{% endif %}</span>
+      <div>
+        <div style="font-weight:700">{{ 'Yürüyen bakiye zinciri' if L=='tr' else 'Running-balance chain' }}
+          ({{ bal.checked }} {{ 'işlem' if L=='tr' else 'rows' }})</div>
+        <div class="subline" style="margin:2px 0 0">
+          {{ 'Açılış' if L=='tr' else 'Opening' }}: {{ bal.opening }} ·
+          {{ 'Kapanış' if L=='tr' else 'Closing' }}: {{ bal.closing }} ·
+          {{ 'Net' if L=='tr' else 'Net' }}: {{ bal.net }}
+          {% if bal.breaks %} · <span style="color:var(--critical)">{{ bal.breaks|length }} {{ 'kırılma' if L=='tr' else 'break(s)' }}</span>{% endif %}
+        </div>
+      </div>
+    </div>
+    {% if bal.breaks %}
+    <table class="tbl" style="margin-top:12px">
+      <thead><tr><th>{{ T.date }}</th><th>{{ 'Beklenen önceki bakiye' if L=='tr' else 'Expected prev. balance' }}</th>
+        <th>{{ 'Görünen' if L=='tr' else 'Shown' }}</th><th>{{ 'Fark' if L=='tr' else 'Diff' }}</th></tr></thead>
+      <tbody>
+      {% for b in bal.breaks %}
+        <tr><td>{{ b.tarih }}</td><td>{{ b.beklenen_onceki_bakiye }}</td>
+            <td>{{ b.gercek_onceki_bakiye }}</td><td style="color:var(--critical)">{{ b.fark }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- STAT TILES -->
+  <div class="tiles" style="margin-top:16px">
+    <div class="tile"><div class="k">{{ T.ai_likelihood }}</div>
+      <div class="v" style="color:{{ 'var(--critical)' if r.ai_trace.likelihood>=60 else ('var(--warning)' if r.ai_trace.likelihood>=30 else 'var(--good)') }}">%{{ r.ai_trace.likelihood }}</div>
+      <div class="sub">{{ r.ai_trace.verdict.split('/')[0] if L=='tr' else r.ai_trace.verdict.split('/')[1] if '/' in r.ai_trace.verdict else r.ai_trace.verdict }}</div></div>
+    <div class="tile"><div class="k">{{ T.tamper_signals }}</div>
+      <div class="v" style="color:{{ 'var(--critical)' if r.tamper.critical_findings>0 else 'var(--text-primary)' }}">{{ r.tamper.findings_count }}</div>
+      <div class="sub">{{ r.tamper.critical_findings }} {{ 'yüksek/kritik' if L=='tr' else 'high/critical' }}</div></div>
+    <div class="tile"><div class="k">{{ T.incremental }}</div>
+      <div class="v" style="color:{{ 'var(--warning)' if r.tamper.incremental_updates>0 else 'var(--text-primary)' }}">{{ r.tamper.incremental_updates }}</div>
+      <div class="sub">{{ 'yeniden kayıt' if r.tamper.resaved_by_editor else '—' }}</div></div>
+    <div class="tile"><div class="k">{{ T.text_source }}</div>
+      <div class="v">{{ r.classification.text_source|upper }}</div>
+      <div class="sub">{{ T.pages }}: {{ r.metadata.page_count }} · PDF {{ r.metadata.pdf_version }}</div></div>
+  </div>
+
+  <!-- SUB-SCORES -->
+  {% set sscol = {True:'var(--good)', False:'var(--critical)'} %}
+  {% macro subcolor(v) %}{{ 'var(--good)' if v>=80 else ('var(--warning)' if v>=50 else 'var(--critical)') }}{% endmacro %}
+  <div class="tiles" style="margin-top:12px">
+    <div class="tile"><div class="k">{{ T.integrity }}</div>
+      <div class="v" style="color:{{ subcolor(r.subscores.integrity) }}">{{ r.subscores.integrity }}<span style="font-size:13px;color:var(--text-muted)">/100</span></div></div>
+    <div class="tile"><div class="k">{{ T.data_consistency }}</div>
+      <div class="v" style="color:{{ subcolor(r.subscores.data_consistency) }}">{{ r.subscores.data_consistency }}<span style="font-size:13px;color:var(--text-muted)">/100</span></div></div>
+    <div class="tile"><div class="k">{{ T.source_verifiability }}</div>
+      <div class="v" style="color:{{ subcolor(r.subscores.source_verifiability) }}">{{ r.subscores.source_verifiability }}<span style="font-size:13px;color:var(--text-muted)">/100</span></div>
+      <div class="sub">{{ T.qr_title }}: {{ T.found if r.qr.found else T.not_found }} · XML: {{ T.found if r.embedded_xml.present else T.not_found }}</div></div>
+  </div>
+
+  <!-- REVISION COMPARISON -->
+  {% if r.revision.has_prior and r.revision.changes %}
+  <div class="section-title">{{ T.revision_compare }} · {{ r.revision.changes|length }} {{ T.changes }}</div>
+  <div class="card" style="border:1px solid var(--critical)">
+    <p class="subline" style="margin-top:0">{{ T.rev_changes_note }}</p>
+    <table class="kv" style="width:100%">
+      <tr style="border-bottom:2px solid var(--border-strong)">
+        <td class="k" style="width:26%">{{ T.rev_field }}</td>
+        <td class="k" style="width:30%">{{ T.rev_prev }}</td>
+        <td class="k" style="width:30%">{{ T.rev_curr }}</td>
+        <td class="k" style="width:14%">{{ T.rev_importance }}</td></tr>
+      {% for c in r.revision.changes %}
+      <tr>
+        <td class="v">{{ c.label }}</td>
+        <td class="v" style="color:var(--text-secondary)">{{ c.prev }}</td>
+        <td class="v" style="font-weight:650;color:{{ 'var(--critical)' if c.severity=='kritik' else 'var(--text-primary)' }}">{{ c.curr }}</td>
+        <td><span class="tag" style="background:color-mix(in srgb, {{ 'var(--critical)' if c.severity=='kritik' else 'var(--text-muted)' }} 15%, transparent);color:{{ 'var(--critical)' if c.severity=='kritik' else 'var(--text-muted)' }}">{{ T.critical if c.severity=='kritik' else T.supporting }}</span></td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+  <!-- TAMPER FINDINGS -->
+  <div class="section-title">{{ T.tamper_signals }}</div>
+  {% set shown = findings|selectattr('weight','!=',0)|list %}
+  {% if shown %}
+    {% for f in findings %}
+      {% if f.weight != 0 %}
+      <div class="finding">
+        <div class="bar" style="background:{{ sevcolor[f.severity] }}"></div>
+        <div>
+          <div class="msg">{{ f.message }}</div>
+          {% if f.detail %}<div class="detail">{{ f.detail }}</div>{% endif %}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">
+          <span class="tag" style="background:color-mix(in srgb, {{ sevcolor[f.severity] }} 15%, transparent);color:{{ sevcolor[f.severity] }}">{{ T.severity[f.severity] }}</span>
+          <span class="tag tag-cat">{{ T.category[f.category] }}</span>
+        </div>
+      </div>
+      {% endif %}
+    {% endfor %}
+  {% else %}
+    <div class="card bg-good" style="border:1px solid var(--good)">✓ {{ T.no_findings }}</div>
+  {% endif %}
+
+  <!-- EXTRACTED INFO -->
+  <div class="section-title">{{ T.extracted }}</div>
+  {% set ex = r.extracted %}
+  <div class="grid grid-3">
+    <div class="card">
+      <div class="party-h">↗ {{ T.sender }}</div>
+      <table class="kv">
+        <tr><td class="k">{{ T.name }}</td><td class="v">{{ ex.sender.name or '—' }}</td></tr>
+        <tr><td class="k">{{ T.iban }}</td><td class="v mono">{{ ex.sender.iban or '—' }}</td></tr>
+        <tr><td class="k">{{ T.bank }}</td><td class="v">{{ ex.sender.bank or ex.bank or '—' }}</td></tr>
+        {% if ex.sender.tckn %}<tr><td class="k">{{ T.tckn }}</td><td class="v mono">{{ ex.sender.tckn }}</td></tr>{% endif %}
+        {% if ex.sender.branch %}<tr><td class="k">{{ T.branch }}</td><td class="v">{{ ex.sender.branch }}</td></tr>{% endif %}
+        {% if ex.sender.customer_no %}<tr><td class="k">{{ T.customer }}</td><td class="v mono">{{ ex.sender.customer_no }}</td></tr>{% endif %}
+      </table>
+    </div>
+    <div class="card">
+      <div class="party-h">↘ {{ T.receiver }}</div>
+      <table class="kv">
+        <tr><td class="k">{{ T.name }}</td><td class="v">{{ ex.receiver.name or '—' }}</td></tr>
+        <tr><td class="k">{{ T.iban }}</td><td class="v mono">{{ ex.receiver.iban or '—' }}</td></tr>
+        <tr><td class="k">{{ T.bank }}</td><td class="v">{{ ex.receiver.bank or '—' }}</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="party-h">₺ {{ T.amount }}</div>
+      <div class="amount-big">{{ '{:,.2f}'.format(ex.amount.value).replace(',','X').replace('.',',').replace('X','.') if ex.amount.value is not none else '—' }}
+        <span class="amount-cur">{{ ex.amount.currency }}</span></div>
+      <table class="kv" style="margin-top:10px">
+        {% if ex.amount.fee is not none %}<tr><td class="k">{{ T.fee }}</td><td class="v">{{ ex.amount.fee }} {{ ex.amount.currency }}</td></tr>{% endif %}
+        {% if ex.amount.total is not none %}<tr><td class="k">{{ T.total }}</td><td class="v">{{ ex.amount.total }} {{ ex.amount.currency }}</td></tr>{% endif %}
+        {% if ex.transaction.date %}<tr><td class="k">{{ T.date }}</td><td class="v">{{ ex.transaction.date }}</td></tr>{% endif %}
+        {% if ex.transaction.ref_no %}<tr><td class="k">{{ T.ref }}</td>
+          <td class="v mono">
+          {% if rnd.hit and rnd.field == 'ref_no' %}
+            <span style="color:var(--critical);font-weight:800">{{ ex.transaction.ref_no }}</span>
+            <div style="color:var(--critical);font-weight:800;font-size:12px;line-height:1.4;margin-top:4px;white-space:normal">⚠ {% if L=='tr' %}Bu numara {{ rnd.embedded.split('-')[2] }}.{{ rnd.embedded.split('-')[1] }}.{{ rnd.embedded.split('-')[0] }} tarihini taşıyor; dekonttaki işlem saati ({{ ex.transaction.date }}) ile UYUŞMUYOR — tarih sonradan değiştirilmiş olabilir (sahtecilik şüphesi).{% else %}This number carries the date {{ rnd.embedded }}; it does NOT match the transaction time shown ({{ ex.transaction.date }}) — the date may have been altered (forgery risk).{% endif %}</div>
+          {% else %}{{ ex.transaction.ref_no }}{% endif %}
+          </td></tr>{% endif %}
+        {% if ex.transaction.document_no %}<tr><td class="k">{{ T.doc_no }}</td>
+          <td class="v mono">
+          {% if rnd.hit and rnd.field == 'document_no' %}
+            <span style="color:var(--critical);font-weight:800">{{ ex.transaction.document_no }}</span>
+            <div style="color:var(--critical);font-weight:800;font-size:12px;line-height:1.4;margin-top:4px;white-space:normal">⚠ {% if L=='tr' %}Bu numara {{ rnd.embedded.split('-')[2] }}.{{ rnd.embedded.split('-')[1] }}.{{ rnd.embedded.split('-')[0] }} tarihini taşıyor; dekonttaki işlem saati ({{ ex.transaction.date }}) ile UYUŞMUYOR — tarih sonradan değiştirilmiş olabilir (sahtecilik şüphesi).{% else %}This number carries the date {{ rnd.embedded }}; it does NOT match the transaction time shown ({{ ex.transaction.date }}) — the date may have been altered (forgery risk).{% endif %}</div>
+          {% else %}{{ ex.transaction.document_no }}{% endif %}
+          </td></tr>{% endif %}
+        {% if ex.transaction.ettn %}<tr><td class="k">ETTN</td><td class="v mono">{{ ex.transaction.ettn }}</td></tr>{% endif %}
+        {% if ex.transaction.type %}<tr><td class="k">{{ T.txn_type }}</td><td class="v">{{ ex.transaction.type }}</td></tr>{% endif %}
+        {% if ex.transaction.channel %}<tr><td class="k">{{ T.channel }}</td><td class="v">{{ ex.transaction.channel }}</td></tr>{% endif %}
+        {% if ex.transaction.description %}<tr><td class="k">{{ T.description }}</td><td class="v">{{ ex.transaction.description }}</td></tr>{% endif %}
+      </table>
+    </div>
+  </div>
+
+  <!-- SCORE BREAKDOWN + TIMELINE -->
+  <div class="grid grid-2" style="margin-top:16px">
+    <div class="card">
+      <div class="party-h">{{ T.score_breakdown }}</div>
+      {% if r.score.breakdown %}
+        {% for b in r.score.breakdown %}
+        <div class="bd-row">
+          <div class="bd-k">{{ T.category[b.category] }}</div>
+          <div class="bd-track"><div class="bd-fill" style="width:{{ [b.penalty/45*100, 100]|min }}%;background:{{ 'var(--critical)' if b.penalty>=25 else ('var(--warning)' if b.penalty>=12 else 'var(--serious)') }}"></div></div>
+          <div class="bd-v">−{{ b.penalty }}</div>
+        </div>
+        {% endfor %}
+      {% else %}<p class="note">{{ T.no_findings }}</p>{% endif %}
+    </div>
+    <div class="card">
+      <div class="party-h">⏱ {{ T.timing_title }}</div>
+      <table class="kv">
+        {% for ev in r.timing.timeline %}
+        <tr><td class="k">{{ ev.label }}</td><td class="v mono">{{ ev.value }}</td></tr>
+        {% endfor %}
+        {% if r.timing.gaps.txn_to_generation_sec is defined %}
+        <tr><td class="k">{{ 'İşlem → Üretim farkı' if L=='tr' else 'Txn → Generation gap' }}</td>
+          <td class="v" style="color:{{ 'var(--critical)' if r.timing.gaps.txn_to_generation_sec < -300 or r.timing.gaps.txn_to_generation_sec > 21600 else 'var(--good)' }}">{{ (r.timing.gaps.txn_to_generation_sec/60)|round(1) }} dk</td></tr>
+        {% endif %}
+        {% if r.timing.gaps.creation_to_mod_sec is defined and r.timing.gaps.creation_to_mod_sec > 60 %}
+        <tr><td class="k">{{ 'Oluşturma → Değiştirme' if L=='tr' else 'Created → Modified' }}</td>
+          <td class="v" style="color:var(--warning)">{{ (r.timing.gaps.creation_to_mod_sec/60)|round(1) }} dk</td></tr>
+        {% endif %}
+      </table>
+      <p class="note" style="margin-bottom:0">{{ T.timing_note }}</p>
+      <table class="kv" style="margin-top:8px">
+        <tr><td class="k">{{ T.producer }}</td><td class="v">{{ r.metadata.producer or '—' }}</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- IMAGE FORENSICS -->
+  {% if r.image_forensics.analyzed %}
+  {% set imgf = r.image_forensics %}
+  <div class="section-title">{{ T.image_forensics }}</div>
+  <div class="grid grid-2">
+    <div class="card">
+      <table class="kv">
+        <tr><td class="k">{{ T.manipulation }}</td><td class="v" style="color:{{ 'var(--critical)' if imgf.manipulation_score>=40 else ('var(--warning)' if imgf.manipulation_score>=15 else 'var(--good)') }}">{{ imgf.manipulation_score }}/100</td></tr>
+        <tr><td class="k">{{ T.ai_trace }}</td><td class="v">{{ imgf.ai_score }}/100</td></tr>
+        <tr><td class="k">{{ T.images }}</td><td class="v">{{ imgf.width }}×{{ imgf.height }} · {{ imgf.format }}</td></tr>
+        <tr><td class="k">{{ T.bg_color }}</td><td class="v">
+          {% if imgf.bg_color %}<span style="display:inline-block;width:14px;height:14px;border:1px solid var(--border-strong);border-radius:3px;vertical-align:middle;background:rgb({{ imgf.bg_color[0] }},{{ imgf.bg_color[1] }},{{ imgf.bg_color[2] }})"></span>
+          rgb({{ imgf.bg_color|join(', ') }}){% else %}—{% endif %}</td></tr>
+        <tr><td class="k">{{ T.bg_dev }}</td><td class="v">{{ T.max }} {{ imgf.bg_dev_max }} · {{ imgf.bg_patch_max }} {{ T.blocks }}</td></tr>
+        <tr><td class="k">{{ T.tone }}</td><td class="v">chroma {{ imgf.tone_chroma_var }} · {{ T.cast }} {{ imgf.tone_cast }}</td></tr>
+        <tr><td class="k">{{ T.noise }}</td><td class="v">{{ imgf.noise_inconsistency }}</td></tr>
+        <tr><td class="k">{{ T.exif }}</td><td class="v">{{ (imgf.exif_make ~ ' ' ~ imgf.exif_model)|trim or imgf.exif_software or T.none_found }}</td></tr>
+        <tr><td class="k">C2PA / AI</td><td class="v">{{ (imgf.ai_signature_hits|join(', ')) or (imgf.c2pa_present and 'C2PA') or T.none_found }}</td></tr>
+      </table>
+      {% for s in imgf.signals %}
+        <div class="finding" style="margin-top:9px"><div class="bar" style="background:{{ sevcolor[s.severity] }}"></div>
+          <div class="msg">{{ s.tr if L=='tr' else s.en }}</div><div></div></div>
+      {% endfor %}
+    </div>
+    <div class="card">
+      {% if imgf.ela_preview_b64 %}
+      <div class="party-h">{{ T.ela_preview }}</div>
+      <img class="ela-img" src="data:image/png;base64,{{ imgf.ela_preview_b64 }}" alt="ELA">
+      <p class="note">{{ T.ela_note }}</p>
+      {% endif %}
+      {% if imgf.bg_heatmap_b64 %}
+      <div class="party-h" style="margin-top:14px">{{ T.bg_heatmap }}</div>
+      <img class="ela-img" src="data:image/png;base64,{{ imgf.bg_heatmap_b64 }}" alt="bg-heatmap">
+      <p class="note" style="margin-bottom:0">{{ T.bg_heatmap_note }}</p>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- VERIFICATION: QR / XML / CONSISTENCY -->
+  <div class="section-title">{{ T.consistency_title }}</div>
+  <div class="grid grid-3">
+    <div class="card">
+      <div class="party-h">▣ {{ T.qr_title }}</div>
+      <table class="kv">
+        <tr><td class="k">{{ T.qr_title }}</td><td class="v">{{ (T.found ~ ' (' ~ r.qr.count ~ ')') if r.qr.found else T.not_found }}</td></tr>
+        {% if r.qr.check and r.qr.check.iban_match is not none %}<tr><td class="k">IBAN</td><td class="v" style="color:{{ 'var(--good)' if r.qr.check.iban_match else 'var(--critical)' }}">{{ T.verified if r.qr.check.iban_match else T.mismatch }}</td></tr>{% endif %}
+        {% if r.qr.check and r.qr.check.amount_match is not none %}<tr><td class="k">{{ T.amount }}</td><td class="v" style="color:{{ 'var(--good)' if r.qr.check.amount_match else 'var(--critical)' }}">{{ T.verified if r.qr.check.amount_match else T.mismatch }}</td></tr>{% endif %}
+      </table>
+    </div>
+    <div class="card">
+      <div class="party-h">⟨⟩ {{ T.xml_title }}</div>
+      <table class="kv">
+        <tr><td class="k">XML</td><td class="v">{{ T.found if r.embedded_xml.present else T.not_found }}</td></tr>
+        <tr><td class="k">e-Dekont</td><td class="v">{{ T.found if r.embedded_xml.looks_like_dekont else T.not_found }}</td></tr>
+        <tr><td class="k">{{ 'Gömülü dosya' if L=='tr' else 'Embedded files' }}</td><td class="v">{{ T.found if r.embedded_xml.has_embedded_files else T.not_found }}</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="party-h">Σ {{ T.consistency_title }}</div>
+      {% if r.consistency.checks %}
+      <table class="kv">
+        {% for c in r.consistency.checks %}
+        <tr><td class="k">{{ c.name }}</td><td class="v" style="color:{{ 'var(--good)' if c.ok else 'var(--critical)' }}">{{ T.consistent if c.ok else T.inconsistent }}</td></tr>
+        {% endfor %}
+      </table>
+      {% else %}<p class="note" style="margin:0">{{ T.none_found }}</p>{% endif %}
+    </div>
+  </div>
+
+  <!-- TECHNICAL METADATA -->
+  <div class="section-title">{{ T.metadata }}</div>
+  <div class="card">
+    <table class="kv">
+      <tr><td class="k">{{ T.file_hash }}</td><td class="v mono">{{ r.file.sha256 }}</td></tr>
+      <tr><td class="k">{{ T.pdf_version }} · {{ T.pages }}</td><td class="v">PDF {{ r.metadata.pdf_version }} · {{ r.metadata.page_count }} · {{ r.metadata.page_sizes }}</td></tr>
+      <tr><td class="k">{{ T.fonts }}</td><td class="v">{% for f in r.metadata.fonts %}<span class="badge-soft">{{ f.basefont }}{{ ' ✓' if f.embedded }}</span> {% endfor %}{{ '—' if not r.metadata.fonts }}</td></tr>
+      <tr><td class="k">%%EOF · {{ T.incremental }}</td><td class="v">{{ r.metadata.eof_count }} · {{ r.tamper.incremental_updates }}</td></tr>
+      <tr><td class="k">Annotations · JS</td><td class="v">{{ r.metadata.annotation_count }} · {{ 'var' if r.metadata.js_present else 'yok' }}</td></tr>
+      <tr><td class="k">Doc ID</td><td class="v mono">{{ r.metadata.doc_id_permanent[:24] or '—' }}</td></tr>
+    </table>
+  </div>
+
+  <div class="center" style="margin-top:26px;display:flex;gap:12px;justify-content:center">
+    <button class="btn" onclick="dl()">⬇ {{ T.download_json }}</button>
+    <a class="btn ghost" href="/?lang={{ L }}">＋ {{ T.new_analysis }}</a>
+  </div>
+
+  <details style="margin-top:22px">
+    <summary class="note" style="cursor:pointer">JSON</summary>
+    <pre class="codeblock" id="json">{{ report_json }}</pre>
+  </details>
+</main>
+
+<footer class="footer"><div class="container">{{ T.footer_note }} · v{{ version }} · {{ r.elapsed_ms }} ms</div></footer>
+
+<script>
+function dl(){
+  const blob=new Blob([document.getElementById('json').textContent],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download={{ r.file.name|tojson }}.replace(/\.pdf$/i,'')+'_analiz.json'; a.click();
+}
+</script>
+</body>
+</html>
