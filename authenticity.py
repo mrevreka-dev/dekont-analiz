@@ -58,6 +58,8 @@ EXPECTED_PRODUCERS = {
     "ing":       ["evopdf", "html to pdf"],   # ING -> EvoPdf HTML-to-PDF
     "isbank":    ["openpdf", "jasperreports", "itext"],  # İş Bankası -> JasperReports + OpenPDF
     "fiba":      ["aspose"],                   # Fibabanka -> Aspose.Words
+    "garanti":   ["adobe experience manager", "skia"],  # Garanti: web=Adobe AEM, mobil=Skia
+    "vakif":     ["skia", "chromium", "quartz"],  # VakıfBank: web=Skia/Chromium, mobil=iOS Quartz
 }
 
 # Belgeyi yeniden basmak/düzenlemek için kullanılan tipik TARAYICI/EDİTÖR üreticileri.
@@ -142,6 +144,8 @@ BANK_FONT_PROFILE = {
     "yapikredi": {"style": "random"},                           # Aspose: Calibri + CourierNew
     "akbank":    {"style": "random"},                           # OpenPDF: ArialNarrow
     "ing":       {"style": "none"},                             # gömülü font yok
+    "isbank":    {"style": "random", "require": {"arialmt"}},   # OpenPDF/JasperReports: ArialMT + Consolas
+    "fiba":      {"style": "random"},                           # Aspose: FreeSans
 }
 
 _SEQ_PREFIXES = {"AAAAAA", "BAAAAA", "CAAAAA", "DAAAAA", "EAAAAA", "FAAAAA", "GAAAAA", "HAAAAA"}
@@ -401,6 +405,8 @@ PRODUCER_LABEL = {
     "ing":       "EvoPdf (HTML-to-PDF)",
     "isbank":    "OpenPDF / JasperReports",
     "fiba":      "Aspose.Words",
+    "garanti":   "Adobe AEM (web) / Skia (mobil)",
+    "vakif":     "Skia/Chromium (web) / iOS Quartz (mobil)",
 }
 
 

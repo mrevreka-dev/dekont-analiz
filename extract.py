@@ -470,17 +470,35 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         # Gönderici adı: "SAYIN" sonrası satır
         ex.sender.name = _garanti_sender_name(lines)
         ex.sender.iban = _first_iban_after(joined, ["IBAN"]) or (ex.all_ibans[0] if ex.all_ibans else "")
-        # Alıcı
-        ex.receiver.name = _clean_name(_find_label(joined, ["ALACAKLI"]))
+        # Alıcı adı: FAST'ta "ALACAKLI : ad"; HAVALE'de "ALACAKLI HESAP : hesapNo ad"
+        _rn = _clean_name(_after_label(joined, "ALACAKLI", ["IBAN", "MASRAF", "TUTAR", "SIRA", "BSMV"]))
+        if not _rn:
+            _alh = _after_label(joined, "ALACAKLI HESAP",
+                                ["ALACAKLI IBAN", "IBAN", "MASRAF", "BSMV", "TUTAR", "SIRA"])
+            _rn = _clean_name(re.sub(r"^[\d/\s\.]+", "", _alh)) if _alh else ""
+        ex.receiver.name = _rn
         ex.receiver.iban = banks.normalize_iban(_find_label(joined, ["ALACAKLI IBAN"]))
+        ex.receiver.branch = _clean_name(_after_label(joined, "ALACAKLI ŞUBE",
+                                                      ["ALACAKLI HESAP", "ALACAKLI IBAN"]))
         # Tutar: "TUTAR : - 50,00 TL"
         amt_txt = _find_label(joined, ["TUTAR"])
         ex.amount.value = parse_amount(amt_txt)
         ex.amount.text = amt_txt
         cm = CURRENCY_RE.search(amt_txt or "")
         ex.amount.currency = (cm.group(1).upper() if cm else "TL")
-        ex.amount.fee = parse_amount(_find_label(joined, ["MASRAF"]))
-        ex.amount.total = parse_amount(_find_label(joined, ["KOMİSYON TOPLAMI", "KOMISYON TOPLAMI"]))
+        # Ücret: HAVALE'de "MASRAF TOPLAMI" (masraf+BSMV, tüm kesilen ücret) en doğrusu; yoksa
+        # FAST "MASRAF : 7,97" / HAVALE "MASRAF TUTARI : 7,98". (MASRAF HESABI bir hesap no'dur.)
+        # DİKKAT: "MASRAF TOPLAMI" işlem TOPLAMI DEĞİLDİR (yalnız ücretlerin toplamı) -> total'a yazma.
+        ex.amount.fee = parse_amount(_after_label(joined, "MASRAF TOPLAMI", ["YALNIZ", "SIRA", "TUTAR"])) \
+            or parse_amount(_after_label(joined, "MASRAF TUTARI", ["BSMV", "TUTAR"])) \
+            or parse_amount(_after_label(joined, "MASRAF", ["BSMV", "SIRA", "TUTAR", "HESABI"]))
+        # NOT: Garanti dekontunda ayrı bir işlem 'TOPLAM'ı yok; TUTAR transfer tutarıdır,
+        # 'MASRAF/KOMİSYON TOPLAMI' yalnız ücret toplamıdır -> ex.amount.total'a YAZMA.
+        ex.amount.total = None
+        # Sıra No (dekont referansı)
+        _sira = _find_label(joined, ["SIRA NO"])
+        if _sira:
+            ex.transaction.receipt_no = re.split(r"\s{2,}|TUTAR", _sira)[0].strip()
 
     # =============================================================
     #  VAKIFBANK formatı (çok sütunlu; okuma-sırası metni ile)
@@ -511,6 +529,15 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
             except Exception:
                 geo_ok = False
         if geo_ok:
+            # Çok satırlı firma unvanının son satırı komşu alana (MASRAF TUTARI) sızmış olabilir:
+            # "MASRAF TUTARI: TİCARET LİMİTED ŞİRKETİ 8,38 TL" -> ismin devamını geri ekle.
+            _raw = g.get("_raw", {}) or {}
+            _mt = _raw.get("MASRAF TUTARI", "") or ""
+            _lead = re.match(r"^\s*(\D+?)\s+\d[\d.]*,\d{2}", _mt)
+            if _lead and ex.sender.name and re.search(
+                    r"(VE|SANAY|T[İIİ]CARET|L[İIİ]M[İIİ]TED|ŞİRKET|SIRKET|A\.?Ş)",
+                    ex.sender.name.upper()):
+                ex.sender.name = _clean_name(ex.sender.name + " " + _lead.group(1).strip())
             # geometrik çıkarım tamam; IBAN'lardan banka tamamla ve bitir
             if not ex.receiver.bank and ex.receiver.iban:
                 ex.receiver.bank = banks.bank_label_from_iban(ex.receiver.iban)
