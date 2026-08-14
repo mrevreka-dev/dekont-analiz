@@ -12,6 +12,18 @@
 {% set riskcolor = {'authentic':'var(--good)','low':'var(--good)','medium':'var(--warning)','high':'var(--serious)','critical':'var(--critical)'}[risk] %}
 {% set sevcolor = {'critical':'var(--critical)','high':'var(--serious)','medium':'var(--warning)','low':'var(--text-muted)','info':'var(--accent)'} %}
 {% set findings = r.findings_tr if L=='tr' else r.findings_en %}
+{# Belge/fiş numarasındaki gömülü tarih ↔ işlem tarihi çelişkisi: ilgili alanı kırmızı işaretlemek için ayrıştır #}
+{% set rnd = namespace(hit=false, field='', embedded='', txn='') %}
+{% for f in findings %}
+  {% if f.code == 'RECEIPT_NO_DATE_MISMATCH' and f.detail %}
+    {% set rnd.hit = true %}
+    {% for part in f.detail.split(' ') %}
+      {% if part.startswith('field=') %}{% set rnd.field = part[6:] %}{% endif %}
+      {% if part.startswith('embedded=') %}{% set rnd.embedded = part[9:] %}{% endif %}
+      {% if part.startswith('txn=') %}{% set rnd.txn = part[4:] %}{% endif %}
+    {% endfor %}
+  {% endif %}
+{% endfor %}
 {% set circ = 552.92 %}
 
 <header class="topbar"><div class="container">
@@ -305,8 +317,20 @@
         {% if ex.amount.fee is not none %}<tr><td class="k">{{ T.fee }}</td><td class="v">{{ ex.amount.fee }} {{ ex.amount.currency }}</td></tr>{% endif %}
         {% if ex.amount.total is not none %}<tr><td class="k">{{ T.total }}</td><td class="v">{{ ex.amount.total }} {{ ex.amount.currency }}</td></tr>{% endif %}
         {% if ex.transaction.date %}<tr><td class="k">{{ T.date }}</td><td class="v">{{ ex.transaction.date }}</td></tr>{% endif %}
-        {% if ex.transaction.ref_no %}<tr><td class="k">{{ T.ref }}</td><td class="v mono">{{ ex.transaction.ref_no }}</td></tr>{% endif %}
-        {% if ex.transaction.document_no %}<tr><td class="k">{{ T.doc_no }}</td><td class="v mono">{{ ex.transaction.document_no }}</td></tr>{% endif %}
+        {% if ex.transaction.ref_no %}<tr><td class="k">{{ T.ref }}</td>
+          <td class="v mono">
+          {% if rnd.hit and rnd.field == 'ref_no' %}
+            <span style="color:var(--critical);font-weight:800">{{ ex.transaction.ref_no }}</span>
+            <div style="color:var(--critical);font-weight:800;font-size:12px;line-height:1.4;margin-top:4px;white-space:normal">⚠ {% if L=='tr' %}Bu numara {{ rnd.embedded.split('-')[2] }}.{{ rnd.embedded.split('-')[1] }}.{{ rnd.embedded.split('-')[0] }} tarihini taşıyor; dekonttaki işlem saati ({{ ex.transaction.date }}) ile UYUŞMUYOR — tarih sonradan değiştirilmiş olabilir (sahtecilik şüphesi).{% else %}This number carries the date {{ rnd.embedded }}; it does NOT match the transaction time shown ({{ ex.transaction.date }}) — the date may have been altered (forgery risk).{% endif %}</div>
+          {% else %}{{ ex.transaction.ref_no }}{% endif %}
+          </td></tr>{% endif %}
+        {% if ex.transaction.document_no %}<tr><td class="k">{{ T.doc_no }}</td>
+          <td class="v mono">
+          {% if rnd.hit and rnd.field == 'document_no' %}
+            <span style="color:var(--critical);font-weight:800">{{ ex.transaction.document_no }}</span>
+            <div style="color:var(--critical);font-weight:800;font-size:12px;line-height:1.4;margin-top:4px;white-space:normal">⚠ {% if L=='tr' %}Bu numara {{ rnd.embedded.split('-')[2] }}.{{ rnd.embedded.split('-')[1] }}.{{ rnd.embedded.split('-')[0] }} tarihini taşıyor; dekonttaki işlem saati ({{ ex.transaction.date }}) ile UYUŞMUYOR — tarih sonradan değiştirilmiş olabilir (sahtecilik şüphesi).{% else %}This number carries the date {{ rnd.embedded }}; it does NOT match the transaction time shown ({{ ex.transaction.date }}) — the date may have been altered (forgery risk).{% endif %}</div>
+          {% else %}{{ ex.transaction.document_no }}{% endif %}
+          </td></tr>{% endif %}
         {% if ex.transaction.ettn %}<tr><td class="k">ETTN</td><td class="v mono">{{ ex.transaction.ettn }}</td></tr>{% endif %}
         {% if ex.transaction.type %}<tr><td class="k">{{ T.txn_type }}</td><td class="v">{{ ex.transaction.type }}</td></tr>{% endif %}
         {% if ex.transaction.channel %}<tr><td class="k">{{ T.channel }}</td><td class="v">{{ ex.transaction.channel }}</td></tr>{% endif %}
