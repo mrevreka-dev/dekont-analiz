@@ -377,8 +377,19 @@
       </table>
       <p class="note" style="margin-bottom:0">{{ T.timing_note }}</p>
       <table class="kv" style="margin-top:8px">
-        <tr><td class="k">{{ T.producer }}</td><td class="v">{{ r.metadata.producer or '—' }}</td></tr>
+        <tr><td class="k">{{ 'Gerçek üretici (bu PDF)' if L=='tr' else 'Actual compiler (this PDF)' }}</td>
+          <td class="v mono">{{ r.metadata.producer or '—' }}{% if r.metadata.creator %}<div style="color:var(--text-muted);font-size:11px">↳ {{ 'oluşturan' if L=='tr' else 'creator' }}: {{ r.metadata.creator }}</div>{% endif %}</td></tr>
+        {% if r.metadata.producer_check and r.metadata.producer_check.bank_known %}
+        <tr><td class="k">{{ 'Beklenen üretici (bu banka)' if L=='tr' else 'Expected compiler (this bank)' }}</td>
+          <td class="v">{{ r.metadata.producer_check.expected_label }}</td></tr>
+        {% endif %}
       </table>
+      {% if r.metadata.producer_check %}{% set pc = r.metadata.producer_check %}
+        {% set pcolor = 'var(--good)' if pc.status=='match' else ('var(--text-muted)' if pc.status=='unknown_bank' else ('var(--serious)' if pc.status=='no_producer' else 'var(--critical)')) %}
+        <div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb, {{ pcolor }} 12%, transparent);color:{{ pcolor }};{% if pc.status in ['resave','mismatch','no_producer'] %}font-weight:800{% else %}font-weight:600{% endif %};font-size:12px;line-height:1.45;white-space:normal">
+          {{ '✓' if pc.status=='match' else ('ⓘ' if pc.status=='unknown_bank' else '⚠') }} {{ pc.tr if L=='tr' else pc.en }}
+        </div>
+      {% endif %}
     </div>
   </div>
 
