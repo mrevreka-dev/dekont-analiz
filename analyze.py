@@ -621,6 +621,11 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _idt:
                 findings.append(Finding(_idt["code"], _idt["severity"], "content", _idt["weight"],
                                         tr=_idt["tr"], en=_idt["en"], detail=_idt.get("detail", "")))
+            # Deterministik IBAN/banka-tutarlılığı (mod-97, ihracçı-taraf, alıcı-bankası)
+            for _d in _auth.deterministic_checks(_bkey, ex.sender.iban, ex.receiver.iban,
+                                                 ex.receiver.bank):
+                findings.append(Finding(_d["code"], _d["severity"], "content", _d["weight"],
+                                        tr=_d["tr"], en=_d["en"], detail=_d.get("detail", "")))
         except Exception:
             pass
 
@@ -636,6 +641,10 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 _w = 45 if df["code"] == "SEQ_DB_DUPLICATE" else 8
                 findings.append(Finding(df["code"], df["severity"], "content", _w,
                                         tr=df["tr"], en=df["en"], detail=df.get("detail", "")))
+            # KARA LİSTE: daha önce sahte damgalanmış belgeyle eşleşme
+            for bf in _store.check_blocklist(_pre):
+                findings.append(Finding(bf["code"], bf["severity"], "content", bf["weight"],
+                                        tr=bf["tr"], en=bf["en"], detail=bf.get("detail", "")))
         except Exception:
             db_findings = []
 
@@ -818,6 +827,8 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         try:
             import store as _store
             report["cross_db"]["recorded"] = _store.record(report)
+            # AUDIT LOG: her analiz (sahte dahil) — 'kaç yüklendi' + kara-liste temeli
+            _store.log_analysis(report)
         except Exception:
             pass
     return report

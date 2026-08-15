@@ -113,6 +113,24 @@ def iban_bank_code(iban: str) -> str:
     return m.group(1) if m else ""
 
 
+def iban_valid(iban: str) -> bool | None:
+    """Türk IBAN'ının biçim + mod-97 kontrol basamağını doğrular.
+    Döner: True (geçerli), False (geçersiz/tahrif), None (TR IBAN kalıbı yok -> kontrol edilemez).
+    Kural (ISO 13616): ilk 4 karakter (TRkk) sona alınır, harfler sayıya çevrilir (T=29, R=27),
+    97'ye bölümünden kalan 1 olmalıdır."""
+    s = normalize_iban(iban)
+    if not re.fullmatch(r"TR\d{24}", s):
+        return None                                # TR IBAN değil -> bu kontrol uygulanmaz
+    rearr = s[4:] + s[:4]
+    digits = ""
+    for ch in rearr:
+        digits += ch if ch.isdigit() else str(ord(ch) - 55)   # A=10 ... T=29, R=27
+    try:
+        return int(digits) % 97 == 1
+    except ValueError:
+        return None
+
+
 def bank_from_iban(iban: str) -> str:
     """IBAN banka kodundan banka adını döndürür; bilinmiyorsa boş."""
     code = iban_bank_code(iban)

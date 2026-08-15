@@ -461,3 +461,100 @@ def producer_assessment(bkey: str, producer: str, creator: str = "", resaved: bo
         out["en"] = (f"MISMATCH: this bank uses {exp_label}; this PDF was produced by '{prod}'. "
                      f"Different compiler — not the bank's original output.")
     return out
+
+
+# --- (D) Deterministik IBAN / banka-tutarlılığı kontrolleri -------------------------------
+# Bunlar olasılık değil KESİN kurallardır; elimizdeki tüm gerçek dekontlarda doğrulanmıştır
+# (sıfır yanlış-pozitif). Yalnızca gerekli veri MEVCUTKEN çalışır.
+
+# İhracçı banka anahtarı -> o bankaya ait geçerli IBAN kodları (hesap sahibinin IBAN'ı bunlardan
+# biriyle başlamalıdır). Enpara/QNB tarihsel olarak 00111 (Finansbank) idi; Enpara artık 00157.
+_ISSUER_IBAN_CODES = {
+    "ziraat": {"00010", "00160", "00209"},
+    "halk":   {"00012"},
+    "vakif":  {"00015", "00210"},
+    "akbank": {"00046"},
+    "garanti": {"00062"},
+    "isbank": {"00064"},
+    "yapikredi": {"00067"},
+    "ing":    {"00099"},
+    "fiba":   {"00103"},
+    "qnb":    {"00111"},
+    "enpara": {"00157", "00111"},
+}
+
+
+def _canon_bank(text: str) -> str:
+    """Serbest metin banka adını kanonik ada indirger (banks.NAME_KEYWORDS ile).
+    'Yapı VE Kredi', 'A.Ş.' gibi ekler eşleşmeyi bozmasın diye sadeleştirilir."""
+    import banks as _b
+    t = (text or "").lower().replace("̇", "")
+    t = re.sub(r"\bve\b", " ", t)                  # 'yapı ve kredi' -> 'yapı  kredi'
+    t = re.sub(r"\s+", " ", t)
+    if not t.strip():
+        return ""
+    for pat, name in _b.NAME_KEYWORDS:
+        if re.search(pat, t):
+            return name
+    return ""
+
+
+def deterministic_checks(bkey: str, sender_iban: str, receiver_iban: str,
+                         receiver_bank_text: str) -> list[dict]:
+    """IBAN geçerliliği + ihracçı-taraf + alıcı-bankası tutarlılığı. Bulgu listesi döndürür."""
+    import banks as _b
+    out = []
+    s_iban = _b.normalize_iban(sender_iban)
+    r_iban = _b.normalize_iban(receiver_iban)
+
+    # (1) IBAN mod-97 geçerliliği: geçersiz IBAN = tahrifat/uydurma (dijital dekontta yazım hatası olmaz)
+    for label, ib in (("gönderen", s_iban), ("alıcı", r_iban)):
+        v = _b.iban_valid(ib)
+        if v is False:
+            out.append({
+                "code": "IBAN_INVALID", "severity": "high", "weight": 32,
+                "tr": f"GEÇERSİZ IBAN ({label}): ‘{ib}’ IBAN kontrol basamağı (mod-97) tutmuyor. "
+                      f"Bankaların ürettiği dekontlarda IBAN her zaman geçerlidir; geçersiz IBAN, "
+                      f"numaranın elle değiştirildiğini/uydurulduğunu gösterir.",
+                "en": f"INVALID IBAN ({label}): '{ib}' fails the IBAN check digit (mod-97). Genuine bank "
+                      f"receipts always carry valid IBANs; an invalid one indicates it was altered/fabricated.",
+                "detail": f"{label}_iban={ib}",
+            })
+
+    # (A) İhracçı-taraf tutarlılığı: yalnızca HER İKİ IBAN da varken çalışır (hesap sahibi tarafı
+    #     eksikse yanlış-pozitif olmasın). İhracçının kodu iki taraftan hiçbirinde yoksa -> tahrifat.
+    codes = _ISSUER_IBAN_CODES.get(bkey)
+    if codes and s_iban and r_iban:
+        sc, rc = _b.iban_bank_code(s_iban), _b.iban_bank_code(r_iban)
+        if sc and rc and not (codes & {sc, rc}):
+            exp = "/".join(sorted(codes))
+            out.append({
+                "code": "ISSUER_IBAN_MISMATCH", "severity": "critical", "weight": 46,
+                "tr": f"İHRAÇÇI-TARAF UYUŞMAZLIĞI: Bu bir {bkey.upper()} dekontu ve hesap sahibi bu bankada "
+                      f"olmalı (IBAN kodu {exp}); oysa ne gönderen ({sc}) ne alıcı ({rc}) IBAN'ı bu bankaya ait. "
+                      f"Gerçek bir dekontta taraflardan biri mutlaka ihraç eden bankanın müşterisidir — bu belge "
+                      f"büyük olasılıkla başka bir bankanın şablonundan/dekontundan üretilmiş, SAHTE.",
+                "en": f"ISSUER-PARTY MISMATCH: this is a {bkey} receipt so the account holder must bank there "
+                      f"(IBAN code {exp}), yet neither sender ({sc}) nor receiver ({rc}) IBAN belongs to it. "
+                      f"In a genuine receipt one party is always the issuing bank's customer — likely forged.",
+                "detail": f"issuer={bkey} expected={exp} sender={sc} receiver={rc}",
+            })
+
+    # (B) Alıcı bankası ↔ alıcı IBAN kodu: dekontta YAZAN alıcı bankası ile IBAN'ın bankası çelişiyorsa.
+    #     Yalnızca ikisi de BİLİNEN ve FARKLI bankaya çözülürse tetiklenir (ihtiyatlı).
+    if r_iban and receiver_bank_text:
+        iban_bank = _b.bank_from_iban(r_iban)               # IBAN kodundan resmi ad
+        stated = _canon_bank(receiver_bank_text)
+        iban_canon = _canon_bank(iban_bank)
+        if iban_canon and stated and iban_canon != stated:
+            out.append({
+                "code": "RECEIVER_BANK_MISMATCH", "severity": "high", "weight": 36,
+                "tr": f"ALICI BANKASI ÇELİŞKİSİ: Dekontta alıcı bankası ‘{receiver_bank_text}’ yazıyor, ancak "
+                      f"alıcı IBAN'ının banka kodu {iban_bank}’a ait. İsim ile IBAN farklı bankaları gösteriyor "
+                      f"— alıcı adı/bankası ya da IBAN sonradan değiştirilmiş olabilir (olası SAHTE).",
+                "en": f"RECEIVER BANK CONTRADICTION: the stated receiver bank is '{receiver_bank_text}', but the "
+                      f"receiver IBAN's bank code belongs to {iban_bank}. Name and IBAN point to different banks "
+                      f"— the receiver name/bank or IBAN may have been altered (possible forgery).",
+                "detail": f"stated={stated} iban_bank={iban_canon}",
+            })
+    return out

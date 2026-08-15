@@ -58,6 +58,15 @@ def _connect():
         sha256 TEXT UNIQUE, score INTEGER, created_at TEXT )""")
     con.execute("CREATE INDEX IF NOT EXISTS idx_bank_seq ON receipts(bank, seq_number)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_bank_sender ON receipts(bank, sender_iban)")
+    # AUDIT LOG: HER analiz (sahte dahil) buraya yazılır -> toplam yükleme sayısı + kara-liste.
+    con.execute("""CREATE TABLE IF NOT EXISTS analyses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sha256 TEXT UNIQUE, bank TEXT, is_receipt INTEGER,
+        score INTEGER, risk TEXT, is_fake INTEGER,
+        seq_number TEXT, ref_no TEXT, document_no TEXT,
+        amount REAL, txn_date TEXT, codes TEXT, created_at TEXT )""")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_an_bankseq ON analyses(bank, seq_number)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_an_fake ON analyses(is_fake)")
     con.commit()
     return con
 
@@ -183,7 +192,8 @@ def record(report: dict) -> bool:
     _BAD = {"REV_AMOUNT_CHANGED", "REV_CONTENT_CHANGED", "TIME_FILE_BEFORE_TXN", "SINGLE_PHOTO_PDF",
             "QR_MISMATCH", "SEQ_DB_DUPLICATE", "RECEIPT_NO_DATE_MISMATCH", "PRODUCER_MISMATCH",
             "AMOUNT_MISMATCH", "BROWSER_RERENDER", "FONT_BROWSER_RERENDER", "FONT_SET_MISMATCH",
-            "INTERNAL_DATE_MISMATCH", "PDFIUM_PRODUCED"}
+            "INTERNAL_DATE_MISMATCH", "PDFIUM_PRODUCED",
+            "IBAN_INVALID", "ISSUER_IBAN_MISMATCH", "RECEIVER_BANK_MISMATCH"}
     if codes & _BAD:
         return False
     f = _fields(report)
@@ -209,6 +219,85 @@ def record(report: dict) -> bool:
         con.close()
 
 
+_FAKE_CODES = {"REV_AMOUNT_CHANGED", "REV_CONTENT_CHANGED", "TIME_FILE_BEFORE_TXN", "SINGLE_PHOTO_PDF",
+               "QR_MISMATCH", "SEQ_DB_DUPLICATE", "RECEIPT_NO_DATE_MISMATCH", "PRODUCER_MISMATCH",
+               "AMOUNT_MISMATCH", "BROWSER_RERENDER", "FONT_BROWSER_RERENDER", "FONT_SET_MISMATCH",
+               "INTERNAL_DATE_MISMATCH", "PDFIUM_PRODUCED", "IBAN_INVALID", "ISSUER_IBAN_MISMATCH",
+               "RECEIVER_BANK_MISMATCH", "STATEMENT_BALANCE_BREAK", "STATEMENT_ROW_COUNT_MISMATCH"}
+
+
+def log_analysis(report: dict) -> bool:
+    """HER analizi (sahte/gerçek fark etmez) audit log'a yazar. Aynı dosya (sha256) bir kez sayılır.
+    'kaç dekont yüklendi' sorusunun ve kara-listenin temeli budur."""
+    if not enabled():
+        return False
+    f = _fields(report)
+    if not f["sha256"]:
+        return False
+    sc = report.get("score", {})
+    cls = report.get("classification", {})
+    codes = sorted({x.get("code") for x in report.get("findings_en", []) if x.get("code")})
+    is_fake = 1 if (set(codes) & _FAKE_CODES) or (sc.get("authenticity_score") or 100) < 50 else 0
+    try:
+        con = _connect()
+    except Exception:
+        return False
+    try:
+        con.execute(
+            "INSERT OR IGNORE INTO analyses (sha256, bank, is_receipt, score, risk, is_fake, "
+            "seq_number, ref_no, document_no, amount, txn_date, codes, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (f["sha256"], f["bank"], 1 if cls.get("is_receipt") else 0,
+             sc.get("authenticity_score"), sc.get("risk_level"), is_fake,
+             f["seq_number"], f["ref_no"], f["document_no"], f["amount"], f["txn_date"],
+             ",".join(c for c in codes if c in _FAKE_CODES), _dt.datetime.utcnow().isoformat()))
+        con.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        con.close()
+
+
+def check_blocklist(report: dict) -> list[dict]:
+    """Yüklenen dosya, DAHA ÖNCE SAHTE olarak görülmüş bir belgeyle eşleşiyor mu?
+    (a) Aynı dosya (sha256) daha önce sahte damgalandıysa, (b) aynı banka+sıra numarası
+    daha önce sahte bir belgede görüldüyse -> KNOWN_FAKE."""
+    if not enabled():
+        return []
+    f = _fields(report)
+    out = []
+    if not f["sha256"]:
+        return out
+    try:
+        con = _connect()
+    except Exception:
+        return out
+    try:
+        r = con.execute("SELECT is_fake, codes FROM analyses WHERE sha256=? AND is_fake=1",
+                        (f["sha256"],)).fetchone()
+        hit_seq = None
+        if not r and f["bank"] and f["seq_number"]:
+            hit_seq = con.execute(
+                "SELECT codes FROM analyses WHERE bank=? AND seq_number=? AND is_fake=1 AND sha256<>? LIMIT 1",
+                (f["bank"], f["seq_number"], f["sha256"])).fetchone()
+        if r or hit_seq:
+            why = ("aynı dosya daha önce sahte olarak işaretlenmişti" if r
+                   else f"aynı banka+sıra numarası ({f['seq_number']}) daha önce sahte bir belgede görüldü")
+            out.append({
+                "code": "KNOWN_FAKE", "severity": "critical", "weight": 60,
+                "tr": f"KARA LİSTE: Bu belge daha önce SAHTE olarak tespit edilmiş bir belgeyle eşleşiyor "
+                      f"({why}). Bilinen sahte — yüksek risk.",
+                "en": f"BLOCKLIST: this document matches a previously flagged forgery ({why}). Known fake.",
+                "detail": f"sha={f['sha256'][:12]} bank={f['bank']} seq={f['seq_number']}",
+            })
+    except Exception:
+        pass
+    finally:
+        con.close()
+    return out
+
+
 def stats() -> dict:
     if not enabled():
         return {"enabled": False, "count": 0, "banks": []}
@@ -216,9 +305,26 @@ def stats() -> dict:
         con = _connect()
         try:
             n = con.execute("SELECT COUNT(*) FROM receipts").fetchone()[0]
-            banks = [r[0] for r in con.execute(
-                "SELECT bank, COUNT(*) c FROM receipts GROUP BY bank ORDER BY c DESC").fetchall()]
-            return {"enabled": True, "count": n, "banks": banks, "db_path": _db_path()}
+            banks_rows = con.execute(
+                "SELECT bank, COUNT(*) c FROM receipts GROUP BY bank ORDER BY c DESC").fetchall()
+            banks = [r[0] for r in banks_rows]
+            banks_detail = [{"bank": r[0], "count": r[1]} for r in banks_rows]
+            rng = con.execute("SELECT MIN(txn_date), MAX(txn_date), "
+                              "ROUND(SUM(amount),2), ROUND(AVG(amount),2) FROM receipts").fetchone()
+            out = {"enabled": True, "count": n, "banks": banks, "banks_detail": banks_detail,
+                   "amount_total": rng[2], "amount_avg": rng[3], "db_path": _db_path()}
+            # AUDIT: tüm yüklemeler (sahte dahil)
+            try:
+                total = con.execute("SELECT COUNT(*) FROM analyses").fetchone()[0]
+                fake = con.execute("SELECT COUNT(*) FROM analyses WHERE is_fake=1").fetchone()[0]
+                by_bank = [{"bank": r[0], "count": r[1], "fake": r[2]} for r in con.execute(
+                    "SELECT COALESCE(NULLIF(bank,''),'(bilinmiyor)') b, COUNT(*), SUM(is_fake) "
+                    "FROM analyses GROUP BY b ORDER BY COUNT(*) DESC").fetchall()]
+                out["audit"] = {"total_uploads": total, "fake": fake, "genuine": total - fake,
+                                "by_bank": by_bank}
+            except Exception:
+                pass
+            return out
         finally:
             con.close()
     except Exception as e:

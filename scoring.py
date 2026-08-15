@@ -129,6 +129,14 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 30)
     if "PDFIUM_PRODUCED" in codes:            # PDFium = yeniden basım (global sahte kuralı)
         score = min(score, 5)
+    if "KNOWN_FAKE" in codes:                # kara-liste: daha önce sahte damgalanmış
+        score = min(score, 5)
+    if "ISSUER_IBAN_MISMATCH" in codes:       # ihracçının kodu taraf IBAN'larında yok (kesin)
+        score = min(score, 8)
+    if "IBAN_INVALID" in codes:               # IBAN mod-97 tutmuyor
+        score = min(score, 20)
+    if "RECEIVER_BANK_MISMATCH" in codes:     # yazan alıcı bankası ≠ IBAN bankası
+        score = min(score, 12)
     if codes & {"BROWSER_RERENDER", "FONT_BROWSER_RERENDER"}:  # tarayıcıyla yeniden basım
         score = min(score, 8)
     if "FONT_SET_MISMATCH" in codes:         # font kümesi bankanın şablonuyla uyuşmuyor
