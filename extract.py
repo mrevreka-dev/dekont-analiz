@@ -17,7 +17,7 @@ from typing import Any
 import pdfplumber
 import io
 
-from . import banks
+import banks
 
 # ----------------------- Desen tanıyıcılar -----------------------
 IBAN_RE = re.compile(r"\bTR\d{2}(?:[ ]?\d{4}){5}[ ]?\d{2}\b", re.I)
@@ -531,7 +531,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         geo_ok = False
         if pdf_bytes:
             try:
-                from . import geo
+                import geo
                 g = geo.vakif_fields(pdf_bytes)
                 if g:
                     geo_ok = True
@@ -1013,7 +1013,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     # =============================================================
     else:
         ex.doc_kind = "Dekont"
-        from . import universal
+        import universal
         u = universal.universal_extract(pdf_bytes, joined, rjoined)
         ex.sender.name = u["sender_name"]
         ex.sender.iban = u["sender_iban"]
