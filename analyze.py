@@ -631,6 +631,11 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _af:
                 findings.append(Finding(_af["code"], _af["severity"], "fonts", _af["weight"],
                                         tr=_af["tr"], en=_af["en"], detail=_af.get("detail", "")))
+            # Maskeli alıcı adı (ör. 'BA***** AŞ*****'): IBAN geçerliyse EKSİK BİLGİ DEĞİLDİR (bilgi notu)
+            _mn = _auth.check_masked_name(ex.receiver.name, ex.receiver.iban, text_layout)
+            if _mn:
+                findings.append(Finding(_mn["code"], _mn["severity"], "content", _mn["weight"],
+                                        tr=_mn["tr"], en=_mn["en"], detail=_mn.get("detail", "")))
         except Exception:
             pass
 

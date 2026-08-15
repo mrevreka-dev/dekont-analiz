@@ -626,3 +626,26 @@ def check_amount_font(pdf_bytes: bytes, amount_value) -> dict | None:
             "detail": f"foreign_fonts={foreign}",
         }
     return None
+
+
+def check_masked_name(receiver_name: str, receiver_iban: str, text: str) -> dict | None:
+    """Alıcı adı banka tarafından yıldızla maskelenmişse (ör. 'BA***** AŞ*****): IBAN geçerli ve
+    açık baş harfler mevcutsa bu EKSİK/şüpheli bilgi DEĞİLDİR, bankanın standart gizleme biçimidir.
+    Bilgilendirici (nötr) bir not döndürür."""
+    import banks as _b
+    nm = (receiver_name or "").strip()
+    if "*" not in nm:
+        return None
+    visible = re.sub(r"\*+", "", nm).strip()
+    if not visible:
+        return None                              # tamamen maskeli, açık harf yok -> not verme
+    if _b.iban_valid(receiver_iban) is False:
+        return None                              # IBAN geçersizse zaten IBAN_INVALID tetiklenir
+    return {
+        "code": "MASKED_RECEIVER_NAME", "severity": "info", "weight": 0,
+        "tr": f"Alıcı adı banka tarafından gizlilik gereği maskelenmiştir ({nm}). Alıcı IBAN geçerli ve "
+              f"adın açık baş harfleri mevcut — bu EKSİK BİLGİ DEĞİLDİR, bankanın standart maskelemesidir.",
+        "en": f"The receiver name is masked by the bank for privacy ({nm}). The receiver IBAN is valid and the "
+              f"visible initials are present — this is NOT missing data, just the bank's standard masking.",
+        "detail": f"visible={visible}",
+    }

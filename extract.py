@@ -743,11 +743,13 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     elif is_yapikredi:
         ex.doc_kind = "e-Dekont"
         rt = joined                                  # hizalı layout metni
-        _YS = ["GÖNDEREN ADI", "ALICI ADI", "ALICI BANKA", "ALICI ŞUBE", "ALICI HESAP",
-               "ALICI TCKN", "GÖNDEREN HESAP", "İŞLEM REF", "SIRA NO", "PERSONEL", "BELGE",
-               "VALÖR", "DEKONT TİPİ", "SENARYO", "ETTN", "GİDEN FAST TUTARI", "VERGİ",
-               "KOMİSYON", "DÖVİZ", "TOPLAM TAHSILAT", "ÖDEMENİN", "MESAJ TÜRÜ", "SORGU NO",
-               "KOLAY ADRES", "AÇIKLAMA", "MÜŞTERİ NO", "IBAN", "TCKN", "VD", "VKN"]
+        _YS = ["GÖNDEREN ADI", "ALICI ADI", "ALACAKLI ADI", "ALICI BANKA", "ALICI ŞUBE",
+               "ALICI HESAP", "ALACAKLI HESAP", "ALICI TCKN", "GÖNDEREN HESAP", "HESAP NUMARASI",
+               "İŞLEM REF", "SIRA NO", "PERSONEL", "BELGE", "VALÖR", "DEKONT TİPİ", "SENARYO",
+               "ETTN", "GİDEN FAST TUTARI", "ISLEM TUTARI", "İŞLEM TUTARI", "VERGİ", "VERGI",
+               "KOMİSYON", "NET TUTAR", "DÖVİZ", "DÖVIZ", "TOPLAM TAHSILAT", "ÖDEMENİN",
+               "MESAJ TÜRÜ", "SORGU NO", "KOLAY ADRES", "AÇIKLAMA", "MÜŞTERİ NO", "IBAN",
+               "TCKN", "VD", "VKN"]
 
         def _yk_amt(lbl):
             raw = _after_label(rt, lbl, _YS)
@@ -755,12 +757,19 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
             v = _parse_money_token(mm.group(0)) if mm else None
             return abs(v) if v is not None else None
 
-        # Taraflar
+        # Taraflar. Alıcı adı: 'ALICI ADI' (FAST) ya da 'ALACAKLI ADI' (HESAPTAN HESABA HAVALE).
+        # Bu formatta ALICI ADI maskeli olabilir: 'BA***** AŞ*****' -> olduğu gibi al (eksik değil).
         ex.sender.name = _clean_name(_after_label(rt, "GÖNDEREN ADI", _YS))
-        ex.receiver.name = _clean_name(_after_label(rt, "ALICI ADI", _YS))
+        if not ex.sender.name:
+            # e-Dekont HAVALE-BORÇ: hesap sahibi adı altta 'AD SOYAD Ticari Unvan:' önünde
+            _sm = re.search(r"([A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜ.\- ]{3,}?)\s+Ticari Unvan", rt)
+            ex.sender.name = _clean_name(_sm.group(1)) if _sm else ""
+        ex.receiver.name = _clean_name(_after_label(rt, "ALACAKLI ADI", _YS)
+                                       or _after_label(rt, "ALICI ADI", _YS))
         ex.receiver.bank = _clean_name(_after_label(rt, "ALICI BANKA", _YS))
-        # IBAN'lar
-        r_ib = IBAN_RE.search(_after_label(rt, "ALICI HESAP", _YS) or "")
+        # IBAN'lar. Alıcı: 'ALICI HESAP' (FAST) ya da 'ALACAKLI HESAP :.../IBAN:TR..' (havale)
+        r_ib = IBAN_RE.search(_after_label(rt, "ALACAKLI HESAP", _YS) or "") \
+            or IBAN_RE.search(_after_label(rt, "ALICI HESAP", _YS) or "")
         ex.receiver.iban = banks.normalize_iban(r_ib.group(0)) if r_ib else ""
         s_ib = IBAN_RE.search(_after_label(rt, "GÖNDEREN HESAP NO", _YS) or "") \
             or IBAN_RE.search(_find_label(rt, ["IBAN NO", "IBAN"]) or "")
@@ -771,15 +780,18 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
                 if ib != ex.receiver.iban:
                     ex.sender.iban = ib
                     break
-        # Tutar ve masraf kalemleri (negatif/ondalık: -22700, -22716.76, -15.96, -0.80)
-        ex.amount.value = _yk_amt("GİDEN FAST TUTARI")
+        # Tutar ve masraf kalemleri (negatif/ondalık). Etiket iki formatta farklı:
+        #  FAST: 'GİDEN FAST TUTARI', 'KOMİSYON', 'VERGİ', 'TOPLAM TAHSILAT TUTARI'
+        #  HAVALE-BORÇ: 'ISLEM TUTARI', 'KOMİSYON TUTARI', 'VERGI/FON', 'NET TUTAR'
+        ex.amount.value = _yk_amt("GİDEN FAST TUTARI") or _yk_amt("ISLEM TUTARI") \
+            or _yk_amt("İŞLEM TUTARI")
         ex.amount.currency = (_after_label(rt, "DÖVİZ CİNSİ", _YS) or "TL").split()[0] if \
             _after_label(rt, "DÖVİZ CİNSİ", _YS) else "TL"
-        _kom = _yk_amt("KOMİSYON")
-        _ver = _yk_amt("VERGİ")
+        _kom = _yk_amt("KOMİSYON TUTARI") or _yk_amt("KOMİSYON")
+        _ver = _yk_amt("VERGI/FON") or _yk_amt("VERGİ/FON") or _yk_amt("VERGİ") or _yk_amt("VERGI")
         if _kom is not None or _ver is not None:
             ex.amount.fee = round((_kom or 0) + (_ver or 0), 2)
-        ex.amount.total = _yk_amt("TOPLAM TAHSILAT TUTARI")
+        ex.amount.total = _yk_amt("TOPLAM TAHSILAT TUTARI") or _yk_amt("NET TUTAR")
         # Zaman / referans / kanal / kimlik
         ex.transaction.date = _find_label(rt, ["İŞLEM TARİHİ", "ISLEM TARIHI"])
         ex.transaction.value_date = _find_label(rt, ["VALÖR", "VALOR"])
