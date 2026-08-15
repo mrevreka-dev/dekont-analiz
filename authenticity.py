@@ -558,3 +558,71 @@ def deterministic_checks(bkey: str, sender_iban: str, receiver_iban: str,
                 "detail": f"stated={stated} iban_bank={iban_canon}",
             })
     return out
+
+
+# --- (E) Alan-bazlı font tutarlılığı: TUTAR yabancı bir fontta mı? -----------------------
+# Gerçek dekontlarda tutar, belgenin ANA font ailesiyle yazılır (yoğun kullanım). Bir düzenleme
+# aracıyla tutar değiştirildiğinde, orijinal gömülü alt-küme font tam mevcut olmadığından
+# düzenlenen rakamlar FARKLI/yabancı bir fontta çıkar. Bu yüzden tutarın font AİLESİ belgede
+# başka yerde neredeyse hiç kullanılmıyorsa -> yapıştırılmış/oynanmış tutar şüphesi.
+def _font_family(fontname: str) -> str:
+    n = re.sub(r"^[A-Z]{6}\+", "", fontname or "").lower()      # alt-küme öneki (ABCDEF+) at
+    n = re.sub(r"[-,]?(bold|italic|oblique|regular|mt|ps|psmt)\b", "", n)
+    return re.sub(r"[^a-z]", "", n)
+
+
+def check_amount_font(pdf_bytes: bytes, amount_value) -> dict | None:
+    if not pdf_bytes or amount_value is None:
+        return None
+    try:
+        import pdfplumber, io as _io
+        with pdfplumber.open(_io.BytesIO(pdf_bytes)) as pdf:
+            chars = pdf.pages[0].chars
+    except Exception:
+        return None
+    if not chars:
+        return None
+    # belgedeki font AİLESİ kullanım sayıları
+    fam_use = {}
+    for c in chars:
+        fam_use[_font_family(c.get("fontname", ""))] = fam_use.get(_font_family(c.get("fontname", "")), 0) + 1
+    intpart = str(int(abs(amount_value)))
+    if len(intpart) < 3:                         # 3 haneden kısa tutarlarda çok az rakam -> güvenilmez
+        return None
+    # sayısal jetonları grupla (rakam + ., ,) ve tutar tamsayısıyla eşleşenleri bul
+    occ_fams = []
+    cur = []
+    for c in chars + [{"text": " ", "fontname": ""}]:
+        t = c.get("text", "")
+        if t.isdigit() or t in ".,":
+            cur.append(c)
+        else:
+            if cur:
+                digits = "".join(x["text"] for x in cur if x["text"].isdigit())
+                if digits.startswith(intpart) or intpart in digits:
+                    fams = {_font_family(x["fontname"]) for x in cur if x["text"].isdigit()}
+                    occ_fams.append(fams)
+            cur = []
+    if not occ_fams:
+        return None
+    # TÜM tutar geçişleri yabancı fonttaysa (ana metinde neredeyse hiç kullanılmayan aile) -> şüphe
+    MAIN = max(fam_use.values()) if fam_use else 0
+    def is_foreign(fam):
+        # aile kullanımı hem mutlak düşük (<25) hem de ana fonta göre çok küçük (<%2)
+        u = fam_use.get(fam, 0)
+        return u < 25 and (MAIN == 0 or u < 0.02 * MAIN)
+    all_foreign = all(all(is_foreign(f) for f in fams) for fams in occ_fams if fams)
+    if all_foreign and occ_fams:
+        foreign = sorted({f for fams in occ_fams for f in fams})
+        return {
+            "code": "AMOUNT_FONT_ANOMALY", "severity": "high", "weight": 28,
+            "tr": f"TUTAR FONT ANOMALİSİ: İşlem tutarı, belgenin ana fontundan farklı ve belgede başka "
+                  f"yerde kullanılmayan bir fontla ({', '.join(foreign)}) yazılmış. Gerçek dekontlarda tutar, "
+                  f"belgenin ana fontuyla basılır; farklı/yabancı font, tutarın sonradan düzenlenip "
+                  f"yapıştırıldığına işaret eder (olası SAHTE).",
+            "en": f"AMOUNT FONT ANOMALY: the amount is rendered in a font ({', '.join(foreign)}) that differs "
+                  f"from the document's main font and is used nowhere else. Genuine receipts print the amount "
+                  f"in the body font; a foreign font suggests the amount was edited/pasted (possible forgery).",
+            "detail": f"foreign_fonts={foreign}",
+        }
+    return None

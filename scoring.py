@@ -137,6 +137,8 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 20)
     if "RECEIVER_BANK_MISMATCH" in codes:     # yazan alıcı bankası ≠ IBAN bankası
         score = min(score, 12)
+    if "AMOUNT_FONT_ANOMALY" in codes:        # tutar yabancı fontta (yapıştırılmış)
+        score = min(score, 15)
     if codes & {"BROWSER_RERENDER", "FONT_BROWSER_RERENDER"}:  # tarayıcıyla yeniden basım
         score = min(score, 8)
     if "FONT_SET_MISMATCH" in codes:         # font kümesi bankanın şablonuyla uyuşmuyor

@@ -626,6 +626,11 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                                                  ex.receiver.bank):
                 findings.append(Finding(_d["code"], _d["severity"], "content", _d["weight"],
                                         tr=_d["tr"], en=_d["en"], detail=_d.get("detail", "")))
+            # Alan-bazlı font tutarlılığı: TUTAR yabancı/ana-dışı bir fontta mı (yapıştırılmış)?
+            _af = _auth.check_amount_font(pdf_bytes, ex.amount.value)
+            if _af:
+                findings.append(Finding(_af["code"], _af["severity"], "fonts", _af["weight"],
+                                        tr=_af["tr"], en=_af["en"], detail=_af.get("detail", "")))
         except Exception:
             pass
 
