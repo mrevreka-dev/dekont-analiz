@@ -304,7 +304,8 @@
     <div class="card">
       <div class="party-h">↘ {{ T.receiver }}</div>
       <table class="kv">
-        <tr><td class="k">{{ T.name }}</td><td class="v">{{ ex.receiver.name or '—' }}</td></tr>
+        <tr><td class="k">{{ T.name }}</td><td class="v">{{ ex.receiver.name or '—' }}
+          {% if ex.receiver.name and '*' in ex.receiver.name %}<div style="color:var(--text-muted);font-size:11px;margin-top:2px;white-space:normal">{{ 'Banka tarafından gizlilik gereği maskelenmiştir — eksik bilgi değildir.' if L=='tr' else 'Masked by the bank for privacy — not missing data.' }}</div>{% endif %}</td></tr>
         <tr><td class="k">{{ T.iban }}</td><td class="v mono">{{ ex.receiver.iban or '—' }}</td></tr>
         <tr><td class="k">{{ T.bank }}</td><td class="v">{{ ex.receiver.bank or '—' }}</td></tr>
       </table>
