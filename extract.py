@@ -17,7 +17,7 @@ from typing import Any
 import pdfplumber
 import io
 
-import banks
+from . import banks
 
 # ----------------------- Desen tanıyıcılar -----------------------
 IBAN_RE = re.compile(r"\bTR\d{2}(?:[ ]?\d{4}){5}[ ]?\d{2}\b", re.I)
@@ -447,18 +447,34 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.sender.tckn = _find_label(joined, ["TCKN", "TC Kimlik"])
         ex.sender.iban = _first_iban_after(joined, ["IBAN"]) or (ex.all_ibans[0] if ex.all_ibans else "")
         ex.sender.name = _isbank_sender_name(lines)
-        # Alıcı
-        ex.receiver.name = _clean_name(_find_label(joined, ["Alıcı Isim.?Unvan", "Alıcı İsim.?Unvan", "Alıcı Ad"]))
+        # Alıcı adı: FAST'ta 'Alıcı Isim\Unvan'; HAVALE (Para Aktarma) formatında iki-sütunlu
+        # 'Alıcı Hesap : <ad>' (ad maskeli olabilir: 'YU**** EM**** SO****').
+        _ISTOP = ["Alıcı Hesap", "Alıcı IBAN", "Alıcı Banka", "IBAN", "Sorgu", "Aktarılan",
+                  "Havale", "Toplam", "Ücret", "İşlem Türü", "Açıklama"]
+        ex.receiver.name = _clean_name(
+            _find_label(joined, ["Alıcı Isim.?Unvan", "Alıcı İsim.?Unvan", "Alıcı Ad"]))
+        if not ex.receiver.name:
+            ex.receiver.name = _clean_name(_after_label(joined, "Alıcı Hesap", _ISTOP))
         ex.receiver.iban = banks.normalize_iban(_find_label(joined, ["Alıcı IBAN"]))
         ex.receiver.bank = _find_label(joined, ["Alıcı Banka"])
-        # Tutar
-        amt_txt = _find_label(joined, ["İşlem Tutarı"])
+        # Tutar: FAST 'İşlem Tutarı'; HAVALE 'Aktarılan Tutar'
+        amt_txt = _find_label(joined, ["İşlem Tutarı"]) or _find_label(joined, ["Aktarılan Tutar"])
         ex.amount.value = parse_amount(amt_txt)
         ex.amount.text = amt_txt
         cm = CURRENCY_RE.search(amt_txt or "")
         ex.amount.currency = (cm.group(1).upper() if cm else "TRY")
-        ex.amount.fee = parse_amount(_find_label(joined, ["FAST Ücreti ve Vergi", "Ücret"]))
-        ex.amount.total = parse_amount(_find_label(joined, ["Toplam İşlem Tutarı"]))
+        # Ücret: FAST 'FAST Ücreti ve Vergi'; HAVALE 'Havale Ücreti+Vergi' (vergi dahil -> BSMV eklenmez)
+        ex.amount.fee = parse_amount(_find_label(joined, ["FAST Ücreti ve Vergi"])) \
+            or parse_amount(_after_label(joined, "Havale Ücreti+Vergi", ["Toplam", "Ücret Tah"])) \
+            or parse_amount(_find_label(joined, ["Ücret"]))
+        ex.amount.total = parse_amount(_find_label(joined, ["Toplam İşlem Tutarı"])) \
+            or parse_amount(_after_label(joined, "Toplam Tutar", ["Ücret Tah", "İşlem Türü", "TRY"]))
+        # Havale'de alıcı IBAN etiketsiz: gönderenden farklı (ikinci) IBAN
+        if not ex.receiver.iban:
+            for ib in ex.all_ibans:
+                if ib and ib != ex.sender.iban:
+                    ex.receiver.iban = ib
+                    break
 
     # =============================================================
     #  GARANTİ BBVA "HESAPTAN FAST" formatı
@@ -515,7 +531,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         geo_ok = False
         if pdf_bytes:
             try:
-                import geo
+                from . import geo
                 g = geo.vakif_fields(pdf_bytes)
                 if g:
                     geo_ok = True
@@ -997,7 +1013,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     # =============================================================
     else:
         ex.doc_kind = "Dekont"
-        import universal
+        from . import universal
         u = universal.universal_extract(pdf_bytes, joined, rjoined)
         ex.sender.name = u["sender_name"]
         ex.sender.iban = u["sender_iban"]
