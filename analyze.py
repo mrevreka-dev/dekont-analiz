@@ -600,6 +600,14 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _pr:
                 findings.append(Finding(_pr["code"], _pr["severity"], "metadata", _pr["weight"],
                                         tr=_pr["tr"], en=_pr["en"], detail=_pr.get("detail", "")))
+            # Bazı bankaların KABUL EDİLEN üreticisi bir tarayıcı/editör olabilir (VakıfBank=iOS
+            # Quartz/Skia, Ziraat=Skia, Garanti=Skia). Bu durumda genel EDITOR_PRODUCER cezası
+            # çifte-sayımdır: üretici bu banka için MEŞRU sayıldığından (pc=match) o cezayı kaldır.
+            _exp = _auth.EXPECTED_PRODUCERS.get(_bkey)
+            if _exp and _pr is None and _pf is None:
+                _pll = (struct.producer or "").lower()
+                if any(e in _pll for e in _exp):
+                    findings[:] = [f for f in findings if f.code != "EDITOR_PRODUCER"]
             # Font alt-küme parmak izi (tarayıcı yeniden basımı / eksik font)
             _ft = _auth.check_fonts(_bkey, pdf_bytes)
             if _ft:
