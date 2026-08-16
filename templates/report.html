@@ -198,7 +198,8 @@
       </div>
     </div>
     {% if bal.breaks %}
-    <table class="tbl" style="margin-top:12px">
+    <div class="table-scroll" style="margin-top:12px">
+    <table class="tbl">
       <thead><tr><th>{{ T.date }}</th><th>{{ 'Beklenen önceki bakiye' if L=='tr' else 'Expected prev. balance' }}</th>
         <th>{{ 'Görünen' if L=='tr' else 'Shown' }}</th><th>{{ 'Fark' if L=='tr' else 'Diff' }}</th></tr></thead>
       <tbody>
@@ -208,6 +209,7 @@
       {% endfor %}
       </tbody>
     </table>
+    </div>
     {% endif %}
   </div>
   {% endif %}
@@ -246,6 +248,7 @@
   <div class="section-title">{{ T.revision_compare }} · {{ r.revision.changes|length }} {{ T.changes }}</div>
   <div class="card" style="border:1px solid var(--critical)">
     <p class="subline" style="margin-top:0">{{ T.rev_changes_note }}</p>
+    <div class="table-scroll">
     <table class="kv" style="width:100%">
       <tr style="border-bottom:2px solid var(--border-strong)">
         <td class="k" style="width:26%">{{ T.rev_field }}</td>
@@ -260,6 +263,7 @@
         <td><span class="tag" style="background:color-mix(in srgb, {{ 'var(--critical)' if c.severity=='kritik' else 'var(--text-muted)' }} 15%, transparent);color:{{ 'var(--critical)' if c.severity=='kritik' else 'var(--text-muted)' }}">{{ T.critical if c.severity=='kritik' else T.supporting }}</span></td></tr>
       {% endfor %}
     </table>
+    </div>
   </div>
   {% endif %}
 
