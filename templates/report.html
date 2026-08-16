@@ -50,34 +50,38 @@
   </div>
   {% endif %}
 
-  <!-- SCORE HERO -->
-  <div class="card">
-    <div class="scorehero">
-      <div class="gauge">
-        <svg width="200" height="200" viewBox="0 0 200 200">
-          <circle cx="100" cy="100" r="88" fill="none" stroke="var(--surface-2)" stroke-width="16"/>
-          <circle cx="100" cy="100" r="88" fill="none" stroke="{{ riskcolor }}" stroke-width="16"
-            stroke-linecap="round" stroke-dasharray="{{ circ }}"
-            stroke-dashoffset="{{ circ - (circ * r.score.authenticity_score / 100) }}"/>
-        </svg>
-        <div class="val">
-          <div class="num" style="color:{{ riskcolor }}">{{ r.score.authenticity_score }}</div>
-          <div class="max">/ 100</div>
-        </div>
+  <!-- VERDICT HERO -->
+  <div class="verdict-hero vh-{{ risk }}">
+    <div class="gauge">
+      <svg width="200" height="200" viewBox="0 0 200 200">
+        <circle cx="100" cy="100" r="88" fill="none" stroke="var(--surface-2)" stroke-width="15"/>
+        <circle cx="100" cy="100" r="88" fill="none" stroke="{{ riskcolor }}" stroke-width="15"
+          stroke-linecap="round" stroke-dasharray="{{ circ }}"
+          stroke-dashoffset="{{ circ - (circ * r.score.authenticity_score / 100) }}"/>
+      </svg>
+      <div class="val">
+        <div class="num" style="color:{{ riskcolor }}">{{ r.score.authenticity_score }}</div>
+        <div class="max">/ 100</div>
       </div>
-      <div>
-        <div class="section-title" style="margin-top:0">{{ T.score }}</div>
-        <span class="riskbadge bg-{{ risk }}"><span class="dot" style="background:{{ riskcolor }}"></span>
-          {{ T.risk_label[risk] }}</span>
-        <div class="verdict">{{ r.score.verdict_tr if L=='tr' else r.score.verdict_en }}</div>
-        {% if r.score.max_possible < 100 %}
-        <div class="subline">{{ T.max_note }}: {{ r.score.max_possible }}/100</div>
-        {% endif %}
-        <div class="subline" style="margin-top:10px">
-          <span class="badge-soft">{{ T.doc_type }}: {{ r.classification.doc_type_label_tr if L=='tr' else r.classification.doc_type_label_en }}</span>
-          <span class="badge-soft">{{ r.file.name }}</span>
-          <span class="badge-soft">{{ (r.file.size_bytes/1024)|round(1) }} KB</span>
-        </div>
+    </div>
+    <div>
+      <div class="vh-eyebrow">{{ 'Doğruluk Raporu' if L=='tr' else 'Authenticity Report' }}</div>
+      <div class="vh-head">
+        <span class="vh-ic">
+          {% if risk in ['authentic','low'] %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V5z"/><path d="m9 12 2 2 4-4"/></svg>
+          {% elif risk in ['medium','high'] %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+          {% else %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V5z"/><path d="m9.5 9.5 5 5"/><path d="m14.5 9.5-5 5"/></svg>{% endif %}
+        </span>
+        <div class="vh-word">{{ T.risk_label[risk] }}</div>
+      </div>
+      <p class="vh-desc">{{ r.score.verdict_tr if L=='tr' else r.score.verdict_en }}</p>
+      {% if r.score.max_possible < 100 %}
+      <div class="subline">{{ T.max_note }}: {{ r.score.max_possible }}/100</div>
+      {% endif %}
+      <div class="vh-chips">
+        <span class="badge-soft">{{ T.doc_type }}: {{ r.classification.doc_type_label_tr if L=='tr' else r.classification.doc_type_label_en }}</span>
+        <span class="badge-soft">{{ r.file.name }}</span>
+        <span class="badge-soft">{{ (r.file.size_bytes/1024)|round(1) }} KB</span>
       </div>
     </div>
   </div>
@@ -295,7 +299,7 @@
   {% set ex = r.extracted %}
   <div class="grid grid-3">
     <div class="card">
-      <div class="party-h">↗ {{ T.sender }}</div>
+      <div class="party-h"><span class="ph-ic neg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M7 7h10v10"/></svg></span>{{ T.sender }}</div>
       <table class="kv">
         <tr><td class="k">{{ T.name }}</td><td class="v">{{ ex.sender.name or '—' }}</td></tr>
         <tr><td class="k">{{ T.iban }}</td><td class="v mono">{{ ex.sender.iban or '—' }}</td></tr>
@@ -306,7 +310,7 @@
       </table>
     </div>
     <div class="card">
-      <div class="party-h">↘ {{ T.receiver }}</div>
+      <div class="party-h"><span class="ph-ic pos"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7 7 17"/><path d="M17 17H7V7"/></svg></span>{{ T.receiver }}</div>
       <table class="kv">
         <tr><td class="k">{{ T.name }}</td><td class="v">{{ ex.receiver.name or '—' }}
           {% if ex.receiver.name and '*' in ex.receiver.name %}<div style="color:var(--text-muted);font-size:11px;margin-top:2px;white-space:normal">{{ 'Banka tarafından gizlilik gereği maskelenmiştir — eksik bilgi değildir.' if L=='tr' else 'Masked by the bank for privacy — not missing data.' }}</div>{% endif %}</td></tr>
@@ -315,7 +319,7 @@
       </table>
     </div>
     <div class="card">
-      <div class="party-h">₺ {{ T.amount }}</div>
+      <div class="party-h"><span class="ph-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/></svg></span>{{ T.amount }}</div>
       <div class="amount-big">{{ '{:,.2f}'.format(ex.amount.value).replace(',','X').replace('.',',').replace('X','.') if ex.amount.value is not none else '—' }}
         <span class="amount-cur">{{ ex.amount.currency }}</span></div>
       <table class="kv" style="margin-top:10px">
@@ -354,7 +358,7 @@
   <!-- SCORE BREAKDOWN + TIMELINE -->
   <div class="grid grid-2" style="margin-top:16px">
     <div class="card">
-      <div class="party-h">{{ T.score_breakdown }}</div>
+      <div class="party-h"><span class="ph-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx="1"/><rect x="12" y="8" width="3" height="10" rx="1"/><rect x="17" y="5" width="3" height="13" rx="1"/></svg></span>{{ T.score_breakdown }}</div>
       {% if r.score.breakdown %}
         {% for b in r.score.breakdown %}
         <div class="bd-row">
@@ -366,7 +370,7 @@
       {% else %}<p class="note">{{ T.no_findings }}</p>{% endif %}
     </div>
     <div class="card">
-      <div class="party-h">⏱ {{ T.timing_title }}</div>
+      <div class="party-h"><span class="ph-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>{{ T.timing_title }}</div>
       <table class="kv">
         {% for ev in r.timing.timeline %}
         <tr><td class="k">{{ ev.label }}</td><td class="v mono">{{ ev.value }}</td></tr>
@@ -441,7 +445,7 @@
   <div class="section-title">{{ T.consistency_title }}</div>
   <div class="grid grid-3">
     <div class="card">
-      <div class="party-h">▣ {{ T.qr_title }}</div>
+      <div class="party-h"><span class="ph-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3M21 14v.01M17 21h4M21 17v4"/></svg></span>{{ T.qr_title }}</div>
       <table class="kv">
         <tr><td class="k">{{ T.qr_title }}</td><td class="v">{{ (T.found ~ ' (' ~ r.qr.count ~ ')') if r.qr.found else T.not_found }}</td></tr>
         {% if r.qr.check and r.qr.check.iban_match is not none %}<tr><td class="k">IBAN</td><td class="v" style="color:{{ 'var(--good)' if r.qr.check.iban_match else 'var(--critical)' }}">{{ T.verified if r.qr.check.iban_match else T.mismatch }}</td></tr>{% endif %}
@@ -449,7 +453,7 @@
       </table>
     </div>
     <div class="card">
-      <div class="party-h">⟨⟩ {{ T.xml_title }}</div>
+      <div class="party-h"><span class="ph-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 8-4 4 4 4"/><path d="m16 8 4 4-4 4"/></svg></span>{{ T.xml_title }}</div>
       <table class="kv">
         <tr><td class="k">XML</td><td class="v">{{ T.found if r.embedded_xml.present else T.not_found }}</td></tr>
         <tr><td class="k">e-Dekont</td><td class="v">{{ T.found if r.embedded_xml.looks_like_dekont else T.not_found }}</td></tr>
@@ -457,7 +461,7 @@
       </table>
     </div>
     <div class="card">
-      <div class="party-h">Σ {{ T.consistency_title }}</div>
+      <div class="party-h"><span class="ph-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>{{ T.consistency_title }}</div>
       {% if r.consistency.checks %}
       <table class="kv">
         {% for c in r.consistency.checks %}
