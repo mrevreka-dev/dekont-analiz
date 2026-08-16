@@ -156,31 +156,51 @@ img { max-width: 100%; }
   background: var(--accent);
 }
 
-/* ---------------- Verdict hero ---------------- */
+/* ---------------- Verdict hero (dark, premium) ---------------- */
 .verdict-hero {
-  position: relative; display: grid; grid-template-columns: 220px 1fr; gap: 30px; align-items: center;
-  border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 30px 32px;
-  background: var(--surface-1); box-shadow: var(--shadow); overflow: hidden;
+  position: relative; display: grid; grid-template-columns: 240px 1fr; gap: 38px; align-items: center;
+  border-radius: var(--radius-lg); padding: 38px 40px; overflow: hidden; isolation: isolate;
+  color: #eef2f8; border: 1px solid rgba(255,255,255,.09);
+  background:
+    radial-gradient(130% 150% at 12% 15%, color-mix(in srgb, var(--vh-color) 26%, #0d1522), #0a0f18 62%);
+  box-shadow: 0 10px 40px rgba(8,12,20,.28), inset 0 1px 0 rgba(255,255,255,.05);
 }
 .verdict-hero::before {
-  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; background: var(--vh-color, var(--accent));
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px;
+  background: var(--vh-color, var(--accent));
+  box-shadow: 0 0 22px 2px color-mix(in srgb, var(--vh-color) 65%, transparent);
 }
-.verdict-hero.vh-authentic, .verdict-hero.vh-low { --vh-color: var(--good); background: linear-gradient(115deg, color-mix(in srgb, var(--good) 8%, var(--surface-1)), var(--surface-1) 60%); }
-.verdict-hero.vh-medium { --vh-color: var(--warning); background: linear-gradient(115deg, color-mix(in srgb, var(--warning) 9%, var(--surface-1)), var(--surface-1) 60%); }
-.verdict-hero.vh-high { --vh-color: var(--serious); background: linear-gradient(115deg, color-mix(in srgb, var(--serious) 9%, var(--surface-1)), var(--surface-1) 60%); }
-.verdict-hero.vh-critical { --vh-color: var(--critical); background: linear-gradient(115deg, color-mix(in srgb, var(--critical) 10%, var(--surface-1)), var(--surface-1) 60%); }
-.vh-eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 12px; }
-.vh-head { display: flex; align-items: center; gap: 14px; }
+.verdict-hero.vh-authentic, .verdict-hero.vh-low { --vh-color: #22c55e; }
+.verdict-hero.vh-medium { --vh-color: #f4b73f; }
+.verdict-hero.vh-high { --vh-color: #f97a45; }
+.verdict-hero.vh-critical { --vh-color: #f4544f; }
+/* colored glow behind the gauge */
+.verdict-hero .gauge { position: relative; z-index: 1; }
+.verdict-hero .gauge::before {
+  content: ""; position: absolute; inset: -14%; z-index: -1; border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--vh-color) 40%, transparent), transparent 62%);
+  filter: blur(14px);
+}
+.verdict-hero .gauge svg circle:first-child { stroke: rgba(255,255,255,.10); }
+.verdict-hero .gauge .num { color: var(--vh-color) !important; text-shadow: 0 0 18px color-mix(in srgb, var(--vh-color) 45%, transparent); }
+.verdict-hero .gauge .max { color: rgba(255,255,255,.5); }
+.vh-eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.55); margin-bottom: 14px; }
+.vh-head { display: flex; align-items: center; gap: 15px; }
 .vh-ic {
-  width: 52px; height: 52px; border-radius: 14px; display: grid; place-items: center; flex: 0 0 auto;
-  background: color-mix(in srgb, var(--vh-color) 15%, transparent); color: var(--vh-color);
+  width: 54px; height: 54px; border-radius: 15px; display: grid; place-items: center; flex: 0 0 auto;
+  background: color-mix(in srgb, var(--vh-color) 20%, transparent); color: var(--vh-color);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vh-color) 35%, transparent);
 }
-.vh-ic svg { width: 28px; height: 28px; }
-.vh-word { font-size: 25px; font-weight: 780; letter-spacing: -.02em; line-height: 1.15; color: var(--vh-color); }
-.vh-desc { margin: 14px 0 0; font-size: 15.5px; line-height: 1.55; color: var(--text-primary); }
-.vh-chips { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
-@media (max-width: 640px) { .verdict-hero { grid-template-columns: 1fr; gap: 14px; text-align: center; padding: 24px 20px; }
-  .vh-head { justify-content: center; } .vh-chips { justify-content: center; } }
+.vh-ic svg { width: 30px; height: 30px; }
+.vh-word { font-size: 27px; font-weight: 800; letter-spacing: -.02em; line-height: 1.12; color: var(--vh-color); }
+.vh-desc { margin: 16px 0 0; font-size: 15.5px; line-height: 1.6; color: rgba(255,255,255,.86); max-width: 640px; }
+.verdict-hero .subline { color: rgba(255,255,255,.6); }
+.vh-chips { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+.verdict-hero .badge-soft {
+  background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.14); color: rgba(255,255,255,.82);
+}
+@media (max-width: 640px) { .verdict-hero { grid-template-columns: 1fr; gap: 18px; text-align: center; padding: 28px 22px; }
+  .vh-head { justify-content: center; } .vh-chips { justify-content: center; } .vh-desc { margin-left: auto; margin-right: auto; } }
 
 /* party-header icon chip */
 .ph-ic {
