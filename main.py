@@ -254,7 +254,7 @@ def _check_api_key(x_api_key: str | None):
 
 @app.get("/api/v1/health")
 async def health():
-    from .engine import ocr, vision_ocr, store
+    import ocr, vision_ocr, store
     return {"status": "ok", "engine_version": ENGINE_VERSION,
             "ocr_available": ocr.ocr_available(), "ocr_lang": ocr.best_lang(),
             "vision_configured": vision_ocr.is_configured(),
@@ -266,7 +266,7 @@ async def health():
 @app.get("/api/v1/store/stats")
 async def store_stats(x_api_key: str | None = Header(default=None)):
     _check_api_key(x_api_key)
-    from .engine import store
+    import store
     return store.stats()
 
 
@@ -324,7 +324,7 @@ async def analyze_url_api(body: UrlBody, x_api_key: str | None = Header(default=
     Gövde (JSON): `{ "url": "https://bucket.s3.amazonaws.com/dekont.pdf" }`
     """
     _check_api_key(x_api_key)
-    from .engine import url_fetch
+    import url_fetch
     try:
         data, fname = url_fetch.fetch(body.url, MAX_BYTES)
     except ValueError as e:
@@ -355,7 +355,7 @@ async def compare_api(files: list[UploadFile] = File(...), x_api_key: str | None
     _check_api_key(x_api_key)
     if not files or len(files) < 2:
         raise HTTPException(400, "Provide at least 2 files to compare.")
-    from .engine.compare import compare_receipts
+    from compare import compare_receipts
     reports = []
     for f in files:
         data = await f.read()
@@ -396,8 +396,8 @@ async def compare_url_api(body: UrlsBody, x_api_key: str | None = Header(default
     _check_api_key(x_api_key)
     if not body.urls or len(body.urls) < 2:
         raise HTTPException(400, "En az 2 URL gerekir.")
-    from .engine.compare import compare_receipts
-    from .engine import url_fetch
+    from compare import compare_receipts
+    import url_fetch
     reports = []
     for u in body.urls:
         try:
@@ -434,7 +434,7 @@ async def compare_web(request: Request, files: list[UploadFile] = File(...), lan
             {"request": request, "L": L, "T": T, "version": ENGINE_VERSION,
              "error": T.get("err_need_two", "Karşılaştırma için en az 2 dosya yükleyin.")},
             status_code=400)
-    from .engine.compare import compare_receipts
+    from compare import compare_receipts
     reports = []
     for f in files:
         data = await f.read()
