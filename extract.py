@@ -840,14 +840,21 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
             if ib != ex.receiver.iban:
                 ex.sender.iban = ib
                 break
-        # Tutarlar: tablo satırlarından (ŞCH=transfer, KOMİSYON+BSMV=masraf, TOPLAM=toplam)
+        # Tutarlar: TUTAR BİLGİLERİ borç/alacak defterinden.
+        #  - Transfer principal ana satırda (MEVDUAT/ŞCH), ücretler ayrı satırlarda
+        #    (HVL/HAVALE/EFT ÜCRETİ + KOMİSYON + BSMV) — tutarları satırın sağ sütununda.
+        #  - Havale formatında ücret satırının etiketi 'HVL ÜCRETİ-MBL' olabilir.
         _kom = _row_amount(rt, "KOMİSYON") or 0
         _bsmv = _row_amount(rt, "BSMV") or 0
-        ex.amount.fee = round(_kom + _bsmv, 2) if (_kom or _bsmv) else None
+        _hvl = (_row_amount(rt, "HVL ÜCRETİ") or _row_amount(rt, "HAVALE ÜCRETİ")
+                or _row_amount(rt, "EFT ÜCRETİ") or _row_amount(rt, "İŞLEM ÜCRETİ") or 0)
+        _fee = round(_kom + _bsmv + _hvl, 2)
+        ex.amount.fee = _fee if _fee else None
         ex.amount.total = _row_amount(rt, "TOPLAM")
+        # Transfer tutarı: ŞCH satırı; yoksa TOPLAM − ücretler (masraf çıkarılmış net tutar).
         _transfer = _row_amount(rt, "ŞCH")
         if _transfer is None and ex.amount.total is not None:
-            _transfer = round(ex.amount.total - (_kom + _bsmv), 2)
+            _transfer = round(ex.amount.total - _fee, 2)
         ex.amount.value = _transfer
         ex.amount.currency = "TL"
         # Zaman / referans / kimlik
