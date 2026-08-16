@@ -8,6 +8,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 </head>
 <body>
+{% set tr = (L=='tr') %}
 <header class="topbar"><div class="container">
   <div class="brand"><span class="logo">D</span><span>{{ T.app_title }}</span></div>
   <div class="toolbar">
@@ -17,64 +18,171 @@
   </div>
 </div></header>
 
-<main class="container">
-  <section class="hero">
-    <h1>{{ T.app_subtitle }}</h1>
-    <p>{{ T.upload_note }}</p>
-  </section>
+<main class="lp">
 
-  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  {% if error %}<div class="container"><div class="err">{{ error }}</div></div>{% endif %}
 
-  <div class="card upload-card">
-    <form id="frm" action="/analyze" method="post" enctype="multipart/form-data">
-      <input type="hidden" name="lang" value="{{ L }}">
-      <label class="dropzone" id="dz" for="file">
-        <div class="big">📄⬆️</div>
-        <div><strong>{{ T.upload_title }}</strong></div>
-        <div class="note">{{ T.upload_hint }}</div>
-        <div class="fname hidden" id="fname"></div>
-        <input type="file" id="file" name="file" accept="application/pdf,.pdf,image/*,.jpg,.jpeg,.png,.webp,.tiff" class="hidden" required>
-      </label>
-      <div class="center" style="margin-top:18px">
-        <button class="btn" id="submit" type="submit" disabled>
-          <span id="btnlabel">{{ T.analyze_btn }}</span>
-        </button>
+  <!-- HERO -->
+  <section class="hero-wrap container">
+    <div class="hero-copy">
+      <span class="eyebrow"><span class="dot"></span>
+        {{ 'Adli doküman analizi · 11 banka desteği' if tr else 'Forensic document analysis · 11 banks' }}</span>
+      <h1>{{ 'Banka dekontlarındaki sahteciliği saniyeler içinde ortaya çıkarın'
+            if tr else 'Expose bank receipt forgery in seconds' }}</h1>
+      <p class="lead">{{ 'Dekontu yükleyin; PDF üreticisinden IBAN doğrulamasına, tarih çelişkilerinden yeniden basım ve yapay zeka izlerine kadar onlarca adli sinyali otomatik denetleyip kesin bir doğruluk raporu üretelim.'
+            if tr else 'Upload a receipt and we automatically audit dozens of forensic signals — from PDF producer and IBAN validation to date conflicts, re-rendering and AI traces — and return a definitive authenticity report.' }}</p>
+      <div class="stat-chips">
+        <span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V5z"/></svg>{{ 'Adli PDF analizi' if tr else 'Forensic PDF analysis' }}</span>
+        <span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>{{ 'IBAN mod-97 doğrulama' if tr else 'IBAN mod-97 check' }}</span>
+        <span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>{{ 'Yapay zeka izi tespiti' if tr else 'AI-trace detection' }}</span>
       </div>
-    </form>
-  </div>
+    </div>
 
-  <section style="max-width:640px;margin:34px auto 0">
-    <div class="section-title">{{ T.compare_title }}</div>
-    <div class="card">
-      <p class="subline" style="margin-top:0">{{ T.compare_hint }}</p>
-      <form id="cfrm" action="/compare" method="post" enctype="multipart/form-data">
-        <input type="hidden" name="lang" value="{{ L }}">
-        <label class="dropzone" id="cdz" for="cfile" style="padding:22px">
-          <div class="big">🗂️⬆️</div>
-          <div><strong>{{ T.compare_receipts }}</strong></div>
-          <div class="note">{{ T.compare_note }}</div>
-          <div class="fname hidden" id="cfname"></div>
-          <input type="file" id="cfile" name="files" multiple accept="application/pdf,.pdf,image/*,.jpg,.jpeg,.png,.webp,.tiff" class="hidden" required>
-        </label>
-        <div class="center" style="margin-top:16px">
-          <button class="btn" id="csubmit" type="submit" disabled>
-            <span id="cbtnlabel">{{ T.compare_btn }}</span>
-          </button>
+    <div class="up-col">
+      <div class="up-panel">
+        <div class="up-title">{{ 'Dekont doğrula' if tr else 'Verify a receipt' }}</div>
+        <form id="frm" action="/analyze" method="post" enctype="multipart/form-data">
+          <input type="hidden" name="lang" value="{{ L }}">
+          <label class="dropzone" id="dz" for="file">
+            <span class="dz-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/><path d="M12 18v-6"/><path d="m9 15 3-3 3 3"/></svg></span>
+            <div><strong>{{ 'Dekont yükleyin' if tr else 'Upload a receipt' }}</strong></div>
+            <div class="note">{{ 'PDF ya da fotoğrafı (JPG/PNG) sürükleyin veya seçmek için tıklayın' if tr else 'Drag a PDF or photo (JPG/PNG) here, or click to choose' }}</div>
+            <div class="fname hidden" id="fname"></div>
+            <input type="file" id="file" name="file" accept="application/pdf,.pdf,image/*,.jpg,.jpeg,.png,.webp,.tiff" class="hidden" required>
+          </label>
+          <div class="center" style="margin-top:16px">
+            <button class="btn" id="submit" type="submit" disabled style="min-width:180px">
+              <span id="btnlabel">{{ T.analyze_btn }}</span>
+            </button>
+          </div>
+        </form>
+        <div class="privacy-note">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          {{ 'Dosyanız yalnızca analiz için işlenir, üçüncü taraflarla paylaşılmaz.' if tr else 'Your file is processed only for analysis and never shared with third parties.' }}
         </div>
-      </form>
+      </div>
     </div>
   </section>
 
-  <section style="max-width:640px;margin:34px auto 0">
-    <div class="section-title">{{ T.api_title }}</div>
-    <div class="card">
-      <p class="subline" style="margin-top:0">{{ T.api_desc }}</p>
-      <div class="codeblock">curl -X POST {{ '{BASE_URL}' }}/api/v1/analyze \
+  <!-- METRICS -->
+  <section class="container" style="padding-top:8px">
+    <div class="metrics">
+      <div class="metric"><div class="mv">11</div><div class="ml">{{ 'desteklenen banka' if tr else 'supported banks' }}</div></div>
+      <div class="metric"><div class="mv">40+</div><div class="ml">{{ 'adli kontrol sinyali' if tr else 'forensic signals' }}</div></div>
+      <div class="metric"><div class="mv">&lt;5 sn</div><div class="ml">{{ 'ortalama rapor süresi' if tr else 'avg. report time' }}</div></div>
+      <div class="metric"><div class="mv">PDF · JPG</div><div class="ml">{{ 'desteklenen format' if tr else 'input formats' }}</div></div>
+    </div>
+  </section>
+
+  <!-- WHAT WE DETECT -->
+  <section class="lp-section alt">
+    <div class="container">
+      <div class="lp-head">
+        <h2>{{ 'Ne tespit ediyoruz?' if tr else 'What we detect' }}</h2>
+        <p>{{ 'Gözle bakarak anlaşılamayan tahrifatları, belgenin dijital yapısını adli düzeyde inceleyerek ortaya çıkarırız.' if tr else 'We surface tampering that the eye cannot catch, by examining the document’s digital structure at a forensic level.' }}</p>
+      </div>
+      <div class="feature-grid">
+        <div class="feature">
+          <div class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V5z"/><path d="m9 12 2 2 4-4"/></svg></div>
+          <h3>{{ 'PDF üretici tutarsızlığı' if tr else 'PDF producer mismatch' }}</h3>
+          <p>{{ 'Her bankanın dekontu belirli bir derleyiciden çıkar. Beklenmeyen üretici (ör. tarayıcı yeniden basımı) sahtecilik işaretidir.' if tr else 'Each bank compiles receipts with a known engine. An unexpected producer (e.g. browser re-render) flags forgery.' }}</p>
+        </div>
+        <div class="feature">
+          <div class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M4 12h16"/><path d="M6 20h12"/><path d="M9 16h6"/></svg></div>
+          <h3>{{ 'IBAN & banka kodu doğrulama' if tr else 'IBAN & bank-code validation' }}</h3>
+          <p>{{ 'IBAN mod-97 sağlaması, gönderici–alıcı IBAN tutarlılığı ve alıcı bankası ile IBAN kodunun eşleşmesi denetlenir.' if tr else 'IBAN mod-97 checksum, sender–receiver IBAN consistency and receiver bank ↔ IBAN code matching are verified.' }}</p>
+        </div>
+        <div class="feature">
+          <div class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="m9 16 2 2 4-4"/></svg></div>
+          <h3>{{ 'Tarih ↔ belge no çelişkisi' if tr else 'Date ↔ document-no conflict' }}</h3>
+          <p>{{ 'Belge/dekont numarasına gömülü tarih ile işlem saati karşılaştırılır; uyuşmazlık geriye/ileriye tarihlemeyi açığa çıkarır.' if tr else 'The date embedded in the document number is compared with the transaction time; a mismatch exposes back/forward dating.' }}</p>
+        </div>
+        <div class="feature">
+          <div class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/><path d="M12 7v5l3 2"/></svg></div>
+          <h3>{{ 'Yeniden basım / PDFium izi' if tr else 'Re-render / PDFium trace' }}</h3>
+          <p>{{ 'Bir PDF’in açılıp yeniden kaydedildiğini gösteren üretici imzaları ve artımlı güncelleme izleri yakalanır.' if tr else 'Producer signatures and incremental-update traces revealing a re-saved PDF are captured.' }}</p>
+        </div>
+        <div class="feature">
+          <div class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V6a2 2 0 0 1 2-2h8"/><path d="M4 20h16"/><path d="M8 16V9M12 16v-4M16 16v-7"/></svg></div>
+          <h3>{{ 'Yazı tipi & tutar anomalileri' if tr else 'Font & amount anomalies' }}</h3>
+          <p>{{ 'Tutar alanındaki yazı tipi ailesi belgenin geri kalanından farklıysa, rakamların sonradan değiştirildiğine işaret eder.' if tr else 'If the amount field’s font family differs from the rest, it points to digits altered after the fact.' }}</p>
+        </div>
+        <div class="feature">
+          <div class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/></svg></div>
+          <h3>{{ 'Yapay zeka & görüntü izleri' if tr else 'AI & image forensics' }}</h3>
+          <p>{{ 'Fotoğraf dekontlarda ELA, gürültü ve arka plan analiziyle düzenleme ile yapay zeka üretimi izleri değerlendirilir.' if tr else 'For photo receipts, ELA, noise and background analysis assess editing and AI-generation traces.' }}</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="lp-section">
+    <div class="container">
+      <div class="lp-head">
+        <h2>{{ 'Nasıl çalışır?' if tr else 'How it works' }}</h2>
+        <p>{{ 'Yüklemeden kesin karara dört adım.' if tr else 'From upload to a definitive verdict in four steps.' }}</p>
+      </div>
+      <div class="steps">
+        <div class="step"><div class="sn">1</div>
+          <h3>{{ 'Yükleyin' if tr else 'Upload' }}</h3>
+          <p>{{ 'Dekontun PDF’ini veya fotoğrafını sürükleyip bırakın.' if tr else 'Drag & drop the receipt PDF or photo.' }}</p></div>
+        <div class="step"><div class="sn">2</div>
+          <h3>{{ 'Adli analiz' if tr else 'Forensic analysis' }}</h3>
+          <p>{{ 'Yapı, üretici, IBAN, tarih ve görüntü sinyalleri denetlenir.' if tr else 'Structure, producer, IBAN, date and image signals are audited.' }}</p></div>
+        <div class="step"><div class="sn">3</div>
+          <h3>{{ 'Kesin cevaplar' if tr else 'Definitive answers' }}</h3>
+          <p>{{ 'Doğruluk puanı, evet/hayır kontrolleri ve tahrifat karşılaştırması.' if tr else 'Authenticity score, yes/no checks and a tampering comparison.' }}</p></div>
+        <div class="step"><div class="sn">4</div>
+          <h3>{{ 'Güvenle karar' if tr else 'Act with confidence' }}</h3>
+          <p>{{ 'Raporu indirin veya API ile sisteminize entegre edin.' if tr else 'Download the report or integrate via the API.' }}</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CROSS COMPARE -->
+  <section class="lp-section alt">
+    <div class="container" style="max-width:720px">
+      <div class="lp-head">
+        <h2>{{ T.compare_title }}</h2>
+        <p>{{ T.compare_hint }}</p>
+      </div>
+      <div class="up-panel">
+        <form id="cfrm" action="/compare" method="post" enctype="multipart/form-data">
+          <input type="hidden" name="lang" value="{{ L }}">
+          <label class="dropzone" id="cdz" for="cfile">
+            <span class="dz-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v6M9 14h6"/></svg></span>
+            <div><strong>{{ T.compare_receipts }}</strong></div>
+            <div class="note">{{ T.compare_note }}</div>
+            <div class="fname hidden" id="cfname"></div>
+            <input type="file" id="cfile" name="files" multiple accept="application/pdf,.pdf,image/*,.jpg,.jpeg,.png,.webp,.tiff" class="hidden" required>
+          </label>
+          <div class="center" style="margin-top:16px">
+            <button class="btn" id="csubmit" type="submit" disabled style="min-width:180px">
+              <span id="cbtnlabel">{{ T.compare_btn }}</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- API -->
+  <section class="lp-section">
+    <div class="container">
+      <div class="api-row">
+        <div class="api-copy">
+          <h2>{{ 'Geliştiriciler için REST API' if tr else 'REST API for developers' }}</h2>
+          <p>{{ T.api_desc }}</p>
+          <p class="note" style="margin-bottom:0">GET /api/v1/health · POST /api/v1/analyze · <a href="/api/docs" target="_blank">/api/docs</a></p>
+        </div>
+        <div class="codeblock">curl -X POST {{ '{BASE_URL}' }}/api/v1/analyze \
   -H "X-API-Key: {{ '{KEY}' }}" \
   -F "file=@dekont.pdf"</div>
-      <p class="note" style="margin-bottom:0">GET /api/v1/health · POST /api/v1/analyze · <a href="/api/docs" target="_blank">/api/docs</a></p>
+      </div>
     </div>
   </section>
+
 </main>
 
 <footer class="footer"><div class="container">{{ T.footer_note }} · v{{ version }}</div></footer>
