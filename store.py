@@ -55,7 +55,14 @@ def _connect():
         ref_no TEXT, document_no TEXT,
         sender_iban TEXT, sender_name TEXT, receiver_iban TEXT,
         amount REAL, txn_date TEXT, txn_dt TEXT,
-        sha256 TEXT UNIQUE, score INTEGER, created_at TEXT )""")
+        sha256 TEXT UNIQUE, score INTEGER, created_at TEXT,
+        fee REAL, rail TEXT )""")
+    # Eski veritabanları için idempotent sütun ekleme (fee/rail sonradan eklendi)
+    for _col, _typ in (("fee", "REAL"), ("rail", "TEXT")):
+        try:
+            con.execute(f"ALTER TABLE receipts ADD COLUMN {_col} {_typ}")
+        except Exception:
+            pass
     con.execute("CREATE INDEX IF NOT EXISTS idx_bank_seq ON receipts(bank, seq_number)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_bank_sender ON receipts(bank, sender_iban)")
     # AUDIT LOG: HER analiz (sahte dahil) buraya yazılır -> toplam yükleme sayısı + kara-liste.
@@ -90,7 +97,36 @@ def _fields(report: dict) -> dict:
         "txn_dt": dt.isoformat() if dt else "",
         "sha256": report.get("file", {}).get("sha256") or "",
         "score": report.get("score", {}).get("authenticity_score"),
+        "fee": ex.get("amount", {}).get("fee"),
+        "rail": tx.get("rail") or "",
     }
+
+
+def learned_rail_fees(bank_display: str) -> dict:
+    """Bir banka için, GEÇMİŞTE kaydedilmiş GERÇEK (yüksek skorlu) dekontlardan
+    işlem türü (rail) başına gözlenen ücret değerlerini döndürür: {rail: [fee,...]}.
+    check_fee_rail bunları seed tarifelerle birleştirir → tarife tablosu tüm bankalar
+    için gerçek dekontlardan otomatik öğrenilir. Yalnızca score>=90 kayıtlar kullanılır."""
+    key = re.sub(r"\s+", " ", (bank_display or "")).strip().upper()
+    if not key:
+        return {}
+    out: dict = {}
+    try:
+        con = _connect()
+        try:
+            rows = con.execute(
+                "SELECT rail, fee FROM receipts WHERE UPPER(bank)=? AND rail IS NOT NULL "
+                "AND rail<>'' AND fee IS NOT NULL AND fee>0 AND score>=90", (key,)).fetchall()
+        finally:
+            con.close()
+        for rail, fee in rows:
+            out.setdefault(rail, [])
+            fv = round(float(fee), 2)
+            if fv not in out[rail]:
+                out[rail].append(fv)
+    except Exception:
+        return {}
+    return out
 
 
 def check(report: dict) -> list[dict]:
@@ -193,7 +229,8 @@ def record(report: dict) -> bool:
             "QR_MISMATCH", "SEQ_DB_DUPLICATE", "RECEIPT_NO_DATE_MISMATCH", "PRODUCER_MISMATCH",
             "AMOUNT_MISMATCH", "BROWSER_RERENDER", "FONT_BROWSER_RERENDER", "FONT_SET_MISMATCH",
             "INTERNAL_DATE_MISMATCH", "PDFIUM_PRODUCED",
-            "IBAN_INVALID", "ISSUER_IBAN_MISMATCH", "RECEIVER_BANK_MISMATCH"}
+            "IBAN_INVALID", "ISSUER_IBAN_MISMATCH", "RECEIVER_BANK_MISMATCH",
+            "FEE_RAIL_MISMATCH", "RAIL_SAMEBANK_MISMATCH"}
     if codes & _BAD:
         return False
     f = _fields(report)
@@ -206,11 +243,13 @@ def record(report: dict) -> bool:
     try:
         con.execute(
             "INSERT OR IGNORE INTO receipts (bank, seq_number, seq_len, ref_no, document_no, "
-            "sender_iban, sender_name, receiver_iban, amount, txn_date, txn_dt, sha256, score, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "sender_iban, sender_name, receiver_iban, amount, txn_date, txn_dt, sha256, score, created_at, "
+            "fee, rail) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (f["bank"], f["seq_number"], f["seq_len"], f["ref_no"], f["document_no"],
              f["sender_iban"], f["sender_name"], f["receiver_iban"], f["amount"],
-             f["txn_date"], f["txn_dt"], f["sha256"], f["score"], _dt.datetime.utcnow().isoformat()))
+             f["txn_date"], f["txn_dt"], f["sha256"], f["score"], _dt.datetime.utcnow().isoformat(),
+             f.get("fee"), f.get("rail")))
         con.commit()
         return True
     except Exception:
@@ -223,7 +262,8 @@ _FAKE_CODES = {"REV_AMOUNT_CHANGED", "REV_CONTENT_CHANGED", "TIME_FILE_BEFORE_TX
                "QR_MISMATCH", "SEQ_DB_DUPLICATE", "RECEIPT_NO_DATE_MISMATCH", "PRODUCER_MISMATCH",
                "AMOUNT_MISMATCH", "BROWSER_RERENDER", "FONT_BROWSER_RERENDER", "FONT_SET_MISMATCH",
                "INTERNAL_DATE_MISMATCH", "PDFIUM_PRODUCED", "IBAN_INVALID", "ISSUER_IBAN_MISMATCH",
-               "RECEIVER_BANK_MISMATCH", "STATEMENT_BALANCE_BREAK", "STATEMENT_ROW_COUNT_MISMATCH"}
+               "RECEIVER_BANK_MISMATCH", "STATEMENT_BALANCE_BREAK", "STATEMENT_ROW_COUNT_MISMATCH",
+               "FEE_RAIL_MISMATCH", "RAIL_SAMEBANK_MISMATCH"}
 
 
 def log_analysis(report: dict) -> bool:

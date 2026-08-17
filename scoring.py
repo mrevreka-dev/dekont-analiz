@@ -125,6 +125,8 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 8)
     if "FEE_RAIL_MISMATCH" in codes:         # ücret, işlem türünün (FAST/HAVALE) tarifesine uymuyor
         score = min(score, 8)
+    if "RAIL_SAMEBANK_MISMATCH" in codes:    # FAST/EFT ama gönderici=alıcı banka (aynı banka = havale)
+        score = min(score, 6)
     if "RECEIPT_NO_DATE_MISMATCH" in codes:  # fiş numarasındaki tarih ≠ işlem tarihi (tarihleme)
         score = min(score, 8)
     if "PRODUCER_MISMATCH" in codes:         # bankanın gerçek kütüphanesiyle üretilmemiş

@@ -687,12 +687,48 @@ def detect_transfer_rail(text: str) -> str | None:
     return None
 
 
-def check_fee_rail(bkey: str, text: str, fee) -> dict | None:
+def check_rail_bank(text: str, sender_iban: str, receiver_iban: str) -> dict | None:
+    """İşlem türü (rail) ↔ taraf bankaları tutarlılığı (KULLANICI KURALI):
+    FAST ve EFT BANKALARARASI sistemlerdir. Gönderici ve alıcı IBAN AYNI bankaya aitse
+    (aynı banka kodu), transfer banka içi HAVALE'dir; FAST/EFT olamaz. Dekont FAST/EFT
+    diyorsa işlem türü değiştirilmiş demektir — güçlü, deterministik tahrifat işareti."""
+    import banks as _b
+    rail = detect_transfer_rail(text)
+    if rail not in ("fast", "eft"):
+        return None
+    sc = _b.iban_bank_code(sender_iban or "")
+    rc = _b.iban_bank_code(receiver_iban or "")
+    if not sc or not rc:
+        return None
+    # IBAN checksumları geçersizse bunu IBAN_INVALID ele alır; burada karışma
+    if _b.iban_valid(sender_iban) is False or _b.iban_valid(receiver_iban) is False:
+        return None
+    if sc != rc:
+        return None
+    return {
+        "code": "RAIL_SAMEBANK_MISMATCH", "severity": "critical", "weight": 42,
+        "tr": f"İŞLEM TÜRÜ ÇELİŞKİSİ: dekont {_RAIL_LABEL[rail]} işlemi olarak görünüyor ama gönderici ve "
+              f"alıcı IBAN AYNI bankaya ait (banka kodu {sc}). {_RAIL_LABEL[rail]} bankalararası bir sistemdir; "
+              f"aynı banka içindeki transfer FAST/EFT ile YAPILAMAZ, HAVALE olur. İşlem türü sonradan "
+              f"değiştirilmiş — güçlü sahtecilik işareti.",
+        "en": f"RAIL MISMATCH: labeled {_RAIL_LABEL[rail]} but sender and receiver IBANs are at the SAME bank "
+              f"(code {sc}). {_RAIL_LABEL[rail]} is an inter-bank rail; a same-bank transfer cannot be FAST/EFT, "
+              f"it is a HAVALE. The transaction type was altered — strong forgery signal.",
+        "detail": f"rail={rail} sender_code={sc} receiver_code={rc}",
+    }
+
+
+def check_fee_rail(bkey: str, text: str, fee, learned: dict | None = None) -> dict | None:
     """İşlem türü (rail) ile ÜCRET tarifesi uyumsuzsa (ör. FAST etiketli ama ücret
-    HAVALE tarifesinde) tahrifat sinyali döndürür."""
+    HAVALE tarifesinde) tahrifat sinyali döndürür. `learned`: store'daki gerçek
+    dekontlardan öğrenilen {rail: [fee,...]} — seed referanslarla birleştirilir."""
     if fee is None or not bkey:
         return None
-    prof = _RAIL_FEE_REF.get(bkey)
+    prof = dict(_RAIL_FEE_REF.get(bkey) or {})
+    if learned:
+        for rl, vals in learned.items():
+            if vals:
+                prof[rl] = sorted(set((prof.get(rl) or []) + list(vals)))
     if not prof:
         return None
     rail = detect_transfer_rail(text)

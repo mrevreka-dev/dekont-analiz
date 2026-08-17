@@ -636,12 +636,41 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _mn:
                 findings.append(Finding(_mn["code"], _mn["severity"], "content", _mn["weight"],
                                         tr=_mn["tr"], en=_mn["en"], detail=_mn.get("detail", "")))
+            # İşlem türü (FAST/EFT) ↔ taraf bankaları: aynı banka koduysa FAST/EFT olamaz (HAVALE'dir)
+            _rb = _auth.check_rail_bank(text_layout, ex.sender.iban, ex.receiver.iban)
+            if _rb:
+                findings.append(Finding(_rb["code"], _rb["severity"], "content", _rb["weight"],
+                                        tr=_rb["tr"], en=_rb["en"], detail=_rb.get("detail", "")))
             # İşlem türü (FAST/HAVALE/EFT) ↔ ücret tarifesi tutarlılığı — hem PDF hem
-            # fotoğrafta çalışır (alan bazlı). Ör. FAST etiketli ama ücret HAVALE tarifesinde.
-            _fr = _auth.check_fee_rail(_bkey, text_layout, ex.amount.fee)
+            # fotoğrafta çalışır (alan bazlı). Seed + store'dan öğrenilen tarifeler birleşir.
+            try:
+                import store as _store_l
+                _learned = _store_l.learned_rail_fees(ex.bank)
+            except Exception:
+                _learned = None
+            _fr = _auth.check_fee_rail(_bkey, text_layout, ex.amount.fee, _learned)
             if _fr:
                 findings.append(Finding(_fr["code"], _fr["severity"], "content", _fr["weight"],
                                         tr=_fr["tr"], en=_fr["en"], detail=_fr.get("detail", "")))
+            # Fotoğraf dekontlarda GÖRSEL yazı/karakter tahrifatı: vision modelinin alan-bazlı
+            # değerlendirmesi (yazı tipi/hizalama/üst üste binme/keskinlik farkı). Olasılıksal
+            # olduğundan konservatif ağırlıklandırılır; deterministik kontrollerin yerini almaz.
+            if vision_result and vision_result.get("tamper_suspected"):
+                _conf = int(vision_result.get("tamper_confidence") or 0)
+                _tf = vision_result.get("tamper_fields") or []
+                _reason = (vision_result.get("tamper_reason") or "").strip()
+                if _conf >= 40:
+                    _sev, _w = (("critical", 30) if _conf >= 80 else
+                                ("high", 16) if _conf >= 60 else ("medium", 8))
+                    findings.append(Finding(
+                        "VISION_TEXT_TAMPER", _sev, "content", _w,
+                        tr=f"GÖRSEL YAZI TAHRİFATI ŞÜPHESİ (güven %{_conf}): {_reason} "
+                           f"Şüpheli alan(lar): {', '.join(_tf) if _tf else '—'}. Fotoğrafta ilgili metin "
+                           f"dijital olarak düzenlenmiş olabilir (yazı tipi/hizalama/üst üste binme/keskinlik "
+                           f"farkı). Fotoğraf dekontlarda kesinlik düşüktür; teyit için orijinal dijital PDF isteyin.",
+                        en=f"Suspected visual text tampering (confidence {_conf}%): {_reason} "
+                           f"Suspect field(s): {', '.join(_tf) if _tf else '—'}.",
+                        detail=f"conf={_conf} fields={_tf}"))
         except Exception:
             pass
 
@@ -842,6 +871,13 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     if use_store:
         try:
             import store as _store
+            # İşlem türünü (rail) kayda geçir — tarife öğrenmesi bunu kullanır
+            try:
+                import authenticity as _auth_r
+                report["extracted"].setdefault("transaction", {})["rail"] = \
+                    _auth_r.detect_transfer_rail(text_layout) or ""
+            except Exception:
+                pass
             report["cross_db"]["recorded"] = _store.record(report)
             # AUDIT LOG: her analiz (sahte dahil) — 'kaç yüklendi' + kara-liste temeli
             _store.log_analysis(report)

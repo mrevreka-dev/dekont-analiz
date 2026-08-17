@@ -48,8 +48,21 @@ _PROMPT = (
     '  "date": "",                 // işlem tarihi ve saati (gg.aa.yyyy ss:dd:ss)\n'
     '  "ref_no": "",               // referans/sorgu no (FAST Sorgu No vb.)\n'
     '  "document_no": "",          // dekont/işlem no\n'
-    '  "type": "", "channel": "", "description": ""\n'
+    '  "type": "", "channel": "", "description": "",\n'
+    '  "tamper_suspected": false,   // görselde DİJİTAL OYNAMA/DÜZENLEME izi var mı\n'
+    '  "tamper_fields": [],         // şüpheli alan adları (ör. ["receiver_name","amount"])\n'
+    '  "tamper_confidence": 0,      // 0-100 arası güven\n'
+    '  "tamper_reason": ""          // kısa gerekçe (Türkçe)\n'
     '}\n\n'
+    "TAHRİFAT DEĞERLENDİRMESİ (çok önemli): Her alanın ÜZERİNDE dijital oynama olup "
+    "olmadığını dikkatle incele. Bir metni ŞÜPHELİ işaretle eğer: yazı tipi/kalınlığı/"
+    "boyutu çevresindeki metinden FARKLIYSA; karakterler ÜST ÜSTE BİNMİŞ, çakışmış ya da "
+    "kırpılmışsa; harf aralıkları düzensizse; TABAN ÇİZGİSİ (baseline) satırdaki diğer "
+    "metinden kaymışsa; keskinlik/bulanıklık, koyuluk/renk ya da sıkıştırma dokusu "
+    "çevreden farklıysa; harflerin kenarında hâle/leke/artefakt varsa. ÖZELLİKLE alıcı adı, "
+    "gönderici adı, TUTAR ve IBAN alanlarını incele. Şüphe varsa tamper_suspected=true yap, "
+    "hangi alanların şüpheli olduğunu tamper_fields'a yaz ve güveni ver. Emin değilsen düşük "
+    "güven ver ama yine de bildir.\n\n"
     "SADECE JSON döndür, başka açıklama yazma."
 )
 
