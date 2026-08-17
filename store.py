@@ -93,6 +93,12 @@ def _maybe_unblock(con) -> None:
     if not vals:
         return
     try:
+        # TAM TEMİZLİK: DEKONT_UNBLOCK içinde "ALL" (büyük/küçük fark etmez) varsa
+        # tüm kara-listeyi tek seferde temizle (audit kaydı/sayaç korunur, sadece is_fake=0).
+        if any(v.upper() == "ALL" for v in vals):
+            con.execute("UPDATE analyses SET is_fake=0 WHERE is_fake=1")
+            con.commit()
+            return
         for v in vals:
             con.execute("UPDATE analyses SET is_fake=0 WHERE (seq_number=? OR ref_no=? OR "
                         "document_no=? OR sha256=?) AND is_fake=1", (v, v, v, v))
@@ -431,7 +437,12 @@ def log_analysis(report: dict) -> bool:
     sc = report.get("score", {})
     cls = report.get("classification", {})
     codes = sorted({x.get("code") for x in report.get("findings_en", []) if x.get("code")})
-    is_fake = 1 if (set(codes) & _FAKE_CODES) or (sc.get("authenticity_score") or 100) < 50 else 0
+    # KARA-LİSTE'ye YALNIZCA kanıtlanmış tahrifat koduyla eklenir. Sadece "düşük skor"
+    # (AI/görsel yumuşak sinyaller vb.) KALICI + çapraz-dosya (banka+sıra) kara-liste
+    # kaydı OLUŞTURMAZ — aksi halde iyi niyetli bir düşük skor, aynı sıra numarasını
+    # taşıyan gerçek dekontları da yanlışlıkla "bilinen sahte" yapar (FP çoğaltıcı).
+    # Böyle dosyalar zaten her yüklemede kendi bulgularıyla yeniden yakalanır.
+    is_fake = 1 if (set(codes) & _FAKE_CODES) else 0
     try:
         con = _connect()
     except Exception:
