@@ -649,3 +649,77 @@ def check_masked_name(receiver_name: str, receiver_iban: str, text: str) -> dict
               f"visible initials are present — this is NOT missing data, just the bank's standard masking.",
         "detail": f"visible={visible}",
     }
+
+
+# ---------------------------------------------------------------------------
+#  İŞLEM TÜRÜ (RAIL) ↔ ÜCRET TARİFESİ TUTARLILIĞI
+#  Bir dekont bir işlem türünden (ör. HAVALE) üretilip tutarı/işlem türü FAST'e
+#  çevrildiğinde ÜCRET çoğu zaman güncellenmez: FAST etiketli ama ücret HAVALE
+#  tarifesinde kalır. Ücret, işlem türüne göre bankanın bilinen tarifesiyle
+#  çapraz kontrol edilir. Referanslar DOĞRULANMIŞ gerçek dekontlardan seed edilir
+#  (zamanla store'daki gerçek dekontlardan öğrenilebilir). Yalnızca ücret AÇIKÇA
+#  BAŞKA bir rail'in tarifesine uyduğunda tetiklenir → tarife değişse bile 0 FP.
+# ---------------------------------------------------------------------------
+_RAIL_FEE_REF = {
+    # bank_key: { rail: [gerçek dekontlarda gözlenen ücret+vergi değerleri] }
+    "isbank": {"fast": [16.76], "havale": [8.38]},
+}
+_RAIL_LABEL = {"fast": "FAST", "havale": "HAVALE", "eft": "EFT"}
+
+
+def _tr_low(s: str) -> str:
+    s = (s or "").lower().replace("̇", "")
+    for a, b in (("ı", "i"), ("ş", "s"), ("ğ", "g"), ("ü", "u"), ("ö", "o"), ("ç", "c")):
+        s = s.replace(a, b)
+    return s
+
+
+def detect_transfer_rail(text: str) -> str | None:
+    """İşlem kanalını (rail) metinden çıkarır. Senaryo/Dekont Tipi'ne DEĞİL, işlem
+    başlığı ve ÜCRET etiketine bakar (İş Bankası FAST'i 'DEKONT/EFT' tipiyle basar)."""
+    n = _tr_low(text)
+    if "fast ucreti" in n or "giden fast" in n or "gelen fast" in n or "fast islemi" in n:
+        return "fast"
+    if "havale ucreti" in n or "dekont/hvl" in n or "hesaptan hesaba havale" in n or "havale+vergi" in n:
+        return "havale"
+    if "eft ucreti" in n or "dekont/eft" in n and "fast" not in n:
+        return "eft"
+    return None
+
+
+def check_fee_rail(bkey: str, text: str, fee) -> dict | None:
+    """İşlem türü (rail) ile ÜCRET tarifesi uyumsuzsa (ör. FAST etiketli ama ücret
+    HAVALE tarifesinde) tahrifat sinyali döndürür."""
+    if fee is None or not bkey:
+        return None
+    prof = _RAIL_FEE_REF.get(bkey)
+    if not prof:
+        return None
+    rail = detect_transfer_rail(text)
+    if not rail or rail not in prof:
+        return None
+    try:
+        fee = float(fee)
+    except Exception:
+        return None
+
+    def _near(f, refs, tol=0.18):
+        return any(abs(f - r) <= max(1.0, r * tol) for r in refs)
+
+    if _near(fee, prof[rail]):
+        return None                       # ücret kendi rail'ine uyuyor -> sorun yok
+    for other, refs in prof.items():
+        if other != rail and _near(fee, refs):
+            return {
+                "code": "FEE_RAIL_MISMATCH", "severity": "critical", "weight": 40,
+                "tr": f"ÜCRET–İŞLEM TÜRÜ ÇELİŞKİSİ: işlem {_RAIL_LABEL[rail]} olarak görünüyor ama ücret+vergi "
+                      f"({fee:g} TL) bu bankanın {_RAIL_LABEL[other]} tarifesine (~{refs[0]:g} TL) uyuyor; "
+                      f"{_RAIL_LABEL[rail]} tarifesine değil. Gerçek bir {_RAIL_LABEL[rail]} işleminde ücret "
+                      f"farklıdır. Bu dekont büyük olasılıkla bir {_RAIL_LABEL[other]} dekontundan üretilip "
+                      f"tutar/işlem türü değiştirilmiş, ücret güncellenmemiş — güçlü sahtecilik işareti.",
+                "en": f"FEE–RAIL MISMATCH: labeled {_RAIL_LABEL[rail]} but the fee ({fee:g} TL) matches this "
+                      f"bank's {_RAIL_LABEL[other]} tariff (~{refs[0]:g} TL), not {_RAIL_LABEL[rail]}. Likely "
+                      f"built from a {_RAIL_LABEL[other]} receipt with amount/type changed but fee left unchanged.",
+                "detail": f"rail={rail} fee={fee} own={prof[rail]} matched_{other}={refs}",
+            }
+    return None

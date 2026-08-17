@@ -636,6 +636,12 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _mn:
                 findings.append(Finding(_mn["code"], _mn["severity"], "content", _mn["weight"],
                                         tr=_mn["tr"], en=_mn["en"], detail=_mn.get("detail", "")))
+            # İşlem türü (FAST/HAVALE/EFT) ↔ ücret tarifesi tutarlılığı — hem PDF hem
+            # fotoğrafta çalışır (alan bazlı). Ör. FAST etiketli ama ücret HAVALE tarifesinde.
+            _fr = _auth.check_fee_rail(_bkey, text_layout, ex.amount.fee)
+            if _fr:
+                findings.append(Finding(_fr["code"], _fr["severity"], "content", _fr["weight"],
+                                        tr=_fr["tr"], en=_fr["en"], detail=_fr.get("detail", "")))
         except Exception:
             pass
 
