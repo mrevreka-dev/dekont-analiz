@@ -156,48 +156,91 @@ def _vnum(x):
         return None
 
 
-def _apply_vision(ex, v: dict) -> None:
-    """Vision modelinin döndürdüğü alanları Extraction'a uygular (görselde vision önceliklidir)."""
+def _apply_vision(ex, v: dict, bank_ex=None) -> None:
+    """Vision modelinin döndürdüğü alanları Extraction'a uygular.
+
+    ÖNCELİK: bank_ex (vision'ın SADIK metin dökümüne uygulanan BANKA-ÖZEL extract_fields sonucu)
+    > vision'ın genel yapısal tahmini > mevcut OCR. Böylece iki-sütunlu düzenlerde (Enpara vb.)
+    gönderen/alıcı eşlemesi bankanın KENDİ etiket yapısına göre yapılır; genel vision tahmininin
+    tarafları karıştırması önlenir. bank_ex yoksa davranış eskisiyle aynıdır (genel vision)."""
     import re as _re
     _ocr_ibans = [ib for ib in (ex.all_ibans or []) if ib]   # vision ÖNCESİ OCR IBAN'ları
+    be = bank_ex
+    # bank_ex, belge içeriğiyle uyumlu ve bir taraf çıkarabildiyse GÜVENİLİR sayılır.
+    _be_ok = bool(be and (be.sender.name or be.receiver.name or be.sender.iban or be.receiver.iban))
     def _s(key):
         val = v.get(key)
         return str(val).strip() if val not in (None, "") else ""
     def _iban(key):
         raw = _s(key)
         return _re.sub(r"\s+", "", raw).upper() if raw else ""
+    def _bs(attr):   # bank_ex.sender/receiver/... alanı (varsa)
+        return getattr(be, attr, "") if be else ""
 
-    if _s("bank"):
-        ex.bank = _s("bank")
+    # Daha zengin metin dökümü varsa raw_text'i onunla değiştir (metin-tabanlı denetimler için)
+    if _be_ok and be.raw_text and len(be.raw_text) > len(ex.raw_text or ""):
+        ex.raw_text = be.raw_text
+
+    # Banka adı
+    _bank = (be.bank if _be_ok else "") or _s("bank")
+    if _bank:
+        ex.bank = _bank
     # Gönderen
-    if _s("sender_name"):
-        ex.sender.name = _s("sender_name")
-    if _iban("sender_iban"):
-        ex.sender.iban = _iban("sender_iban")
+    _sn = (be.sender.name if _be_ok else "") or _s("sender_name")
+    if _sn:
+        ex.sender.name = _sn
+    _si = (be.sender.iban if _be_ok else "") or _iban("sender_iban")
+    if _si:
+        ex.sender.iban = _si
     # Alıcı
-    if _s("receiver_name"):
-        ex.receiver.name = _s("receiver_name")
-    if _iban("receiver_iban"):
-        ex.receiver.iban = _iban("receiver_iban")
-    if _s("receiver_bank"):
-        ex.receiver.bank = _s("receiver_bank")
-    # Tutar
-    av = _vnum(v.get("amount"))
+    _rn = (be.receiver.name if _be_ok else "") or _s("receiver_name")
+    if _rn:
+        ex.receiver.name = _rn
+    _ri = (be.receiver.iban if _be_ok else "") or _iban("receiver_iban")
+    if _ri:
+        ex.receiver.iban = _ri
+    _rb = (be.receiver.bank if _be_ok else "") or _s("receiver_bank")
+    if _rb:
+        ex.receiver.bank = _rb
+    # Kimlik/müşteri no (banka-özel dökümden)
+    if _be_ok:
+        if be.sender.tckn and not ex.sender.tckn:
+            ex.sender.tckn = be.sender.tckn
+        if be.sender.customer_no and not ex.sender.customer_no:
+            ex.sender.customer_no = be.sender.customer_no
+        if be.doc_kind and not ex.doc_kind:
+            ex.doc_kind = be.doc_kind
+    # Tutar (banka-özel > vision)
+    av = (be.amount.value if (_be_ok and be.amount.value is not None) else None)
+    if av is None:
+        av = _vnum(v.get("amount"))
     if av is not None:
         ex.amount.value = av
-        if _s("amount_currency"):
-            ex.amount.currency = _s("amount_currency").upper()
-    fv = _vnum(v.get("fee"))
+    _cur = (be.amount.currency if _be_ok else "") or _s("amount_currency")
+    if _cur:
+        ex.amount.currency = _cur.upper()
+    fv = (be.amount.fee if (_be_ok and be.amount.fee is not None) else None)
+    if fv is None:
+        fv = _vnum(v.get("fee"))
     if fv is not None:
         ex.amount.fee = fv
-    tv = _vnum(v.get("total"))
+    tv = (be.amount.total if (_be_ok and be.amount.total is not None) else None)
+    if tv is None:
+        tv = _vnum(v.get("total"))
     if tv is not None:
         ex.amount.total = tv
-    # İşlem
+    # İşlem alanları (banka-özel > vision)
     for src, dst in (("date", "date"), ("ref_no", "ref_no"), ("document_no", "document_no"),
                      ("type", "type"), ("channel", "channel"), ("description", "description")):
-        if _s(src):
-            setattr(ex.transaction, dst, _s(src))
+        _bv = getattr(be.transaction, dst, "") if _be_ok else ""
+        _val = _bv or _s(src)
+        if _val:
+            setattr(ex.transaction, dst, _val)
+    # bank_ex'in IBAN listesini de kaynağa ekle (taraf-ayrımı düzeltmeleri için)
+    if _be_ok and be.all_ibans:
+        for ib in be.all_ibans:
+            if ib and ib not in _ocr_ibans:
+                _ocr_ibans.append(ib)
     # IBAN'dan banka tamamla
     if not ex.receiver.bank and ex.receiver.iban:
         try:
@@ -309,7 +352,25 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             except Exception:
                 vision_result = None
             if vision_result:
-                _apply_vision(extraction, vision_result)
+                # BANKA-ÖZEL ÇIKARIM: vision'ın SADIK metin dökümüne (full_text) PDF'lerdeki
+                # AYNI banka-özel extract_fields'i uygula. Taraf/tutar eşlemesi bankanın kendi
+                # etiket yapısına göre yapılır; genel vision tahmininin iki-sütunlu düzende
+                # gönderen/alıcıyı karıştırması önlenir (tüm bankalar için geçerli).
+                _bank_ex = None
+                _ft = (vision_result.get("full_text") or "").strip()
+                if len(_ft) > 40:
+                    try:
+                        _bank_ex = extract_fields(_ft, _ft, None)
+                    except Exception:
+                        _bank_ex = None
+                _apply_vision(extraction, vision_result, bank_ex=_bank_ex)
+                # METİN-TABANLI TÜM DENETİMLER de sadık vision dökümünü kullansın (rail, ücret,
+                # tarih zinciri, IBAN, maskeleme, hesap hareketi…): zayıf Tesseract OCR yerine
+                # bankanın kendi etiket yapısını içeren güvenilir metin. Böylece banka-özel
+                # denetimler fotoğrafta da PDF'deki gibi çalışır.
+                if _ft and len(_ft) > 40:
+                    text_layout = _ft
+                    text_read = _ft
                 extraction.text_source = "vision"
                 # sıra numarasını vision sonrası tazele
                 from extract import derive_sequence_number as _dsn

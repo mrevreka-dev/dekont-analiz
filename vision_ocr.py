@@ -34,6 +34,7 @@ _PROMPT = (
     "boşluksuz büyük harf yaz (TR + 24 hane). Metin Türkçe olabilir.\n\n"
     "Alanlar:\n"
     '{\n'
+    '  "full_text": "",            // ÖNCE BUNU DOLDUR: dekonttaki TÜM yazının SADIK dökümü (aşağıya bak)\n'
     '  "is_receipt": true/false,   // görselde banka dekontu içeriği var mı\n'
     '  "bank": "",                 // dekontu düzenleyen/gönderen banka\n'
     '  "sender_name": "",          // gönderen ad soyad/unvan\n'
@@ -63,6 +64,14 @@ _PROMPT = (
     "gönderici adı, TUTAR ve IBAN alanlarını incele. Şüphe varsa tamper_suspected=true yap, "
     "hangi alanların şüpheli olduğunu tamper_fields'a yaz ve güveni ver. Emin değilsen düşük "
     "güven ver ama yine de bildir.\n\n"
+    "SADIK METİN DÖKÜMÜ (full_text) — ÇOK ÖNEMLİ: Dekonttaki GÖRÜNEN TÜM yazıyı, "
+    "OLDUĞU GİBİ ve ETİKET:DEĞER yapısını KORUYARAK dök. Her 'Etiket : Değer' kendi satırında "
+    "olsun. Belge İKİ SÜTUNLU/İKİ BLOKLU ise (ör. solda gönderen/hesap bilgisi, sağda alıcı; ya da "
+    "'ALICI ÜNVANI' ile 'MÜŞTERİ ÜNVANI'/'GÖNDEREN' ayrı bloklarda) bunları BİRBİRİNE KARIŞTIRMA — "
+    "her etiketi kendi değeriyle eşleştir. Alıcı ve gönderen etiketlerini (ALICI ÜNVANI, ALICI IBAN, "
+    "MÜŞTERİ ÜNVANI, GÖNDEREN, GÖNDEREN IBAN, ALAN BANKA/KATILIMCI, EFT/FAST TUTARI, ÜCRET, SORGU NO, "
+    "SIRA NO, FİŞ NO, IBAN, TCKN vb.) AYNEN yazıldıkları gibi koru. IBAN'ları tam (TR+24 hane) yaz. "
+    "Bu döküm, banka-özel ayrıştırıcıya verilecek; bu yüzden etiketlerin doğruluğu KRİTİK.\n\n"
     "SADECE JSON döndür, başka açıklama yazma."
 )
 
