@@ -131,8 +131,6 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 8)
     if "RECEIPT_BEFORE_TXN" in codes:        # dekont, işlemden önce üretilmiş (imkânsız)
         score = min(score, 8)
-    if "SEQ_DATE_INVERSION" in codes:        # numara ↔ tarih monotonluğu kırık
-        score = min(score, 8)
     if "IMAGE_EDITOR_SOFTWARE" in codes:     # dekont fotoğrafı bir görüntü editöründen geçmiş
         score = min(score, 10)
     if "SELF_TRANSFER" in codes:             # gönderici IBAN = alıcı IBAN (anlamsız)

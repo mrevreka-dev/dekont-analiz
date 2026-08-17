@@ -178,15 +178,10 @@ def sequence_anomaly(bank_display: str, seq_number: str, txn_iso: str, sha256: s
     ettiği tarihe göre SIRA DIŞIYSA (ör. daha eski tarih ama daha büyük numara) tahrifat
     işaretidir. Yalnızca numarası GLOBAL MONOTON sayaç olan bankalarda (Enpara/QNB) çalışır;
     yeterli veri (>=4) ve NET bir tersinme (zaman ve numara farkı belirgin) yoksa tetiklenmez."""
-    # DEVRE DIŞI: bankalar-arası tek monoton sayaç varsayımı, temiz/gerçek referans veri
-    # olmadan yanlış-pozitif üretiyor (test verisi + şube/kanal bazlı sayaçlar). Numaranın
-    # KENDİ İÇİNDE taşıdığı tarih ↔ işlem tarihi çelişkisi zaten RECEIPT_NO_DATE_MISMATCH ile
-    # deterministik olarak yakalanıyor. Yeterli gerçek veri modeli kurulunca yeniden açılacak.
-    return None
-    key = re.sub(r"\s+", " ", (bank_display or "")).strip().upper()  # noqa: (ulaşılmaz)
+    key = re.sub(r"\s+", " ", (bank_display or "")).strip().upper()
     if not key or not seq_number or not str(seq_number).isdigit() or not txn_iso:
         return None
-    # Global monoton sayaçlı bankalar (önceki analizle tespit edildi)
+    # Yalnızca GLOBAL MONOTON sayaçlı bankalar (Enpara/QNB — önceki analizle tespit edildi).
     if not any(t in key for t in ("ENPARA", "QNB")):
         return None
     try:
@@ -198,7 +193,7 @@ def sequence_anomaly(bank_display: str, seq_number: str, txn_iso: str, sha256: s
         con = _connect()
         try:
             rows = con.execute(
-                "SELECT seq_number, txn_dt FROM receipts WHERE UPPER(bank)=? AND score>=90 "
+                "SELECT seq_number, txn_dt FROM receipts WHERE UPPER(bank)=? AND score>=95 "
                 "AND seq_number GLOB '[0-9]*' AND txn_dt<>'' AND sha256<>?", (key, sha256)).fetchall()
         finally:
             con.close()
@@ -210,22 +205,47 @@ def sequence_anomaly(bank_display: str, seq_number: str, txn_iso: str, sha256: s
             pts.append((int(s), _dt.datetime.fromisoformat(td)))
         except Exception:
             continue
-    if len(pts) < 4:
+    if len(pts) < 12:                       # yeterli gerçek veri yok -> KAPALI
         return None
-    # NET tersinme: numara bizden KÜÇÜK ama tarih bizden en az 2 saat SONRA (ya da tersi),
-    # ve numara farkı anlamlı (>=2). Böyle bir örnek varsa monotonluk kırılmış.
-    H2 = _dt.timedelta(hours=2)
+    # KENDİ-KALİBRASYON KAPISI: bankanın GERÇEK verisinde numara↔zaman gerçekten monoton mu?
+    # Spearman rank korelasyonu düşükse (veri gürültülü / şube-bazlı / test verisi) denetim
+    # KENDİNİ KAPATIR — yanlış-pozitif üretmez.
+    seqs = [p[0] for p in pts]
+    times = [p[1].timestamp() for p in pts]
+    if _spearman(times, seqs) < 0.90:
+        return None
+    # Bu dekont, monoton trende karşı ÇOK sayıda tersinme yaratıyor mu? (tek tersinme yetmez)
+    H = _dt.timedelta(hours=6)
+    inv = 0
+    worst = None
     for s, td in pts:
-        if s < n - 1 and td > t0 + H2:
-            return _seq_finding(n, t0, s, td, key)
-        if s > n + 1 and td < t0 - H2:
-            return _seq_finding(n, t0, s, td, key)
+        if (s < n and td > t0 + H) or (s > n and td < t0 - H):
+            inv += 1
+            if worst is None:
+                worst = (s, td)
+    if inv >= 4 and inv / len(pts) >= 0.30 and worst is not None:
+        return _seq_finding(n, t0, worst[0], worst[1], key)
     return None
+
+
+def _spearman(x: list, y: list) -> float:
+    """Spearman rank korelasyonu (numpy). Boş/sabit dizide 0 döner."""
+    try:
+        import numpy as _np
+        if len(x) < 3:
+            return 0.0
+        rx = _np.argsort(_np.argsort(_np.asarray(x, dtype=float)))
+        ry = _np.argsort(_np.argsort(_np.asarray(y, dtype=float)))
+        if rx.std() == 0 or ry.std() == 0:
+            return 0.0
+        return float(_np.corrcoef(rx, ry)[0, 1])
+    except Exception:
+        return 0.0
 
 
 def _seq_finding(n, t0, s, td, key):
     return {
-        "code": "SEQ_DATE_INVERSION", "severity": "critical", "weight": 40,
+        "code": "SEQ_DATE_INVERSION", "severity": "high", "weight": 16,
         "tr": f"NUMARA–TARİH ÇELİŞKİSİ: bu dekontun sıra numarası ({n}) ile işlem tarihi ({t0:%d.%m.%Y %H:%M}) "
               f"bankanın numara sırasına AYKIRI. Aynı bankada numara {s} olan işlem {td:%d.%m.%Y %H:%M} "
               f"tarihli — numaralar zamanla artmalıyken burada sıra ters. İşlem tarihi ya da numarası "
@@ -338,7 +358,7 @@ def record(report: dict) -> bool:
             "INTERNAL_DATE_MISMATCH", "PDFIUM_PRODUCED",
             "IBAN_INVALID", "ISSUER_IBAN_MISMATCH", "RECEIVER_BANK_MISMATCH",
             "FEE_RAIL_MISMATCH", "RAIL_SAMEBANK_MISMATCH",
-            "DATE_IN_FUTURE", "RECEIPT_BEFORE_TXN", "SEQ_DATE_INVERSION", "IMAGE_EDITOR_SOFTWARE",
+            "DATE_IN_FUTURE", "RECEIPT_BEFORE_TXN", "IMAGE_EDITOR_SOFTWARE",
             "ID_CHECKSUM_INVALID", "SELF_TRANSFER"}
     if codes & _BAD:
         return False
@@ -373,7 +393,7 @@ _FAKE_CODES = {"REV_AMOUNT_CHANGED", "REV_CONTENT_CHANGED", "TIME_FILE_BEFORE_TX
                "INTERNAL_DATE_MISMATCH", "PDFIUM_PRODUCED", "IBAN_INVALID", "ISSUER_IBAN_MISMATCH",
                "RECEIVER_BANK_MISMATCH", "STATEMENT_BALANCE_BREAK", "STATEMENT_ROW_COUNT_MISMATCH",
                "FEE_RAIL_MISMATCH", "RAIL_SAMEBANK_MISMATCH",
-               "DATE_IN_FUTURE", "RECEIPT_BEFORE_TXN", "SEQ_DATE_INVERSION", "IMAGE_EDITOR_SOFTWARE",
+               "DATE_IN_FUTURE", "RECEIPT_BEFORE_TXN", "IMAGE_EDITOR_SOFTWARE",
             "ID_CHECKSUM_INVALID", "SELF_TRANSFER"}
 
 
