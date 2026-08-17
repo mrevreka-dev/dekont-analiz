@@ -75,7 +75,30 @@ def _connect():
     con.execute("CREATE INDEX IF NOT EXISTS idx_an_bankseq ON analyses(bank, seq_number)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_an_fake ON analyses(is_fake)")
     con.commit()
+    _maybe_unblock(con)
     return con
+
+
+_UNBLOCK_DONE = False
+
+
+def _maybe_unblock(con) -> None:
+    """DEKONT_UNBLOCK env'inde verilen sıra/sorgu numaralarını (virgülle) kara-listeden çıkarır.
+    Yanlış-pozitif nedeniyle sahte damgalanmış gerçek dekontları temizlemek için (idempotent)."""
+    global _UNBLOCK_DONE
+    if _UNBLOCK_DONE:
+        return
+    _UNBLOCK_DONE = True
+    vals = [s.strip() for s in os.environ.get("DEKONT_UNBLOCK", "").split(",") if s.strip()]
+    if not vals:
+        return
+    try:
+        for v in vals:
+            con.execute("UPDATE analyses SET is_fake=0 WHERE (seq_number=? OR ref_no=? OR "
+                        "document_no=? OR sha256=?) AND is_fake=1", (v, v, v, v))
+        con.commit()
+    except Exception:
+        pass
 
 
 def _fields(report: dict) -> dict:

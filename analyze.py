@@ -159,6 +159,7 @@ def _vnum(x):
 def _apply_vision(ex, v: dict) -> None:
     """Vision modelinin döndürdüğü alanları Extraction'a uygular (görselde vision önceliklidir)."""
     import re as _re
+    _ocr_ibans = [ib for ib in (ex.all_ibans or []) if ib]   # vision ÖNCESİ OCR IBAN'ları
     def _s(key):
         val = v.get(key)
         return str(val).strip() if val not in (None, "") else ""
@@ -204,6 +205,17 @@ def _apply_vision(ex, v: dict) -> None:
             ex.receiver.bank = banks.bank_label_from_iban(ex.receiver.iban)
         except Exception:
             pass
+    # ÇAKIŞMA-ÖNLEME: vision gönderen ve alıcıya AYNI IBAN'ı koyduysa (yanlış eşleme),
+    # OCR'ın belgeden okuduğu iki AYRI geçerli IBAN'a dön (taraf-eşlemesini düzelt).
+    try:
+        import banks as _bk
+        if ex.sender.iban and ex.sender.iban == ex.receiver.iban:
+            distinct = list(dict.fromkeys(
+                ib for ib in _ocr_ibans if _bk.iban_valid(ib) is not False))
+            if len(distinct) >= 2:
+                ex.sender.iban, ex.receiver.iban = distinct[0], distinct[1]
+    except Exception:
+        pass
     # all_ibans güncelle
     for ib in (ex.sender.iban, ex.receiver.iban):
         if ib and ib not in ex.all_ibans:
@@ -623,7 +635,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                                         tr=_idt["tr"], en=_idt["en"], detail=_idt.get("detail", "")))
             # Deterministik IBAN/banka-tutarlılığı (mod-97, ihracçı-taraf, alıcı-bankası)
             for _d in _auth.deterministic_checks(_bkey, ex.sender.iban, ex.receiver.iban,
-                                                 ex.receiver.bank):
+                                                 ex.receiver.bank, ex.all_ibans):
                 findings.append(Finding(_d["code"], _d["severity"], "content", _d["weight"],
                                         tr=_d["tr"], en=_d["en"], detail=_d.get("detail", "")))
             # Alan-bazlı font tutarlılığı: TUTAR yabancı/ana-dışı bir fontta mı (yapıştırılmış)?
@@ -637,7 +649,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 findings.append(Finding(_mn["code"], _mn["severity"], "content", _mn["weight"],
                                         tr=_mn["tr"], en=_mn["en"], detail=_mn.get("detail", "")))
             # İşlem türü (FAST/EFT) ↔ taraf bankaları: aynı banka koduysa FAST/EFT olamaz (HAVALE'dir)
-            _rb = _auth.check_rail_bank(text_layout, ex.sender.iban, ex.receiver.iban)
+            _rb = _auth.check_rail_bank(text_layout, ex.sender.iban, ex.receiver.iban, ex.all_ibans)
             if _rb:
                 findings.append(Finding(_rb["code"], _rb["severity"], "content", _rb["weight"],
                                         tr=_rb["tr"], en=_rb["en"], detail=_rb.get("detail", "")))

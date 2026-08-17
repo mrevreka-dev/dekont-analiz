@@ -501,12 +501,16 @@ def _canon_bank(text: str) -> str:
 
 
 def deterministic_checks(bkey: str, sender_iban: str, receiver_iban: str,
-                         receiver_bank_text: str) -> list[dict]:
-    """IBAN geçerliliği + ihracçı-taraf + alıcı-bankası tutarlılığı. Bulgu listesi döndürür."""
+                         receiver_bank_text: str, all_ibans: list | None = None) -> list[dict]:
+    """IBAN geçerliliği + ihracçı-taraf + alıcı-bankası tutarlılığı. Bulgu listesi döndürür.
+    `all_ibans`: belgedeki TÜM IBAN'lar (OCR-temelli). Vision/OCR taraf-eşlemesi yanlış olsa bile
+    ihraççı kontrolü belgedeki gerçek IBAN'lara göre yapılır → yanlış-pozitif önlenir."""
     import banks as _b
     out = []
     s_iban = _b.normalize_iban(sender_iban)
     r_iban = _b.normalize_iban(receiver_iban)
+    _doc_codes = {_b.iban_bank_code(_b.normalize_iban(ib)) for ib in (all_ibans or []) if ib}
+    _doc_codes.discard("")
 
     # (1) IBAN mod-97 geçerliliği: geçersiz IBAN = tahrifat/uydurma (dijital dekontta yazım hatası olmaz)
     for label, ib in (("gönderen", s_iban), ("alıcı", r_iban)):
@@ -527,7 +531,10 @@ def deterministic_checks(bkey: str, sender_iban: str, receiver_iban: str,
     codes = _ISSUER_IBAN_CODES.get(bkey)
     if codes and s_iban and r_iban:
         sc, rc = _b.iban_bank_code(s_iban), _b.iban_bank_code(r_iban)
-        if sc and rc and not (codes & {sc, rc}):
+        # İhraççının kodu, taraf IBAN'larında YA DA belgedeki herhangi bir IBAN'da varsa sorun yok.
+        # (Vision/OCR sender↔receiver'ı yanlış eşlese bile ihraççı müşterisi belgede mevcuttur.)
+        _present = (codes & {sc, rc}) or (codes & _doc_codes)
+        if sc and rc and not _present:
             exp = "/".join(sorted(codes))
             out.append({
                 "code": "ISSUER_IBAN_MISMATCH", "severity": "critical", "weight": 46,
@@ -724,11 +731,14 @@ def check_fast_limit(text: str, amount, learned_max=None) -> dict | None:
     }
 
 
-def check_rail_bank(text: str, sender_iban: str, receiver_iban: str) -> dict | None:
+def check_rail_bank(text: str, sender_iban: str, receiver_iban: str,
+                    all_ibans: list | None = None) -> dict | None:
     """İşlem türü (rail) ↔ taraf bankaları tutarlılığı (KULLANICI KURALI):
     FAST ve EFT BANKALARARASI sistemlerdir. Gönderici ve alıcı IBAN AYNI bankaya aitse
     (aynı banka kodu), transfer banka içi HAVALE'dir; FAST/EFT olamaz. Dekont FAST/EFT
-    diyorsa işlem türü değiştirilmiş demektir — güçlü, deterministik tahrifat işareti."""
+    diyorsa işlem türü değiştirilmiş demektir — güçlü, deterministik tahrifat işareti.
+    Koruma: belgede ≥2 FARKLI banka IBAN'ı varsa 'aynı banka' sonucu bir çıkarım hatasıdır
+    (vision taraf-eşlemesini çökertmiş olabilir) → bastırılır, yanlış-pozitif önlenir."""
     import banks as _b
     rail = detect_transfer_rail(text)
     if rail not in ("fast", "eft"):
@@ -741,6 +751,12 @@ def check_rail_bank(text: str, sender_iban: str, receiver_iban: str) -> dict | N
     if _b.iban_valid(sender_iban) is False or _b.iban_valid(receiver_iban) is False:
         return None
     if sc != rc:
+        return None
+    # Belge birden fazla FARKLI banka IBAN'ı içeriyorsa "aynı banka" yanılgıdır -> bastır
+    _doc_codes = {_b.iban_bank_code(_b.normalize_iban(ib)) for ib in (all_ibans or []) if ib
+                  and _b.iban_valid(_b.normalize_iban(ib)) is not False}
+    _doc_codes.discard("")
+    if len(_doc_codes) >= 2:
         return None
     return {
         "code": "RAIL_SAMEBANK_MISMATCH", "severity": "critical", "weight": 42,
