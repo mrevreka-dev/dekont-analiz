@@ -529,7 +529,11 @@ def deterministic_checks(bkey: str, sender_iban: str, receiver_iban: str,
     # (A) İhracçı-taraf tutarlılığı: yalnızca HER İKİ IBAN da varken çalışır (hesap sahibi tarafı
     #     eksikse yanlış-pozitif olmasın). İhracçının kodu iki taraftan hiçbirinde yoksa -> tahrifat.
     codes = _ISSUER_IBAN_CODES.get(bkey)
-    if codes and s_iban and r_iban:
+    # SAVUNMA: iki taraf IBAN'ı BİREBİR AYNI ise gerçekte tek IBAN okunup kopyalanmıştır
+    # (fotoğrafta gönderen IBAN'ı yakalanamayınca alıcınınki iki tarafa da yazılabilir).
+    # Böyle bir durumda ihraççının müşterisi, OKUNAMAYAN taraf olabilir → uyuşmazlık iddia
+    # edilemez, denetim atlanır (yanlış-pozitif önlenir).
+    if codes and s_iban and r_iban and s_iban != r_iban:
         sc, rc = _b.iban_bank_code(s_iban), _b.iban_bank_code(r_iban)
         # İhraççının kodu, taraf IBAN'larında YA DA belgedeki herhangi bir IBAN'da varsa sorun yok.
         # (Vision/OCR sender↔receiver'ı yanlış eşlese bile ihraççı müşterisi belgede mevcuttur.)
