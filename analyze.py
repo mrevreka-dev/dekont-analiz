@@ -641,11 +641,30 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _rb:
                 findings.append(Finding(_rb["code"], _rb["severity"], "content", _rb["weight"],
                                         tr=_rb["tr"], en=_rb["en"], detail=_rb.get("detail", "")))
-            # FAST işlem-başına tutar limiti (TCMB) — FAST etiketli ama tutar limiti aşıyorsa
-            _fl = _auth.check_fast_limit(text_layout, ex.amount.value)
+            # FAST tutar anomalisi — regülasyon tabanı + GERÇEK dekontlardan öğrenilen tavan (veri-odaklı, FP-korumalı)
+            try:
+                import store as _store_f
+                _fmax = _store_f.max_amount_for_rail("fast")
+            except Exception:
+                _fmax = None
+            _fl = _auth.check_fast_limit(text_layout, ex.amount.value, _fmax)
             if _fl:
                 findings.append(Finding(_fl["code"], _fl["severity"], "content", _fl["weight"],
                                         tr=_fl["tr"], en=_fl["en"], detail=_fl.get("detail", "")))
+            # Beklenen QR eksik: bu bankanın gerçek dekontlarında hep QR varken bu belgede yoksa
+            # (veri-öğrenmeli, sıfır-FP: yalnızca >=5 gerçek dekontta %100 QR varsa tetiklenir)
+            try:
+                import store as _store_q
+                if not qr.get("found") and _store_q.qr_expected(ex.bank):
+                    findings.append(Finding(
+                        "MISSING_EXPECTED_QR", "medium", "content", 14,
+                        tr="BEKLENEN QR YOK: bu bankanın gerçek dekontlarında QR/karekod bulunur, ancak bu "
+                           "belgede yok. Eksik QR, belgenin yeniden üretildiğine/oynandığına işaret edebilir.",
+                        en="EXPECTED QR MISSING: this bank's genuine receipts carry a QR code, but this document "
+                           "has none — may indicate the document was re-generated/tampered.",
+                        detail=f"bank={ex.bank}"))
+            except Exception:
+                pass
             # İşlem türü (FAST/HAVALE/EFT) ↔ ücret tarifesi tutarlılığı — hem PDF hem
             # fotoğrafta çalışır (alan bazlı). Seed + store'dan öğrenilen tarifeler birleşir.
             try:

@@ -688,30 +688,39 @@ def detect_transfer_rail(text: str) -> str | None:
     return None
 
 
-def check_fast_limit(text: str, amount) -> dict | None:
-    """FAST işlem-başına üst limiti (TCMB düzenlemesi, sistem geneli). Dekont FAST işlemi
-    olarak görünüyor ama tutar limiti aşıyorsa: bir bankanın FAST'la işleyemeyeceği bir
-    tutar gösteriliyor demektir (tutar ya da işlem türü değiştirilmiş). Limit zamanla
-    artabildiği için DEKONT_FAST_LIMIT ile ayarlanabilir (varsayılan 100.000 TL)."""
+def check_fast_limit(text: str, amount, learned_max=None) -> dict | None:
+    """FAST işlem-başına üst limiti. SABİT sayı yerine VERİ-ODAKLI çalışır:
+      etkin_limit = max(regülasyon tabanı, elimizdeki GERÇEK FAST dekontlarının en yüksek tutarı)
+    Böylece TCMB/bankalar limiti artırdığında ve gerçek büyük-FAST geldikçe tavan KENDİLİĞİNDEN
+    yükselir → yanlış-pozitif olmaz. Regülasyon tabanı DEKONT_FAST_LIMIT ile ayarlanır (varsayılan
+    100.000 TL). Aşımda bile YUMUŞAK ağırlık verilir (gerçek büyük-FAST'i asla 'kesin sahte' yapmaz;
+    kaydedilebilir kalır ki tavanı öğrensin)."""
     if amount is None:
         return None
     try:
         amt = float(amount)
-        limit = float(os.environ.get("DEKONT_FAST_LIMIT", "100000"))
+        floor = float(os.environ.get("DEKONT_FAST_LIMIT", "100000"))
     except Exception:
         return None
     if detect_transfer_rail(text) != "fast":
         return None
+    try:
+        lm = float(learned_max) if learned_max else 0.0
+    except Exception:
+        lm = 0.0
+    limit = max(floor, lm)                       # taban + gerçek dekontlardan öğrenilen tavan
     if amt <= limit:
         return None
     return {
-        "code": "FAST_LIMIT_EXCEEDED", "severity": "high", "weight": 28,
-        "tr": f"FAST LİMİT AŞIMI: işlem FAST olarak görünüyor ama tutar ({amt:,.0f} TL) FAST işlem-başına "
-              f"üst limitini ({limit:,.0f} TL) aşıyor. Bu tutar FAST ile gönderilemez (EFT/havale olmalıydı) — "
-              f"tutar ya da işlem türü değiştirilmiş olabilir.".replace(",", "."),
-        "en": f"FAST LIMIT EXCEEDED: labeled FAST but the amount ({amt:,.0f} TL) exceeds the per-transaction "
-              f"FAST limit ({limit:,.0f} TL). Such an amount cannot be sent via FAST — amount or type may be altered.",
-        "detail": f"amount={amt} fast_limit={limit}",
+        "code": "FAST_LIMIT_EXCEEDED", "severity": "medium", "weight": 12,
+        "tr": f"FAST TUTAR ANOMALİSİ: işlem FAST olarak görünüyor ve tutar ({amt:,.0f} TL) hem regülasyon "
+              f"tabanını hem de bugüne dek gördüğümüz gerçek FAST dekontlarının en yükseğini ({limit:,.0f} TL) "
+              f"aşıyor. FAST işlem-başına üst limiti vardır; bu tutar için EFT/havale beklenir — tutar ya da "
+              f"işlem türü değiştirilmiş OLABİLİR (bilgi/uyarı, tek başına kesin kanıt değil).".replace(",", "."),
+        "en": f"FAST AMOUNT ANOMALY: labeled FAST and the amount ({amt:,.0f} TL) exceeds both the regulatory "
+              f"floor and the largest genuine FAST we have seen ({limit:,.0f} TL). FAST has a per-transaction "
+              f"limit; EFT/havale would be expected — amount or type MAY be altered (advisory).",
+        "detail": f"amount={amt} effective_limit={limit} floor={floor} learned_max={lm}",
     }
 
 

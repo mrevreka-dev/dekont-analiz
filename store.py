@@ -57,8 +57,8 @@ def _connect():
         amount REAL, txn_date TEXT, txn_dt TEXT,
         sha256 TEXT UNIQUE, score INTEGER, created_at TEXT,
         fee REAL, rail TEXT )""")
-    # Eski veritabanları için idempotent sütun ekleme (fee/rail sonradan eklendi)
-    for _col, _typ in (("fee", "REAL"), ("rail", "TEXT")):
+    # Eski veritabanları için idempotent sütun ekleme (fee/rail/qr_found sonradan eklendi)
+    for _col, _typ in (("fee", "REAL"), ("rail", "TEXT"), ("qr_found", "INTEGER")):
         try:
             con.execute(f"ALTER TABLE receipts ADD COLUMN {_col} {_typ}")
         except Exception:
@@ -99,6 +99,7 @@ def _fields(report: dict) -> dict:
         "score": report.get("score", {}).get("authenticity_score"),
         "fee": ex.get("amount", {}).get("fee"),
         "rail": tx.get("rail") or "",
+        "qr_found": 1 if (report.get("qr", {}) or {}).get("found") else 0,
     }
 
 
@@ -127,6 +128,48 @@ def learned_rail_fees(bank_display: str) -> dict:
     except Exception:
         return {}
     return out
+
+
+def max_amount_for_rail(rail: str, min_score: int = 90) -> float | None:
+    """Bir işlem türü (rail) için GERÇEK (yüksek skorlu) dekontlarda gözlenen EN YÜKSEK
+    tutarı döndürür (sistem geneli, tüm bankalar). FAST üst limiti zamanla artabildiği
+    için sabit sayı yerine gerçek dekontlardan öğrenilen tavanı sağlar → yanlış-pozitifi önler."""
+    if not rail:
+        return None
+    try:
+        con = _connect()
+        try:
+            row = con.execute(
+                "SELECT MAX(amount) FROM receipts WHERE rail=? AND amount IS NOT NULL AND score>=?",
+                (rail, min_score)).fetchone()
+        finally:
+            con.close()
+        return float(row[0]) if row and row[0] is not None else None
+    except Exception:
+        return None
+
+
+def qr_expected(bank_display: str, min_samples: int = 5) -> bool:
+    """Bir bankanın GERÇEK (yüksek skorlu) dekontlarında QR HER ZAMAN varsa True.
+    Sıfır-FP: en az `min_samples` gerçek dekont ve %100 QR varlığı şartı. Veri
+    birikene kadar False döner → 'beklenen QR eksik' bayrağı erken tetiklenmez."""
+    key = re.sub(r"\s+", " ", (bank_display or "")).strip().upper()
+    if not key:
+        return False
+    try:
+        con = _connect()
+        try:
+            row = con.execute(
+                "SELECT COUNT(*), COALESCE(SUM(qr_found),0) FROM receipts "
+                "WHERE UPPER(bank)=? AND score>=90 AND qr_found IS NOT NULL", (key,)).fetchone()
+        finally:
+            con.close()
+    except Exception:
+        return False
+    if not row:
+        return False
+    total, with_qr = int(row[0] or 0), int(row[1] or 0)
+    return total >= min_samples and with_qr == total
 
 
 def sequence_anomaly(bank_display: str, seq_number: str, txn_iso: str, sha256: str = "") -> dict | None:
@@ -310,12 +353,12 @@ def record(report: dict) -> bool:
         con.execute(
             "INSERT OR IGNORE INTO receipts (bank, seq_number, seq_len, ref_no, document_no, "
             "sender_iban, sender_name, receiver_iban, amount, txn_date, txn_dt, sha256, score, created_at, "
-            "fee, rail) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "fee, rail, qr_found) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (f["bank"], f["seq_number"], f["seq_len"], f["ref_no"], f["document_no"],
              f["sender_iban"], f["sender_name"], f["receiver_iban"], f["amount"],
              f["txn_date"], f["txn_dt"], f["sha256"], f["score"], _dt.datetime.utcnow().isoformat(),
-             f.get("fee"), f.get("rail")))
+             f.get("fee"), f.get("rail"), f.get("qr_found", 0)))
         con.commit()
         return True
     except Exception:
