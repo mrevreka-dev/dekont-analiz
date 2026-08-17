@@ -19,6 +19,7 @@ banka-bilinçli sinyal üretir:
 """
 from __future__ import annotations
 
+import os
 import re
 import io
 import datetime as _dt
@@ -685,6 +686,33 @@ def detect_transfer_rail(text: str) -> str | None:
     if "eft ucreti" in n or "dekont/eft" in n and "fast" not in n:
         return "eft"
     return None
+
+
+def check_fast_limit(text: str, amount) -> dict | None:
+    """FAST işlem-başına üst limiti (TCMB düzenlemesi, sistem geneli). Dekont FAST işlemi
+    olarak görünüyor ama tutar limiti aşıyorsa: bir bankanın FAST'la işleyemeyeceği bir
+    tutar gösteriliyor demektir (tutar ya da işlem türü değiştirilmiş). Limit zamanla
+    artabildiği için DEKONT_FAST_LIMIT ile ayarlanabilir (varsayılan 100.000 TL)."""
+    if amount is None:
+        return None
+    try:
+        amt = float(amount)
+        limit = float(os.environ.get("DEKONT_FAST_LIMIT", "100000"))
+    except Exception:
+        return None
+    if detect_transfer_rail(text) != "fast":
+        return None
+    if amt <= limit:
+        return None
+    return {
+        "code": "FAST_LIMIT_EXCEEDED", "severity": "high", "weight": 28,
+        "tr": f"FAST LİMİT AŞIMI: işlem FAST olarak görünüyor ama tutar ({amt:,.0f} TL) FAST işlem-başına "
+              f"üst limitini ({limit:,.0f} TL) aşıyor. Bu tutar FAST ile gönderilemez (EFT/havale olmalıydı) — "
+              f"tutar ya da işlem türü değiştirilmiş olabilir.".replace(",", "."),
+        "en": f"FAST LIMIT EXCEEDED: labeled FAST but the amount ({amt:,.0f} TL) exceeds the per-transaction "
+              f"FAST limit ({limit:,.0f} TL). Such an amount cannot be sent via FAST — amount or type may be altered.",
+        "detail": f"amount={amt} fast_limit={limit}",
+    }
 
 
 def check_rail_bank(text: str, sender_iban: str, receiver_iban: str) -> dict | None:

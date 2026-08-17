@@ -641,6 +641,11 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _rb:
                 findings.append(Finding(_rb["code"], _rb["severity"], "content", _rb["weight"],
                                         tr=_rb["tr"], en=_rb["en"], detail=_rb.get("detail", "")))
+            # FAST işlem-başına tutar limiti (TCMB) — FAST etiketli ama tutar limiti aşıyorsa
+            _fl = _auth.check_fast_limit(text_layout, ex.amount.value)
+            if _fl:
+                findings.append(Finding(_fl["code"], _fl["severity"], "content", _fl["weight"],
+                                        tr=_fl["tr"], en=_fl["en"], detail=_fl.get("detail", "")))
             # İşlem türü (FAST/HAVALE/EFT) ↔ ücret tarifesi tutarlılığı — hem PDF hem
             # fotoğrafta çalışır (alan bazlı). Seed + store'dan öğrenilen tarifeler birleşir.
             try:
@@ -671,6 +676,28 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                         en=f"Suspected visual text tampering (confidence {_conf}%): {_reason} "
                            f"Suspect field(s): {', '.join(_tf) if _tf else '—'}.",
                         detail=f"conf={_conf} fields={_tf}"))
+            # Alan-lokalize piksel forensiği (yalnızca fotoğraf): tutar/isim kutularında
+            # koyuluk/keskinlik aykırılığı. Kalibrasyon aşaması — BİLGİ amaçlı (ağırlık 0).
+            if input_kind == "image" and pil is not None:
+                try:
+                    from image_forensics import text_field_forensics
+                    _tgt = {"alıcı adı": ex.receiver.name or "",
+                            "gönderici adı": ex.sender.name or "",
+                            "tutar": (ex.amount.text or "")}
+                    _pf = text_field_forensics(pil, _tgt)
+                    if _pf.get("suspects"):
+                        _flds = ", ".join(sorted({s["field"] for s in _pf["suspects"]}))
+                        findings.append(Finding(
+                            "PIXEL_FIELD_ANOMALY", "info", "image", 0,
+                            tr=f"PİKSEL İZİ (bilgi): {_flds} alan(lar)ında metnin koyuluk/keskinlik değeri "
+                               f"belgenin genel yazısından belirgin farklı — olası dijital düzenleme. Bu "
+                               f"BİLGİLENDİRİCİ bir sinyaldir, tek başına kanıt değildir; teyit için orijinal "
+                               f"dijital PDF isteyin.",
+                            en=f"PIXEL TRACE (info): text in field(s) {_flds} differs markedly in darkness/"
+                               f"sharpness from the body text — possible digital editing. Informational only.",
+                            detail=f"suspects={_pf['suspects']} checked={_pf.get('checked')}"))
+                except Exception:
+                    pass
             # Tarih mantık zinciri (gelecek tarih / dekont<işlem / valör<işlem) — foto + PDF
             for _dc in _auth.check_date_chain(text_layout, ex.transaction.date,
                                               ex.transaction.value_date):

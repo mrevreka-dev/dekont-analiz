@@ -407,3 +407,92 @@ def _score_image(r: ImageForensics) -> None:
 
     r.manipulation_score = float(min(100, manip))
     r.ai_score = float(min(100, ai))
+
+
+# ---------------------------------------------------------------------------
+#  ALAN-LOKALİZE PİKSEL FORENSİĞİ (fotoğraf dekontlar için — kalibrasyon aşaması)
+#  Tutar / alıcı adı / alıcı IBAN gibi KRİTİK alanların metin kutularını bulur ve
+#  mürekkep koyuluğu + keskinlik (kenar enerjisi) açısından belgenin GENEL metniyle
+#  karşılaştırır. Yapıştırılmış/düzenlenmiş metin çoğu zaman farklı koyulukta ya da
+#  keskinliktedir. Robust-z (medyan + MAD) ile yalnızca GÜÇLÜ aykırılıklar işaretlenir.
+#  Şimdilik BİLGİ amaçlı (ağırlık 0) — yanlış-pozitif üretmeden veri toplamak için.
+# ---------------------------------------------------------------------------
+def _laplacian_var(patch: "np.ndarray") -> float:
+    if patch.size < 16:
+        return 0.0
+    p = patch.astype(np.float32)
+    lap = (-4 * p
+           + np.roll(p, 1, 0) + np.roll(p, -1, 0)
+           + np.roll(p, 1, 1) + np.roll(p, -1, 1))
+    lap = lap[1:-1, 1:-1]
+    return float(lap.var()) if lap.size else 0.0
+
+
+def _mad(vals, med):
+    return float(np.median([abs(v - med) for v in vals])) if vals else 0.0
+
+
+def _norm_txt(s: str) -> str:
+    return re.sub(r"[^0-9a-zçğıöşü]", "", (s or "").lower())
+
+
+def text_field_forensics(img: "Image.Image", targets: dict, lang: str = "tur+eng") -> dict:
+    """targets: {alan_adı: değer}. Döner: {suspects:[{field,word,z_dark,z_sharp}], checked:int}."""
+    out = {"suspects": [], "checked": 0}
+    try:
+        import pytesseract
+        from pytesseract import Output
+    except Exception:
+        return out
+    try:
+        gray = img.convert("L")
+        arr = np.asarray(gray, dtype=np.float32)
+        H, W = arr.shape
+        data = pytesseract.image_to_data(gray, lang=lang, output_type=Output.DICT)
+    except Exception:
+        return out
+    boxes = []
+    for i in range(len(data.get("text", []))):
+        txt = (data["text"][i] or "").strip()
+        try:
+            conf = float(data["conf"][i])
+        except Exception:
+            conf = -1
+        if not txt or conf < 45:
+            continue
+        x, y, w, h = data["left"][i], data["top"][i], data["width"][i], data["height"][i]
+        if w < 8 or h < 8 or h > H * 0.08:
+            continue
+        patch = arr[y:y + h, x:x + w]
+        if patch.size < 40:
+            continue
+        lo, hi = float(patch.min()), float(patch.max())
+        if hi - lo < 25:                     # kontrast yok (boş/leke) -> atla
+            continue
+        thr = lo + (hi - lo) * 0.40
+        ink = patch[patch < thr]
+        dark = float(ink.mean()) if ink.size >= 6 else float(patch.mean())
+        boxes.append({"txt": txt, "n": _norm_txt(txt), "h": h,
+                      "dark": dark, "sharp": _laplacian_var(patch)})
+    out["checked"] = len(boxes)
+    if len(boxes) < 10:
+        return out
+    darks = [b["dark"] for b in boxes]
+    sharps = [b["sharp"] for b in boxes]
+    dmed = float(np.median(darks)); dmad = _mad(darks, dmed) or 1.0
+    smed = float(np.median(sharps)); smad = _mad(sharps, smed) or 1.0
+    seen = set()
+    for field, val in (targets or {}).items():
+        nv = _norm_txt(val)
+        if not nv or len(nv) < 3:
+            continue
+        for b in boxes:
+            if len(b["n"]) < 3 or b["n"] not in nv:
+                continue
+            zd = abs(b["dark"] - dmed) / (1.4826 * dmad)
+            zs = abs(b["sharp"] - smed) / (1.4826 * smad)
+            if (zd > 3.5 or zs > 4.5) and (field, b["n"]) not in seen:
+                seen.add((field, b["n"]))
+                out["suspects"].append({"field": field, "word": b["txt"],
+                                        "z_dark": round(zd, 1), "z_sharp": round(zs, 1)})
+    return out
