@@ -759,3 +759,108 @@ def check_fee_rail(bkey: str, text: str, fee, learned: dict | None = None) -> di
                 "detail": f"rail={rail} fee={fee} own={prof[rail]} matched_{other}={refs}",
             }
     return None
+
+
+# ---------------------------------------------------------------------------
+#  TARİH MANTIK ZİNCİRİ (içerik bazlı — fotoğrafta da çalışır)
+#  Saldırgan tarih alanlarını değiştirdiğinde mantık kırılır: dekont işlemden önce
+#  üretilemez, hiçbir tarih gelecekte olamaz, valör işlemden önce olamaz.
+# ---------------------------------------------------------------------------
+_DT_RE = re.compile(r"(\d{2})[.\-/](\d{2})[.\-/](\d{4})(?:[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?")
+
+
+def _parse_dt(s: str):
+    if not s:
+        return None
+    m = _DT_RE.search(s)
+    if not m:
+        return None
+    d, mo, y, h, mi, se = m.groups()
+    try:
+        return _dt.datetime(int(y), int(mo), int(d), int(h or 0), int(mi or 0), int(se or 0))
+    except Exception:
+        return None
+
+
+def _label_date(text: str, labels: list[str]):
+    n = text or ""
+    for lab in labels:
+        m = re.search(re.escape(lab) + r"[^\n:]*[:：]?\s*" + _DT_RE.pattern, n)
+        if m:
+            return _parse_dt(m.group(0))
+    return None
+
+
+def check_date_chain(text: str, txn_date_str: str, value_date_str: str, now=None) -> list[dict]:
+    """Tarih alanları arasındaki mantık tutarlılığı. Liste döndürür (0+ bulgu)."""
+    out = []
+    now = now or _dt.datetime.now()
+    txn = _parse_dt(txn_date_str) or _label_date(text, ["İşlem Zam", "İşlem Tarihi", "ISLEM TARIHI", "İŞLEM TARİHİ"])
+    dek = _label_date(text, ["Dekont Tarihi", "Düzenlenme Tarihi", "DÜZENLENME"])
+    val = _parse_dt(value_date_str) or _label_date(text, ["Valör", "Valor", "VALÖR"])
+
+    # 1) Gelecek tarih: hiçbir işlem/dekont tarihi bugünden ileri olamaz (1 gün tolerans)
+    fut = now + _dt.timedelta(days=1)
+    for nm, dtv in (("işlem", txn), ("dekont", dek)):
+        if dtv and dtv > fut:
+            out.append({
+                "code": "DATE_IN_FUTURE", "severity": "critical", "weight": 40,
+                "tr": f"TARİH ÇELİŞKİSİ: {nm} tarihi ({dtv:%d.%m.%Y %H:%M}) GELECEKTE — bir dekont henüz "
+                      f"gerçekleşmemiş bir işlemi gösteremez. Tarih elle değiştirilmiş (ileri tarihleme).",
+                "en": f"DATE CONFLICT: the {nm} date ({dtv:%d.%m.%Y %H:%M}) is in the FUTURE — a receipt cannot "
+                      f"show a transaction that has not happened yet. The date was altered (forward-dating).",
+                "detail": f"{nm}={dtv.isoformat()} now={now.isoformat()}"})
+            break
+
+    # 2) Dekont tarihi işlem tarihinden ÖNCE olamaz (dekont işlemle birlikte/sonra üretilir)
+    if txn and dek and dek < txn - _dt.timedelta(minutes=1):
+        out.append({
+            "code": "RECEIPT_BEFORE_TXN", "severity": "critical", "weight": 40,
+            "tr": f"TARİH ÇELİŞKİSİ: dekont tarihi ({dek:%d.%m.%Y %H:%M}) işlem tarihinden "
+                  f"({txn:%d.%m.%Y %H:%M}) ÖNCE. Dekont, işlem gerçekleşmeden üretilemez — tarih alanlarından "
+                  f"biri değiştirilmiş.",
+            "en": f"DATE CONFLICT: receipt date ({dek:%d.%m.%Y %H:%M}) precedes the transaction date "
+                  f"({txn:%d.%m.%Y %H:%M}). A receipt cannot be issued before the transaction.",
+            "detail": f"dekont={dek.isoformat()} islem={txn.isoformat()}"})
+
+    # 3) Valör işlem tarihinden ÖNCE olamaz (aynı gün ya da sonrası; 1 gün tolerans)
+    if txn and val and val.date() < (txn - _dt.timedelta(days=1)).date():
+        out.append({
+            "code": "VALUE_DATE_ANOMALY", "severity": "high", "weight": 18,
+            "tr": f"TARİH ANOMALİSİ: valör tarihi ({val:%d.%m.%Y}) işlem tarihinden ({txn:%d.%m.%Y}) önce. "
+                  f"Valör normalde işlem günü ya da sonrasıdır.",
+            "en": f"DATE ANOMALY: value date ({val:%d.%m.%Y}) is before the transaction date ({txn:%d.%m.%Y}).",
+            "detail": f"valor={val.isoformat()} islem={txn.isoformat()}"})
+    return out
+
+
+# ---------------------------------------------------------------------------
+#  GÖRÜNTÜ EDİTÖRÜ / İÇERİK-KİMLİK İMZASI (fotoğraf dekontlar için anında bayrak)
+#  Bir "dekont fotoğrafı"nın EXIF/yazılım imzası bir masaüstü görüntü editörünü
+#  gösteriyorsa (Photoshop, GIMP, Photopea...), belge düzenlenmiş demektir.
+# ---------------------------------------------------------------------------
+_HEAVY_EDITORS = ("photoshop", "gimp", "photopea", "pixlr", "affinity", "coreldraw",
+                  "paint.net", "krita", "inkscape", "illustrator", "lightroom")
+
+
+def check_image_editor(exif_software: str, edit_hits, c2pa_present: bool) -> dict | None:
+    sw = (exif_software or "").lower()
+    hits = [h for h in (edit_hits or [])]
+    hit_editor = next((e for e in _HEAVY_EDITORS if e in sw), None)
+    if hit_editor:
+        return {
+            "code": "IMAGE_EDITOR_SOFTWARE", "severity": "critical", "weight": 38,
+            "tr": f"GÖRÜNTÜ EDİTÖRÜ İMZASI: dosyanın meta verisi bir masaüstü görüntü düzenleyicisiyle "
+                  f"({hit_editor}) işlendiğini gösteriyor. Gerçek bir banka dekontu (ekran görüntüsü/fotoğraf) "
+                  f"böyle bir editörden geçmez — belge düzenlenmiş, güçlü tahrifat işareti.",
+            "en": f"IMAGE EDITOR SIGNATURE: metadata shows the file was processed by a desktop image editor "
+                  f"({hit_editor}). A genuine bank receipt would not pass through such software — strong tampering signal.",
+            "detail": f"software={exif_software}"}
+    if hits:
+        return {
+            "code": "IMAGE_EDIT_SIGNATURE", "severity": "high", "weight": 20,
+            "tr": f"DÜZENLEME İMZASI: dosyada görüntü düzenleme aracı izleri bulundu ({', '.join(hits)}). "
+                  f"Dekont üzerinde oynama yapılmış olabilir.",
+            "en": f"EDIT SIGNATURE: image-editing tool traces found ({', '.join(hits)}).",
+            "detail": f"hits={hits}"}
+    return None

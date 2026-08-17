@@ -127,6 +127,14 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 8)
     if "RAIL_SAMEBANK_MISMATCH" in codes:    # FAST/EFT ama gönderici=alıcı banka (aynı banka = havale)
         score = min(score, 6)
+    if "DATE_IN_FUTURE" in codes:            # işlem/dekont tarihi gelecekte
+        score = min(score, 8)
+    if "RECEIPT_BEFORE_TXN" in codes:        # dekont, işlemden önce üretilmiş (imkânsız)
+        score = min(score, 8)
+    if "SEQ_DATE_INVERSION" in codes:        # numara ↔ tarih monotonluğu kırık
+        score = min(score, 8)
+    if "IMAGE_EDITOR_SOFTWARE" in codes:     # dekont fotoğrafı bir görüntü editöründen geçmiş
+        score = min(score, 10)
     if "RECEIPT_NO_DATE_MISMATCH" in codes:  # fiş numarasındaki tarih ≠ işlem tarihi (tarihleme)
         score = min(score, 8)
     if "PRODUCER_MISMATCH" in codes:         # bankanın gerçek kütüphanesiyle üretilmemiş

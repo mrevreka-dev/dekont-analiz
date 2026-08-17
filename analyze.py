@@ -671,6 +671,31 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                         en=f"Suspected visual text tampering (confidence {_conf}%): {_reason} "
                            f"Suspect field(s): {', '.join(_tf) if _tf else '—'}.",
                         detail=f"conf={_conf} fields={_tf}"))
+            # Tarih mantık zinciri (gelecek tarih / dekont<işlem / valör<işlem) — foto + PDF
+            for _dc in _auth.check_date_chain(text_layout, ex.transaction.date,
+                                              ex.transaction.value_date):
+                findings.append(Finding(_dc["code"], _dc["severity"], "content", _dc["weight"],
+                                        tr=_dc["tr"], en=_dc["en"], detail=_dc.get("detail", "")))
+            # Görüntü editörü / düzenleme imzası (fotoğraf dekontlar için anında bayrak)
+            if img_forensics is not None:
+                _ie = _auth.check_image_editor(img_forensics.exif_software,
+                                               getattr(img_forensics, "edit_signature_hits", None),
+                                               img_forensics.c2pa_present)
+                if _ie:
+                    findings.append(Finding(_ie["code"], _ie["severity"], "metadata", _ie["weight"],
+                                            tr=_ie["tr"], en=_ie["en"], detail=_ie.get("detail", "")))
+            # Dekont-no ↔ işlem tarihi sıralılığı (global monoton sayaçlı bankalar)
+            try:
+                import store as _store_s
+                _txn_iso = ""
+                if _txn_dt:
+                    _txn_iso = _txn_dt.isoformat()
+                _sa = _store_s.sequence_anomaly(ex.bank, ex.transaction.sequence_number, _txn_iso, "")
+                if _sa:
+                    findings.append(Finding(_sa["code"], _sa["severity"], "content", _sa["weight"],
+                                            tr=_sa["tr"], en=_sa["en"], detail=_sa.get("detail", "")))
+            except Exception:
+                pass
         except Exception:
             pass
 

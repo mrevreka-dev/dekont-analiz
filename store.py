@@ -129,6 +129,70 @@ def learned_rail_fees(bank_display: str) -> dict:
     return out
 
 
+def sequence_anomaly(bank_display: str, seq_number: str, txn_iso: str, sha256: str = "") -> dict | None:
+    """Dekont/sıra numarası ↔ işlem tarihi monotonluğu. Bir bankanın numaraları zamanla
+    ARTAR: daha erken işlemin numarası daha küçük olmalıdır. Bu dekontun numarası, iddia
+    ettiği tarihe göre SIRA DIŞIYSA (ör. daha eski tarih ama daha büyük numara) tahrifat
+    işaretidir. Yalnızca numarası GLOBAL MONOTON sayaç olan bankalarda (Enpara/QNB) çalışır;
+    yeterli veri (>=4) ve NET bir tersinme (zaman ve numara farkı belirgin) yoksa tetiklenmez."""
+    # DEVRE DIŞI: bankalar-arası tek monoton sayaç varsayımı, temiz/gerçek referans veri
+    # olmadan yanlış-pozitif üretiyor (test verisi + şube/kanal bazlı sayaçlar). Numaranın
+    # KENDİ İÇİNDE taşıdığı tarih ↔ işlem tarihi çelişkisi zaten RECEIPT_NO_DATE_MISMATCH ile
+    # deterministik olarak yakalanıyor. Yeterli gerçek veri modeli kurulunca yeniden açılacak.
+    return None
+    key = re.sub(r"\s+", " ", (bank_display or "")).strip().upper()  # noqa: (ulaşılmaz)
+    if not key or not seq_number or not str(seq_number).isdigit() or not txn_iso:
+        return None
+    # Global monoton sayaçlı bankalar (önceki analizle tespit edildi)
+    if not any(t in key for t in ("ENPARA", "QNB")):
+        return None
+    try:
+        n = int(seq_number)
+        t0 = _dt.datetime.fromisoformat(txn_iso)
+    except Exception:
+        return None
+    try:
+        con = _connect()
+        try:
+            rows = con.execute(
+                "SELECT seq_number, txn_dt FROM receipts WHERE UPPER(bank)=? AND score>=90 "
+                "AND seq_number GLOB '[0-9]*' AND txn_dt<>'' AND sha256<>?", (key, sha256)).fetchall()
+        finally:
+            con.close()
+    except Exception:
+        return None
+    pts = []
+    for s, td in rows:
+        try:
+            pts.append((int(s), _dt.datetime.fromisoformat(td)))
+        except Exception:
+            continue
+    if len(pts) < 4:
+        return None
+    # NET tersinme: numara bizden KÜÇÜK ama tarih bizden en az 2 saat SONRA (ya da tersi),
+    # ve numara farkı anlamlı (>=2). Böyle bir örnek varsa monotonluk kırılmış.
+    H2 = _dt.timedelta(hours=2)
+    for s, td in pts:
+        if s < n - 1 and td > t0 + H2:
+            return _seq_finding(n, t0, s, td, key)
+        if s > n + 1 and td < t0 - H2:
+            return _seq_finding(n, t0, s, td, key)
+    return None
+
+
+def _seq_finding(n, t0, s, td, key):
+    return {
+        "code": "SEQ_DATE_INVERSION", "severity": "critical", "weight": 40,
+        "tr": f"NUMARA–TARİH ÇELİŞKİSİ: bu dekontun sıra numarası ({n}) ile işlem tarihi ({t0:%d.%m.%Y %H:%M}) "
+              f"bankanın numara sırasına AYKIRI. Aynı bankada numara {s} olan işlem {td:%d.%m.%Y %H:%M} "
+              f"tarihli — numaralar zamanla artmalıyken burada sıra ters. İşlem tarihi ya da numarası "
+              f"sonradan değiştirilmiş (güçlü sahtecilik işareti).",
+        "en": f"NUMBER–DATE INVERSION: this receipt's sequence number ({n}) conflicts with its transaction "
+              f"date ({t0:%d.%m.%Y %H:%M}). A receipt numbered {s} at the same bank is dated {td:%d.%m.%Y %H:%M}; "
+              f"numbers must increase over time but the order is inverted here — the date or number was altered.",
+        "detail": f"n={n} t0={t0.isoformat()} other=({s},{td.isoformat()})"}
+
+
 def check(report: dict) -> list[dict]:
     """Yüklenen dekontu geçmiş kayıtlarla karşılaştırır; bulgu listesi döndürür.
     Her bulgu: {code, severity, tr, en, detail}."""
@@ -230,7 +294,8 @@ def record(report: dict) -> bool:
             "AMOUNT_MISMATCH", "BROWSER_RERENDER", "FONT_BROWSER_RERENDER", "FONT_SET_MISMATCH",
             "INTERNAL_DATE_MISMATCH", "PDFIUM_PRODUCED",
             "IBAN_INVALID", "ISSUER_IBAN_MISMATCH", "RECEIVER_BANK_MISMATCH",
-            "FEE_RAIL_MISMATCH", "RAIL_SAMEBANK_MISMATCH"}
+            "FEE_RAIL_MISMATCH", "RAIL_SAMEBANK_MISMATCH",
+            "DATE_IN_FUTURE", "RECEIPT_BEFORE_TXN", "SEQ_DATE_INVERSION", "IMAGE_EDITOR_SOFTWARE"}
     if codes & _BAD:
         return False
     f = _fields(report)
@@ -263,7 +328,8 @@ _FAKE_CODES = {"REV_AMOUNT_CHANGED", "REV_CONTENT_CHANGED", "TIME_FILE_BEFORE_TX
                "AMOUNT_MISMATCH", "BROWSER_RERENDER", "FONT_BROWSER_RERENDER", "FONT_SET_MISMATCH",
                "INTERNAL_DATE_MISMATCH", "PDFIUM_PRODUCED", "IBAN_INVALID", "ISSUER_IBAN_MISMATCH",
                "RECEIVER_BANK_MISMATCH", "STATEMENT_BALANCE_BREAK", "STATEMENT_ROW_COUNT_MISMATCH",
-               "FEE_RAIL_MISMATCH", "RAIL_SAMEBANK_MISMATCH"}
+               "FEE_RAIL_MISMATCH", "RAIL_SAMEBANK_MISMATCH",
+               "DATE_IN_FUTURE", "RECEIPT_BEFORE_TXN", "SEQ_DATE_INVERSION", "IMAGE_EDITOR_SOFTWARE"}
 
 
 def log_analysis(report: dict) -> bool:
