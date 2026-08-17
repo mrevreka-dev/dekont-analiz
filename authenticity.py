@@ -864,3 +864,40 @@ def check_image_editor(exif_software: str, edit_hits, c2pa_present: bool) -> dic
             "en": f"EDIT SIGNATURE: image-editing tool traces found ({', '.join(hits)}).",
             "detail": f"hits={hits}"}
     return None
+
+
+def check_identity(id_str: str, label: str = "kimlik") -> dict | None:
+    """TCKN/VKN sağlaması: maskeli değilse ve kontrol basamağı tutmuyorsa tahrifat sinyali.
+    TC Kimlik/Vergi No matematiksel bir sağlama taşır; uydurulan/değiştirilen numara tutmaz."""
+    import banks as _b
+    v = _b.id_valid(id_str)
+    if v is False:
+        d = re.sub(r"\D", "", id_str or "")
+        kind = "TC Kimlik No" if len(d) == 11 else "Vergi Kimlik No"
+        return {
+            "code": "ID_CHECKSUM_INVALID", "severity": "high", "weight": 30,
+            "tr": f"GEÇERSİZ {kind} ({label}): ‘{id_str}’ resmi kontrol basamağı sağlamasını GEÇEMİYOR. "
+                  f"Gerçek bir {kind} matematiksel sağlama taşır; geçersiz numara, alanın uydurulduğunu ya da "
+                  f"elle değiştirildiğini gösterir.",
+            "en": f"INVALID {('National ID' if len(d)==11 else 'Tax ID')} ({label}): '{id_str}' fails the official "
+                  f"checksum. A genuine ID carries a valid check digit; an invalid one indicates it was fabricated "
+                  f"or altered.",
+            "detail": f"{label}_id={id_str}"}
+    return None
+
+
+def check_self_transfer(sender_iban: str, receiver_iban: str) -> dict | None:
+    """Gönderici IBAN = Alıcı IBAN ise: aynı hesaba transfer anlamsızdır. (Yalnızca güvenilir
+    çıkarımda — dijital PDF — çağrılmalı; fotoğrafta OCR aynı IBAN'ı iki alana yazabilir.)"""
+    import banks as _b
+    s = _b.normalize_iban(sender_iban)
+    r = _b.normalize_iban(receiver_iban)
+    if s and r and s == r and _b.iban_valid(s) is not False:
+        return {
+            "code": "SELF_TRANSFER", "severity": "critical", "weight": 40,
+            "tr": f"ANLAMSIZ İŞLEM: gönderici ve alıcı IBAN AYNI ({s}). Bir hesaptan yine kendisine transfer "
+                  f"yapılamaz; taraf alanlarından biri (IBAN/isim) sonradan değiştirilmiş — güçlü tahrifat işareti.",
+            "en": f"NONSENSICAL TRANSFER: sender and receiver IBANs are identical ({s}). One cannot transfer to the "
+                  f"same account; a party field (IBAN/name) was altered — strong tampering signal.",
+            "detail": f"iban={s}"}
+    return None

@@ -135,6 +135,10 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 8)
     if "IMAGE_EDITOR_SOFTWARE" in codes:     # dekont fotoğrafı bir görüntü editöründen geçmiş
         score = min(score, 10)
+    if "SELF_TRANSFER" in codes:             # gönderici IBAN = alıcı IBAN (anlamsız)
+        score = min(score, 8)
+    if "ID_CHECKSUM_INVALID" in codes:       # TCKN/VKN kontrol basamağı tutmuyor
+        score = min(score, 20)
     if "RECEIPT_NO_DATE_MISMATCH" in codes:  # fiş numarasındaki tarih ≠ işlem tarihi (tarihleme)
         score = min(score, 8)
     if "PRODUCER_MISMATCH" in codes:         # bankanın gerçek kütüphanesiyle üretilmemiş

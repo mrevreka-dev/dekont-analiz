@@ -676,6 +676,17 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                                               ex.transaction.value_date):
                 findings.append(Finding(_dc["code"], _dc["severity"], "content", _dc["weight"],
                                         tr=_dc["tr"], en=_dc["en"], detail=_dc.get("detail", "")))
+            # Kimlik (TCKN/VKN) sağlaması — maskeli değilse kontrol basamağı tutmalı
+            _id = _auth.check_identity(ex.sender.tckn, "gönderen")
+            if _id:
+                findings.append(Finding(_id["code"], _id["severity"], "content", _id["weight"],
+                                        tr=_id["tr"], en=_id["en"], detail=_id.get("detail", "")))
+            # Kendine transfer (gönderici IBAN = alıcı IBAN) — yalnızca güvenilir çıkarımda (PDF)
+            if input_kind != "image" and extraction.text_source not in ("ocr", "vision"):
+                _st = _auth.check_self_transfer(ex.sender.iban, ex.receiver.iban)
+                if _st:
+                    findings.append(Finding(_st["code"], _st["severity"], "content", _st["weight"],
+                                            tr=_st["tr"], en=_st["en"], detail=_st.get("detail", "")))
             # Görüntü editörü / düzenleme imzası (fotoğraf dekontlar için anında bayrak)
             if img_forensics is not None:
                 _ie = _auth.check_image_editor(img_forensics.exif_software,

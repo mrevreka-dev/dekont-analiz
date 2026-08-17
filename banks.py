@@ -137,6 +137,58 @@ def bank_from_iban(iban: str) -> str:
     return IBAN_BANK_CODES.get(code, "") if code else ""
 
 
+def _only_digits(s: str) -> str:
+    return re.sub(r"\D", "", s or "")
+
+
+def tckn_valid(s: str) -> bool | None:
+    """11 haneli TC Kimlik No sağlaması (resmi algoritma).
+    Döner: True/False; girdi 11 rakam değilse None (uygulanamaz — ör. maskeli)."""
+    d = _only_digits(s)
+    if len(d) != 11:
+        return None
+    if d[0] == "0":
+        return False
+    n = [int(c) for c in d]
+    odd = n[0] + n[2] + n[4] + n[6] + n[8]     # 1., 3., 5., 7., 9. haneler
+    even = n[1] + n[3] + n[5] + n[7]           # 2., 4., 6., 8. haneler
+    if (odd * 7 - even) % 10 != n[9]:
+        return False
+    if sum(n[:10]) % 10 != n[10]:
+        return False
+    return True
+
+
+def vkn_valid(s: str) -> bool | None:
+    """10 haneli Vergi Kimlik No sağlaması (resmi algoritma).
+    Döner: True/False; girdi 10 rakam değilse None."""
+    d = _only_digits(s)
+    if len(d) != 10:
+        return None
+    n = [int(c) for c in d]
+    total = 0
+    for i in range(9):
+        tmp = (n[i] + (9 - i)) % 10
+        if tmp == 0:
+            total += 0
+        else:
+            v = (tmp * pow(2, 9 - i, 9)) % 9
+            total += (9 if v == 0 else v)
+    return (10 - (total % 10)) % 10 == n[9]
+
+
+def id_valid(s: str) -> bool | None:
+    """Maskeli değilse TCKN (11) ya da VKN (10) sağlamasını uygular; aksi halde None."""
+    if not s or "*" in s:
+        return None
+    d = _only_digits(s)
+    if len(d) == 11:
+        return tckn_valid(d)
+    if len(d) == 10:
+        return vkn_valid(d)
+    return None
+
+
 def bank_label_from_iban(iban: str) -> str:
     """
     IBAN'dan banka etiketi. Bilinen kod -> banka adı. Kod var ama tabloda yoksa
