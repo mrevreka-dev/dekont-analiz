@@ -406,10 +406,15 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     # Halkbank: web adresi ihracçı-özgüdür. DİKKAT: "Halk Bankası" ADI karşı-tarafta (ALICI BANKA)
     # da geçer; bu yüzden yalnızca 'halkbank.com' imza sayılır.
     _sig_halk = ("halkbank.com" in low)
+    # PTT (PttBank): footer web adresi + kuruma özgü kanal/başlık ifadeleri ihracçı-özgüdür.
+    # 'PTT'/'Posta ve Telgraf' ADI karşı-tarafta pek geçmez; yine de en güvenli imza web adresidir.
+    _sig_ptt = ("pttbank.ptt.gov.tr" in low or "pttbank internet bankaciligi" in _nlow
+                or "posta ve telgraf teskilati" in _nlow)
     issuer = ("yapikredi" if _sig_yapikredi else "ziraat" if _sig_ziraat
               else "isbank" if _sig_isbank else "vakif" if _sig_vakif
               else "akbank" if _sig_akbank else "ing" if _sig_ing
               else "fiba" if _sig_fiba else "qnb" if _sig_qnb else "halk" if _sig_halk
+              else "ptt" if _sig_ptt
               else "garanti" if _sig_garanti else "enpara" if _sig_enpara else "")
     is_yapikredi = issuer == "yapikredi"
     is_ziraat = issuer == "ziraat"
@@ -422,13 +427,15 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     is_fiba = issuer == "fiba"
     is_qnb = issuer == "qnb"
     is_halk = issuer == "halk"
+    is_ptt = issuer == "ptt"
 
     ex.bank = {"yapikredi": "Yapı ve Kredi Bankası", "ziraat": "T.C. Ziraat Bankası",
                "isbank": "Türkiye İş Bankası", "vakif": "VakıfBank",
                "garanti": "Garanti BBVA", "enpara": "Enpara.com (QNB)",
                "akbank": "Akbank T.A.Ş.", "ing": "ING Bank A.Ş.",
                "fiba": "Fibabanka A.Ş.", "qnb": "QNB Bank A.Ş.",
-               "halk": "Türkiye Halk Bankası"}.get(issuer, "")
+               "halk": "Türkiye Halk Bankası",
+               "ptt": "PTT (PttBank)"}.get(issuer, "")
 
     # =============================================================
     #  İŞ BANKASI e-Dekont formatı
@@ -1014,6 +1021,69 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.amount.total = _hmon(r"TOPLAM\s*\(TL\s*\)")
         ex.amount.currency = "TL"
         ex.sender.bank = "Türkiye Halk Bankası"
+
+    # =============================================================
+    #  PTT (PttBank) — FAST / Havale dekontu (tek sütun, etiketli)
+    # =============================================================
+    #  Örnek alanlar:
+    #    MÜŞTERİ NUMARASI : ...        SAYIN
+    #    HESAP NUMARASI  : 16025964    ALLAHVERDİ BARIŞ   (isim sağ sütunda, hesap no'dan sonra)
+    #    IBAN : TR04...                (gönderici IBAN — tam)
+    #    Alıcı Iban : TR39******2091   (maskeli)
+    #    Alıcı Adı  : al****** ku***** (maskeli)
+    #    Alan Banka : 67-YAPI VE KREDİ BANKASI A.Ş.
+    #    İşlem Türü : Fast   /  İşlem Masrafı : 87,50 TL  /  Tutar : 100.000,00 TL
+    #    İşlem Sıra No : 504910  /  Hesabınızdan 100.087,50 TL ... Çekilmiştir.
+    elif is_ptt:
+        rt = joined
+        _PS = ["SAYIN", "HESAP NUMARASI", "IBAN", "TC KİMLİK", "TC KIMLIK", "İŞLEM TARİHİ",
+               "İŞLEM YERİ", "Açıklama", "İşlem Türü", "Alıcı Iban", "Alıcı İban", "Alıcı Adı",
+               "Alan Banka", "Alan Şube", "Alıcı İl", "Fast Tipi", "Fast Tarihi", "Ödeme Türü",
+               "İşlem Masrafı", "Tutar", "İşlem Sıra No", "Hesabınızdan", "PttBank"]
+        ex.transaction.type = _find_label(rt, ["İşlem Türü"])
+        ex.doc_kind = (ex.transaction.type or "Dekont")
+        ex.transaction.channel = _find_label(rt, ["İŞLEM YERİ", "ISLEM YERI"])
+        ex.transaction.description = _after_label(rt, "Açıklama", ["İşlem Türü", "Alıcı", "Alan"])
+        # İşlem tarihi: "17/08/2026 -21:18" -> tire ayracını boşluğa çevir
+        _dt = _after_label(rt, "İŞLEM TARİHİ", ["İŞLEM YERİ", "ISLEM YERI", "Açıklama"])
+        ex.transaction.date = re.sub(r"\s*-\s*", " ", _dt).strip() if _dt else ""
+        ex.transaction.ref_no = _find_label(rt, ["İşlem Sıra No", "Islem Sira No"])
+        # Gönderici. İsim sağ sütunda 'HESAP NUMARASI : <hesapNo> <AD SOYAD>' satırında;
+        # 'SAYIN' etiketinden sonra da gelebilir. Hesap no rakam, isim büyük-harf sözcükler.
+        _cn = _find_label(rt, ["MÜŞTERİ NUMARASI", "MUSTERI NUMARASI"])
+        _cnm = re.match(r"\s*(\d+)", _cn or "")   # 'SAYIN' sağ sütun kalıntısını at, sadece rakam
+        ex.sender.customer_no = _cnm.group(1) if _cnm else _cn
+        _hesap = _after_label(rt, "HESAP NUMARASI", ["IBAN", "TC KİMLİK", "TC KIMLIK", "İŞLEM"])
+        _hm = re.match(r"\s*(\d+)\s+(.+)", _hesap or "")
+        if _hm:
+            ex.sender.account_no = _hm.group(1)
+            ex.sender.name = _clean_name(_hm.group(2))
+        else:
+            ex.sender.account_no = re.sub(r"\D", "", _hesap or "")
+        if not ex.sender.name:
+            # 'SAYIN' sonrası büyük-harf isim (sağ sütun iki satıra bölünmüş olabilir)
+            _sm = re.search(r"SAYIN\s+([A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜ ]{2,})", _norm_tr(rt).upper())
+            if _sm:
+                ex.sender.name = _clean_name(rt[_sm.start(1):_sm.end(1)])
+        ex.sender.tckn = _find_label(rt, ["TC KİMLİK NO", "TC KIMLIK NO"])
+        ex.sender.iban = _first_iban_after(rt, ["IBAN"]) or (ex.all_ibans[0] if ex.all_ibans else "")
+        ex.sender.bank = "PTT (PttBank)"
+        # Alıcı (maskeli IBAN/ad — olduğu gibi tutulur; mod-97 uygulanmaz, FP üretmez)
+        ex.receiver.name = _clean_name(_after_label(rt, "Alıcı Adı", ["Alan Banka", "Alan Şube",
+                                                                       "Alıcı İl", "Fast"]))
+        _rib = _after_label(rt, "Alıcı Iban", ["Alıcı Adı", "Alan Banka"]) \
+            or _after_label(rt, "Alıcı İban", ["Alıcı Adı", "Alan Banka"])
+        ex.receiver.iban = (_rib or "").strip()
+        ex.receiver.bank = _clean_name(_after_label(rt, "Alan Banka", ["Alan Şube", "Alıcı İl",
+                                                                       "Fast Tipi", "Fast"]))
+        ex.receiver.branch = _clean_name(_after_label(rt, "Alan Şube", ["Alıcı İl", "Fast"]))
+        # Tutar / masraf / toplam
+        ex.amount.value = parse_amount(_find_label(rt, ["Tutar"]))
+        ex.amount.fee = parse_amount(_find_label(rt, ["İşlem Masrafı", "Islem Masrafi"]))
+        _tm = re.search(r"Hesab[ıi]n[ıi]zdan\s+(" + AMOUNT_RE.pattern + r")", rt)
+        if _tm:
+            ex.amount.total = parse_amount(_tm.group(1))
+        ex.amount.currency = "TL"
 
     # =============================================================
     #  EVRENSEL / diğer tüm bankalar
