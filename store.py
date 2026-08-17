@@ -488,12 +488,19 @@ def check_blocklist(report: dict) -> list[dict]:
                 (f["bank"], f["seq_number"], f["sha256"])).fetchone()
         if r or hit_seq:
             why = ("aynı dosya daha önce sahte olarak işaretlenmişti" if r
-                   else f"aynı banka+sıra numarası ({f['seq_number']}) daha önce sahte bir belgede görüldü")
+                   else f"aynı banka+sıra numarası ({f['seq_number']}) daha önce sahte işaretlenmiş bir belgede görüldü")
+            # ÖNEMLİ: Kara-liste eşleşmesi ARTIK tek başına "sahte" hükmü DEĞİLDİR. Bir belgenin
+            # daha önce sahte damgalanmış olması, bu sefer de otomatik sahte sayılmasına yol açmaz
+            # (eski yanlış-pozitifler zincirleme ceza üretmesin). Bilgi olarak verilir; belge YİNE DE
+            # kendi güncel bulgularıyla bağımsız değerlendirilir. severity=info, weight=0 -> skora etkisi yok.
             out.append({
-                "code": "KNOWN_FAKE", "severity": "critical", "weight": 60,
-                "tr": f"KARA LİSTE: Bu belge daha önce SAHTE olarak tespit edilmiş bir belgeyle eşleşiyor "
-                      f"({why}). Bilinen sahte — yüksek risk.",
-                "en": f"BLOCKLIST: this document matches a previously flagged forgery ({why}). Known fake.",
+                "code": "KNOWN_FAKE", "severity": "info", "weight": 0,
+                "tr": f"BİLGİ — Kara-liste eşleşmesi: Bu belge daha önce SAHTE olarak işaretlenmiş bir belgeyle "
+                      f"eşleşiyor ({why}). Bu tek başına sahte hükmü DEĞİLDİR; belge kendi güncel bulgularıyla "
+                      f"bağımsız denetlendi. Yine de dikkatle gözden geçirilmesi önerilir.",
+                "en": f"NOTE — Blocklist match: this document matches one previously flagged as fake ({why}). "
+                      f"This alone is NOT a fake verdict; the document was evaluated independently on its own "
+                      f"current findings. Manual review is still recommended.",
                 "detail": f"sha={f['sha256'][:12]} bank={f['bank']} seq={f['seq_number']}",
             })
     except Exception:

@@ -143,8 +143,10 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 30)
     if "PDFIUM_PRODUCED" in codes:            # PDFium = yeniden basım (global sahte kuralı)
         score = min(score, 5)
-    if "KNOWN_FAKE" in codes:                # kara-liste: daha önce sahte damgalanmış
-        score = min(score, 5)
+    # NOT: KNOWN_FAKE (kara-liste eşleşmesi) ARTIK skoru düşürmez. Bir belgenin yalnızca
+    # daha önce sahte damgalanmış olması tek başına hüküm değildir (eski yanlış-pozitifler
+    # kalıcı ceza yaratmasın). Belge kendi güncel bulgularıyla değerlendirilir; kara-liste
+    # eşleşmesi yalnızca BİLGİ notu olarak gösterilir (bkz. store.check_blocklist).
     if "ISSUER_IBAN_MISMATCH" in codes:       # ihracçının kodu taraf IBAN'larında yok (kesin)
         score = min(score, 8)
     if "IBAN_INVALID" in codes:               # IBAN mod-97 tutmuyor

@@ -52,6 +52,20 @@ def _bulgular(report: dict) -> list:
     return out
 
 
+def _kara_liste(report: dict) -> dict:
+    """Kara-liste eşleşmesini AYRI ve açık bir alan olarak verir. Bu bir SAHTE hükmü DEĞİLDİR
+    (skoru/kararı etkilemez); yalnızca 'bu belge daha önce sahte işaretlenmişti, yine de kontrol
+    edin' bilgisidir. KNOWN_FAKE bulgusu weight=0 olduğundan 'bulgular' listesine girmez;
+    tüketicinin bu bilgiyi kaçırmaması için burada ayrıca sunulur."""
+    for f in (report.get("findings_tr", []) or []):
+        if f.get("code") == "KNOWN_FAKE":
+            return {"eslesme": True, "aciklama": f.get("message", ""),
+                    "detay": f.get("detail", "") or "",
+                    "not": "Bu bir sahte hükmü değildir; belge kendi güncel bulgularıyla "
+                           "bağımsız değerlendirildi. Yine de manuel gözden geçirme önerilir."}
+    return {"eslesme": False, "aciklama": "", "detay": "", "not": ""}
+
+
 def build_summary(report: dict) -> dict:
     ex = report.get("extracted", {})
     s = ex.get("sender", {})
@@ -155,6 +169,9 @@ def build_summary(report: dict) -> dict:
         # Arayüz weight != 0 olan tüm bulguları (tahrifat sinyalleri + doğrulayıcılar)
         # kod/önem/kategori/açıklama/DETAY ile gösterir; API de aynısını verir.
         "bulgular": _bulgular(report),
+
+        # --- Kara-liste bilgisi (SAHTE hükmü DEĞİL; yalnızca 'daha önce işaretlenmişti' notu) ---
+        "kara_liste": _kara_liste(report),
 
         # --- Tam ayrıntılı iç rapor (isteğe bağlı) ---
         "detay": report,

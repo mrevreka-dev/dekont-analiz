@@ -175,6 +175,9 @@ class AnalyzeResponse(BaseModel):
     tahrifat_karsilastirmasi: list[TahrifatSatiri] = Field(default_factory=list,
         description="Değiştirilen/çelişen alanlar: alan · orijinal · değiştirilmiş · durum")
     bulgular: list[Bulgu] = []
+    kara_liste: dict[str, Any] = Field(default_factory=dict,
+        description="Kara-liste eşleşmesi (SAHTE hükmü DEĞİL; yalnızca 'daha önce işaretlenmişti' bilgisi). "
+                    "Alanlar: eslesme (bool), aciklama, detay, not")
     detay: dict[str, Any] = Field(default_factory=dict, description="Tam ayrıntılı iç rapor (isteğe bağlı)")
 
 
