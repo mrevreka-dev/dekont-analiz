@@ -273,6 +273,15 @@
 
   <!-- TAMPER FINDINGS -->
   <div class="section-title">{{ T.tamper_signals }}</div>
+  {# KARA-LİSTE BİLGİ BANDI: eşleşme tek başına 'sahte' hükmü değildir; bilgi olarak gösterilir #}
+  {% set kf = findings|selectattr('code','equalto','KNOWN_FAKE')|list %}
+  {% if kf %}
+  <div class="card" style="border:1px solid var(--accent);background:color-mix(in srgb, var(--accent) 10%, transparent);margin-bottom:10px">
+    <div style="font-weight:700;color:var(--accent);margin-bottom:3px">ℹ {{ 'Kara-liste bilgisi' if L=='tr' else 'Blocklist note' }}</div>
+    <div style="font-size:12px;line-height:1.5">{{ kf[0].message }}</div>
+    {% if kf[0].detail %}<div class="detail">{{ kf[0].detail }}</div>{% endif %}
+  </div>
+  {% endif %}
   {% set shown = findings|selectattr('weight','!=',0)|list %}
   {% if shown %}
     {% for f in findings %}
