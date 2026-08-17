@@ -747,6 +747,11 @@ def check_rail_bank(text: str, sender_iban: str, receiver_iban: str,
     rc = _b.iban_bank_code(receiver_iban or "")
     if not sc or not rc:
         return None
+    # SAVUNMA: gönderen ve alıcı IBAN'ı BİREBİR AYNI string ise bu bir çıkarım/kopyalama
+    # hatasıdır (tek IBAN okunup iki tarafa da yazılmış), gerçek 'aynı banka' transferi değil.
+    # Gerçek banka-içi havalede iki FARKLI hesap IBAN'ı aynı banka kodunu taşır. → bastır.
+    if _b.normalize_iban(sender_iban) == _b.normalize_iban(receiver_iban):
+        return None
     # IBAN checksumları geçersizse bunu IBAN_INVALID ele alır; burada karışma
     if _b.iban_valid(sender_iban) is False or _b.iban_valid(receiver_iban) is False:
         return None

@@ -248,15 +248,17 @@ def _apply_vision(ex, v: dict, bank_ex=None) -> None:
             ex.receiver.bank = banks.bank_label_from_iban(ex.receiver.iban)
         except Exception:
             pass
-    # ÇAKIŞMA-ÖNLEME: vision gönderen ve alıcıya AYNI IBAN'ı koyduysa (yanlış eşleme),
-    # OCR'ın belgeden okuduğu iki AYRI geçerli IBAN'a dön (taraf-eşlemesini düzelt).
+    # ÇAKIŞMA-ÖNLEME: gönderen ve alıcıya AYNI IBAN atanmışsa (yanlış eşleme / tek IBAN
+    # okunup kopyalanması), belgedeki DISTINCT geçerli IBAN'lardan alıcıdan FARKLI birini
+    # gönderene ata. Böyle bir IBAN YOKSA gönderen IBAN'ını BOŞALT — kopya IBAN bırakmak
+    # 'aynı banka' (RAIL_SAMEBANK) ve 'ihraççı uyuşmazlığı' (ISSUER_IBAN_MISMATCH) yanlış-
+    # pozitiflerini doğurur. Eksik IBAN, sahte-hüküm üretmeyen bir eksikliktir.
     try:
         import banks as _bk
         if ex.sender.iban and ex.sender.iban == ex.receiver.iban:
-            distinct = list(dict.fromkeys(
-                ib for ib in _ocr_ibans if _bk.iban_valid(ib) is not False))
-            if len(distinct) >= 2:
-                ex.sender.iban, ex.receiver.iban = distinct[0], distinct[1]
+            _valid = [ib for ib in _ocr_ibans if ib and _bk.iban_valid(ib) is not False]
+            _other = next((ib for ib in _valid if ib != ex.receiver.iban), "")
+            ex.sender.iban = _other   # farklı IBAN yoksa boş kalır (kopya bırakılmaz)
     except Exception:
         pass
     # all_ibans güncelle
