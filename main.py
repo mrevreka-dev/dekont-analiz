@@ -139,7 +139,11 @@ class Zaman(BaseModel):
 class Bulgu(BaseModel):
     kod: str = ""
     onem: str = Field("", description="critical | high | medium | low | info")
-    aciklama: str = ""
+    kategori: str = Field("", description="content | metadata | fonts | image")
+    agirlik: float = Field(0, description="Puan etkisi (+ceza / −doğrulayıcı)")
+    aciklama: str = Field("", description="Türkçe açıklama (web arayüzdeki metnin aynısı)")
+    aciklama_en: str = Field("", description="İngilizce açıklama")
+    detay: str = Field("", description="Teknik detay (ör. producer=PDFium, rail=fast fee=8.37)")
 
 
 class TahrifatSatiri(BaseModel):

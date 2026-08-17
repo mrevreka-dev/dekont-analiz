@@ -29,6 +29,29 @@ def _oynama(state: str) -> str:
     return {"true": "yok", "false": "var", "neutral": "belirsiz"}.get(state, "belirsiz")
 
 
+def _bulgular(report: dict) -> list:
+    """Web arayüzdeki 'Tahrifat / Oynama Sinyalleri' bölümünün API karşılığı: weight != 0
+    olan tüm bulgular; her biri kod, önem, kategori, ağırlık, TR/EN açıklama ve DETAY ile.
+    findings_tr ve findings_en paralel listelerdir; indeksle eşlenir."""
+    tr = report.get("findings_tr", []) or []
+    en = report.get("findings_en", []) or []
+    out = []
+    for i, f in enumerate(tr):
+        if f.get("weight", 0) == 0:
+            continue
+        e = en[i] if i < len(en) else {}
+        out.append({
+            "kod": f.get("code", ""),
+            "onem": f.get("severity", ""),
+            "kategori": f.get("category", ""),
+            "agirlik": f.get("weight", 0),
+            "aciklama": f.get("message", ""),
+            "aciklama_en": e.get("message", ""),
+            "detay": f.get("detail", "") or "",
+        })
+    return out
+
+
 def build_summary(report: dict) -> dict:
     ex = report.get("extracted", {})
     s = ex.get("sender", {})
@@ -128,11 +151,10 @@ def build_summary(report: dict) -> dict:
         # --- Tahrifat karşılaştırması (alan · orijinal · değiştirilmiş) ---
         "tahrifat_karsilastirmasi": report.get("tamper_comparison", []),
 
-        # --- Bulgular (özet) ---
-        "bulgular": [
-            {"kod": f.get("code"), "onem": f.get("severity"), "aciklama": f.get("message")}
-            for f in report.get("findings_tr", []) if f.get("weight", 0) > 0
-        ],
+        # --- Bulgular: web arayüzdeki "Tahrifat / Oynama Sinyalleri" ile AYNI liste ---
+        # Arayüz weight != 0 olan tüm bulguları (tahrifat sinyalleri + doğrulayıcılar)
+        # kod/önem/kategori/açıklama/DETAY ile gösterir; API de aynısını verir.
+        "bulgular": _bulgular(report),
 
         # --- Tam ayrıntılı iç rapor (isteğe bağlı) ---
         "detay": report,
