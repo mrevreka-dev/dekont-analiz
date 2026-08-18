@@ -390,9 +390,16 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     _sig_isbank = ("isbank.com" in low or ("e-dekont" in low and "doküman numarası" in low))
     _sig_vakif = ("vakifbank.com" in low or ("VAKIFBANK" in up and "İŞLEM BİLGİLERİ" in up))
     _sig_garanti = ("garantibbva" in low or ("HESAPTAN" in up and "GARANTİ" in up))
-    _sig_enpara = ("enpara şubesi" in low
-                   or ("ALICI ÜNVANI" in up and "EFT TUTARI" in up)
-                   or ("MÜŞTERİ ÜNVANI" in up and "GIDEN FAST" in up))
+    # ENPARA-ÖZEL: OCR Türkçe karakterleri bozunca (ş->s, Ü->U) düz-metin etiket imzaları
+    # tutmuyordu ve belge yanlışlıkla universal dala düşüp gönderen/alıcı IBAN'ını çakıştırıyordu.
+    # En sağlam imza web adresidir (enpara.com — yalnız ihraççıda geçer). Etiket imzalarını da
+    # aksan/OCR-duyarsız (_norm_tr) karşılaştır.
+    _en = _norm_tr(low)
+    _sig_enpara = ("enpara.com" in low
+                   or "enpara subesi" in _en
+                   or ("qnb.com" not in low and (
+                       ("alici unvani" in _en and "eft tutari" in _en)
+                       or ("musteri unvani" in _en and "giden fast" in _en))))
     _sig_akbank = ("akbank.com" in low or "akbank direkt" in low)
     _sig_ing = ("ing.com.tr" in low or "ing bank anonim" in low)
     _sig_fiba = ("fibabanka.com" in low or "fibabanka" in _norm_tr(low))
