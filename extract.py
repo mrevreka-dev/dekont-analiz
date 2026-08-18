@@ -775,7 +775,9 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.transaction.ref_no = _find_label(rt, ["Fast Sorgu No", "Sorgu No"])
         ex.transaction.channel = _find_label(rt, ["İŞLEM YERİ", "ISLEM YERI"])
         ex.transaction.type = ex.doc_kind
-        ex.sender.branch = _find_label(rt, ["ŞUBE KODU/ADI", "SUBE KODU/ADI", "ŞUBE ADI"])
+        # Şube/birim: Ziraat 'ŞUBE KODU/ADI'; Ziraat Dinamik 'BİRİM KODU/ADI'
+        ex.sender.branch = _find_label(rt, ["ŞUBE KODU/ADI", "SUBE KODU/ADI", "ŞUBE ADI",
+                                            "BİRİM KODU/ADI", "BIRIM KODU/ADI"])
         ex.sender.account_no = _find_label(rt, ["HESAP NUMARASI"])
         ex.sender.tckn = _find_label(rt, ["VERGİ KİMLİK NO", "TC KİMLİK", "VERGI KIMLIK NO"])
         ex.sender.bank = "Ziraat Dinamik Banka" if is_ziraatdinamik else "T.C. Ziraat Bankası"
