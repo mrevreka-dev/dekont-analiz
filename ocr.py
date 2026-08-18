@@ -132,10 +132,12 @@ def _trim_to_ink(gray):
 
 
 def _variants(gray):
-    """OCR için birkaç ön-işlenmiş varyant üretir (genel amaçlı, bulanık foto dahil)."""
+    """OCR için ön-işlenmiş varyant(lar) üretir. HIZ için sadeleştirildi: en yavaş adım olan
+    fastNlMeansDenoising kaldırıldı; 2 varyant (keskin + Otsu) yeterli, bulanık fotoğrafların
+    zaten Vision'a yükseldiği için Tesseract'ın hızlı olması önceliklidir."""
     import cv2, numpy as np
     h, w = gray.shape
-    scale = max(1.0, 2000.0 / max(h, w))       # yüksek çözünürlüğe getir
+    scale = max(1.0, 1600.0 / max(h, w))       # 2000 yerine 1600 (daha hızlı, yeterli çözünürlük)
     if scale > 1.01:
         gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
     out = []
@@ -145,12 +147,7 @@ def _variants(gray):
     blur = cv2.GaussianBlur(g, (0, 0), 3)
     sharp = cv2.addWeighted(g, 2.2, blur, -1.2, 0)
     out.append(sharp)
-    # B: denoise + CLAHE + orta unsharp
-    g2 = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
-    g2 = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8)).apply(g2)
-    b2 = cv2.GaussianBlur(g2, (0, 0), 3)
-    out.append(cv2.addWeighted(g2, 1.7, b2, -0.7, 0))
-    # C: Otsu ikili
+    # B: Otsu ikili (keskin varyanttan) — net belgeler için
     _, otsu = cv2.threshold(sharp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     out.append(otsu)
     return out
@@ -179,7 +176,7 @@ def ocr_image_candidates(img: Image.Image, lang: str | None = None) -> list[str]
         variants = [np.asarray(img.convert("L"))]
     texts = []
     for i, v in enumerate(variants):
-        psms = (6, 4) if i == 0 else (6,)      # ilk (keskin) varyantta iki mod
+        psms = (6,)                            # HIZ: tek PSM (blok metin); ekstra PSM 4 geçişi kaldırıldı
         for psm in psms:
             try:
                 t = pytesseract.image_to_string(v, lang=lang, config=f"--oem 1 --psm {psm}")
@@ -201,16 +198,19 @@ def ocr_pdf_candidates(pdf_bytes: bytes, page_index: int = 0) -> list[str]:
     """Sayfayı ve gömülü görselleri OCR'layıp tüm aday metinleri döndürür."""
     cands = []
     try:
-        img = render_page_to_image(pdf_bytes, page_index, scale=3.0)
+        img = render_page_to_image(pdf_bytes, page_index, scale=2.0)   # HIZ: 3.0 yerine 2.0
         cands += ocr_image_candidates(img)
     except Exception:
         pass
-    try:
-        for im in extract_embedded_images(pdf_bytes)[:1]:
-            if im.size[0] * im.size[1] > 200 * 200:
-                cands += ocr_image_candidates(im)
-    except Exception:
-        pass
+    # HIZ: gömülü görsel OCR'ı yalnızca sayfa render'ı hiç metin vermediyse dene (nadir durum);
+    # aksi halde ek Tesseract geçişi maliyeti gereksizdir.
+    if not any(c and c.strip() for c in cands):
+        try:
+            for im in extract_embedded_images(pdf_bytes)[:1]:
+                if im.size[0] * im.size[1] > 200 * 200:
+                    cands += ocr_image_candidates(im)
+        except Exception:
+            pass
     return [c for c in cands if c and c.strip()]
 
 
