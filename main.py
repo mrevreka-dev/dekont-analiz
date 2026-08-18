@@ -316,6 +316,123 @@ async def analyze_api(file: UploadFile = File(...), x_api_key: str | None = Head
     return JSONResponse(build_summary(report))
 
 
+# =====================================================================
+#  VİDEO ADLİ ANALİZİ — TAMAMEN AYRI YENİ SERVİS
+#  ÖNEMLİ: Mevcut dekont uçları (/api/v1/analyze, /compare vb.) ve onların cevap
+#  ANAHTARLARI hiç değişmez. Bu yalnızca YENİ bir URL ve KENDİ şemasını döndürür.
+# =====================================================================
+MAX_VIDEO_BYTES = int(os.environ.get("DEKONT_VIDEO_MAX_BYTES", 200 * 1024 * 1024))  # 200 MB
+_VIDEO_EXT = (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".3gp", ".3g2", ".ts", ".mpg", ".mpeg")
+
+
+@app.post("/api/v1/analyze-video",
+          summary="Video adli analizi (sahte/düzenlenmiş/yeniden-kodlanmış/AI video tespiti)",
+          response_description="Videonun ham çekim mi yoksa üretilmiş/düzenlenmiş mi olduğuna dair ayrı JSON")
+async def analyze_video_api(file: UploadFile = File(...), x_api_key: str | None = Header(default=None)):
+    """
+    Yüklenen bir VİDEOYU adli olarak değerlendirir: konteyner/encoder metadata'sı (FFmpeg/düzenleyici/
+    AI üretici imzaları, cihaz oluşturma zamanı) + kare-düzeyi analiz (ELA, gürültü, moiré/yeniden-çekim).
+    Videonun ham cihaz çekimi mi yoksa ÜRETİLMİŞ/DÜZENLENMİŞ/YENİDEN-KODLANMIŞ mı olduğuna dair
+    KENDİ şemasında JSON döndürür (score/risk/verdict/signals/container/encoding/frames).
+
+    Bu uç mevcut dekont servislerinden BAĞIMSIZDIR; onların URL'lerini ve cevap anahtarlarını etkilemez.
+    """
+    _check_api_key(x_api_key)
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Empty file.")
+    if len(data) > MAX_VIDEO_BYTES:
+        raise HTTPException(413, "Video too large.")
+    import tempfile
+    import video_forensics as _vf
+    suffix = ".mp4"
+    _fn = (file.filename or "").lower()
+    for e in _VIDEO_EXT:
+        if _fn.endswith(e):
+            suffix = e
+            break
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    try:
+        tmp.write(data)
+        tmp.flush()
+        tmp.close()
+        result = _vf.analyze_video(tmp.name)
+    except Exception as e:
+        raise HTTPException(500, f"Video analysis failed: {e}")
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
+    result["file"] = {"name": file.filename or "video.mp4", "size_bytes": len(data)}
+    return JSONResponse(result)
+
+
+@app.get("/video", response_class=HTMLResponse, summary="Video analizi (tarayıcı formu)")
+async def video_page(request: Request):
+    """Videoyu tarayıcıdan yükleyip analiz etmek için basit sayfa (yeni URL, mevcut sayfaları etkilemez)."""
+    return HTMLResponse(_VIDEO_HTML)
+
+
+@app.post("/video", response_class=HTMLResponse)
+async def video_web(file: UploadFile = File(...)):
+    data = await file.read()
+    if not data:
+        return HTMLResponse("<p>Boş dosya.</p>", status_code=400)
+    if len(data) > MAX_VIDEO_BYTES:
+        return HTMLResponse("<p>Video çok büyük.</p>", status_code=413)
+    import tempfile
+    import video_forensics as _vf
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    try:
+        tmp.write(data)
+        tmp.flush()
+        tmp.close()
+        r = _vf.analyze_video(tmp.name)
+    except Exception as e:
+        return HTMLResponse(f"<p>Analiz hatası: {e}</p>", status_code=500)
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
+    _rows = "".join(
+        f"<li><b>{s['code']}</b> <span style='color:#888'>[{s['severity']}]</span><br>{s.get('tr','')}</li>"
+        for s in r.get("signals", []))
+    _color = {"kritik": "#c0392b", "yüksek": "#e67e22", "orta": "#f1c40f", "düşük": "#27ae60"}.get(r.get("risk"), "#555")
+    html = (f"<html><head><meta charset='utf-8'><title>Video Analizi</title>"
+            f"<style>body{{font-family:system-ui;max-width:820px;margin:32px auto;padding:0 16px}}"
+            f"li{{margin:10px 0;line-height:1.5}}code{{background:#f4f4f4;padding:2px 5px;border-radius:4px}}</style></head><body>"
+            f"<h2>Video Adli Analizi</h2>"
+            f"<div style='font-size:40px;font-weight:700;color:{_color}'>{r.get('score')}/100 "
+            f"<span style='font-size:20px'>· {r.get('risk','').upper()}</span></div>"
+            f"<p>{r.get('verdict_tr','')}</p>"
+            f"<p><b>Süre:</b> {r.get('duration_sec')} sn · <b>creation_time:</b> "
+            f"{r.get('container',{}).get('creation_time_present')} · <b>encoder:</b> "
+            f"<code>{r.get('container',{}).get('encoder_text','')[:90]}</code></p>"
+            f"<p><b>Encoding:</b> {r.get('encoding',{}).get('codec')} "
+            f"{r.get('encoding',{}).get('width')}x{r.get('encoding',{}).get('height')} · "
+            f"ffmpeg={r.get('encoding',{}).get('ffmpeg_encode')} · editor={r.get('encoding',{}).get('editor_hits')} · "
+            f"ai={r.get('encoding',{}).get('ai_hits')}</p>"
+            f"<p><b>Kareler ({r.get('frames',{}).get('sampled')}):</b> moiré {r.get('frames',{}).get('moire_max')} · "
+            f"yeniden-çekim {r.get('frames',{}).get('recapture_suspected')} · "
+            f"lokal-düzenleme {r.get('frames',{}).get('ela_hotspot_concentrated')}</p>"
+            f"<h3>Sinyaller</h3><ul>{_rows or '<li>Belirgin sinyal yok.</li>'}</ul>"
+            f"<p><a href='/video'>← Yeni analiz</a></p></body></html>")
+    return HTMLResponse(html)
+
+
+_VIDEO_HTML = """<html><head><meta charset='utf-8'><title>Video Analizi</title>
+<style>body{font-family:system-ui;max-width:640px;margin:48px auto;padding:0 16px}
+.box{border:2px dashed #bbb;border-radius:12px;padding:32px;text-align:center}
+button{background:#5b3df5;color:#fff;border:0;padding:12px 22px;border-radius:8px;font-size:16px;cursor:pointer;margin-top:14px}</style>
+</head><body><h2>Video Adli Analizi</h2>
+<p>Sahte / düzenlenmiş / yeniden-kodlanmış / yapay-zeka üretimi video tespiti.</p>
+<form class='box' action='/video' method='post' enctype='multipart/form-data'>
+<input type='file' name='file' accept='video/*' required><br>
+<button type='submit'>Analiz Et</button></form></body></html>"""
+
+
 @app.post("/api/v1/analyze-url", response_model=AnalyzeResponse,
           summary="URL ile tek dekont analizi",
           response_description="Dekont durumunu değerlendirmeye yeten temiz sonuç")
