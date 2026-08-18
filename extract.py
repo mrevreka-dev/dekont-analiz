@@ -1295,6 +1295,14 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
                 ex.sender.iban = ib
                 break
 
+    # ENPARA/QNB-ÖZEL SON GÜVENCE: bu formatta gönderenin BİTİŞİK müşteri IBAN'ı OCR'da harf
+    # sızıntısıyla ('TR0...' -> 'TRO...') bozulunca yakalanamaz; kod ilk 'IBAN:' (=ALICI IBAN'ı)
+    # gönderene atayabilir. Ara-guard alıcı IBAN'ı O AN henüz boşsa atlanabildiğinden, TÜM çözümleme
+    # bittikten SONRA (return öncesi) son kez denetle: gönderen == alıcı ise farklı bir IBAN dene,
+    # yoksa gönderen IBAN'ını BOŞALT — kopya IBAN 'aynı banka' yanlış-pozitifi üretir.
+    if (is_enpara or is_qnb) and ex.sender.iban and ex.sender.iban == ex.receiver.iban:
+        ex.sender.iban = next((ib for ib in ex.all_ibans if ib and ib != ex.receiver.iban), "")
+
     ex.confidence = _confidence(ex)
     return ex
 
