@@ -354,6 +354,100 @@ def _row_amount(text: str, label: str) -> float | None:
     return None
 
 
+# =====================================================================
+#  BANKA KAYIT TABLOSU (BANK REGISTRY) — TEK KAYNAK / SINGLE SOURCE OF TRUTH
+# ---------------------------------------------------------------------
+#  Her banka BURADA tek girişle tanımlanır. Tüm banka-tanıma (issuer detection),
+#  görünen ad (label), banka-anahtarı ve geçerli IBAN kodları BU TABLODAN türetilir.
+#  Böylece bir banka "sistemde ayrı ayrı" değerlendirilir ve dağınık değildir.
+#
+#  >>> YENİ BANKA EKLEMEK İÇİN (yalnız 2 adım):
+#    1) Buraya bir giriş ekle: {"key","label","iban":{...kodlar}, "sig": lambda c: ...}
+#       - key   : iç anahtar (küçük harf, boşluksuz)
+#       - label : dekontta gösterilecek banka adı
+#       - iban  : bu bankaya ait IBAN banka-kodu kümesi (hesap sahibi IBAN'ı bununla başlar)
+#       - sig   : İHRAÇÇIYA-ÖZGÜ imza (web adresi / kendi kanalı). Banka TAM ADI KULLANMA —
+#                 karşı-tarafta (Alıcı Banka) da geçer, yanlış eşleşir. ctx (c) sağlar:
+#                   c["low"]  : joined.lower()
+#                   c["up"]   : joined.upper()
+#                   c["nlow"] : _norm_tr(low)  (aksan-katlı)
+#                   c["zsig"] : nlow + birleşik-nokta (U+0307) temizlenmiş (İ-güvenli)
+#                   c["lc_ns"]: low, boşluksuz (OCR footer boşluklarına dayanıklı)
+#       - SIRA = ÖNCELİK: üstteki önce değerlendirilir (marka > ana banka; ör. getir > fiba).
+#    2) extract_fields() içinde `elif is_<key>:` çıkarım dalını ekle (o bankanın DÜZENİNE özel;
+#       alan yerleşimi bankadan bankaya değiştiği için bu adım elle yazılır).
+#  authenticity.py IBAN-kodu ve banka-anahtarını buradan türetir; ayrıca elle güncelleme gerekmez.
+# =====================================================================
+BANK_REGISTRY = [
+    {"key": "yapikredi", "label": "Yapı ve Kredi Bankası", "iban": {"00067"},
+     "sig": lambda c: "yapikredi.com" in c["low"]},
+    {"key": "ziraatdinamik", "label": "Ziraat Dinamik Banka", "iban": {"00160"},
+     "sig": lambda c: "ziraatdinamik.com" in c["nlow"] or "ziraat dinamik mobil" in c["zsig"]},
+    {"key": "ziraat", "label": "T.C. Ziraat Bankası", "iban": {"00010", "00160", "00209"},
+     "sig": lambda c: ("ziraatbank.com" in c["low"] or "ziraat mobil" in c["zsig"]
+                       or "ziraat super sube" in c["zsig"] or "ziraat super" in c["zsig"])},
+    {"key": "isbank", "label": "Türkiye İş Bankası", "iban": {"00064"},
+     "sig": lambda c: "isbank.com" in c["low"] or ("e-dekont" in c["low"] and "doküman numarası" in c["low"])},
+    {"key": "vakif", "label": "VakıfBank", "iban": {"00015", "00210"},
+     "sig": lambda c: "vakifbank.com" in c["low"] or ("VAKIFBANK" in c["up"] and "İŞLEM BİLGİLERİ" in c["up"])},
+    {"key": "akbank", "label": "Akbank T.A.Ş.", "iban": {"00046"},
+     "sig": lambda c: "akbank.com" in c["low"] or "akbank direkt" in c["low"]},
+    {"key": "ing", "label": "ING Bank A.Ş.", "iban": {"00099"},
+     "sig": lambda c: "ing.com.tr" in c["low"] or "ing bank anonim" in c["low"]},
+    {"key": "getir", "label": "GetirFinans (Fibabanka)", "iban": {"00103"},
+     "sig": lambda c: "getirfinans.com" in c["low"] or "getirfinans" in c["low"]},
+    {"key": "fiba", "label": "Fibabanka A.Ş.", "iban": {"00103"},
+     "sig": lambda c: "fibabanka.com" in c["low"] or "fibabanka" in c["nlow"]},
+    {"key": "teb", "label": "Türk Ekonomi Bankası (TEB)", "iban": {"00032"},
+     "sig": lambda c: ("teb.com.tr" in c["lc_ns"] or "cepteteb" in c["lc_ns"]
+                       or "bankalararasiparatransferdekontu" in c["lc_ns"])},
+    {"key": "qnb", "label": "QNB Bank A.Ş.", "iban": {"00111"},
+     "sig": lambda c: ("qnb.com" in c["low"] or "qnb telefon bankaciligi" in c["nlow"]
+                       or "qnb internet bankaciligi" in c["nlow"])},
+    {"key": "halk", "label": "Türkiye Halk Bankası", "iban": {"00012"},
+     "sig": lambda c: "halkbank.com" in c["low"]},
+    {"key": "ptt", "label": "PTT (PttBank)", "iban": {"00807"},
+     "sig": lambda c: ("pttbank.ptt.gov.tr" in c["low"] or "pttbank internet bankaciligi" in c["nlow"]
+                       or "posta ve telgraf teskilati" in c["nlow"])},
+    {"key": "kuveyt", "label": "Kuveyt Türk Katılım", "iban": {"00205"},
+     "sig": lambda c: "kuveytturk.com" in c["nlow"]},
+    {"key": "deniz", "label": "DenizBank", "iban": {"00134"},
+     "sig": lambda c: "denizbank.com" in c["low"] or "mobildeniz" in c["nlow"]},
+    {"key": "garanti", "label": "Garanti BBVA", "iban": {"00062"},
+     "sig": lambda c: "garantibbva" in c["low"] or ("HESAPTAN" in c["up"] and "GARANTİ" in c["up"])},
+    {"key": "enpara", "label": "Enpara.com (QNB)", "iban": {"00157", "00111"},
+     "sig": lambda c: ("enpara.com" in c["low"] or "enpara subesi" in c["nlow"]
+                       or ("qnb.com" not in c["low"] and (
+                           ("alici unvani" in c["nlow"] and "eft tutari" in c["nlow"])
+                           or ("musteri unvani" in c["nlow"] and "giden fast" in c["nlow"]))))},
+]
+
+BANK_LABELS = {b["key"]: b["label"] for b in BANK_REGISTRY}
+# authenticity.py bunları buradan türetir (tek kaynak):
+ISSUER_IBAN_CODES = {b["key"]: set(b["iban"]) for b in BANK_REGISTRY}
+BANK_LABEL_TO_KEY = {b["label"].strip().lower().replace("̇", ""): b["key"] for b in BANK_REGISTRY}
+
+
+def _issuer_ctx(joined: str) -> dict:
+    low = joined.lower()
+    nlow = _norm_tr(low)
+    return {"low": low, "up": joined.upper(), "nlow": nlow,
+            "zsig": nlow.replace("̇", ""), "lc_ns": low.replace(" ", "")}
+
+
+def detect_issuer(joined: str) -> str:
+    """İHRAÇÇI bankayı registry'den, ÖNCELİK sırasıyla belirler. Yalnız BİR banka seçilir
+    (karşılıklı dışlayan). Hiçbir imza tutmazsa "" (universal — güvenli çıkarıma düşer)."""
+    ctx = _issuer_ctx(joined)
+    for b in BANK_REGISTRY:
+        try:
+            if b["sig"](ctx):
+                return b["key"]
+        except Exception:
+            continue
+    return ""
+
+
 def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = None) -> Extraction:
     ex = Extraction()
     ex.raw_text = text or reading_text
@@ -382,89 +476,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     # karşı-taraf banka adının metinde geçmesi tetiklememeli.
     low = joined.lower()
     up = joined.upper()
-    # ÖNEMLİ: Her banka İHRAÇ EDENİN KENDİ imzasıyla (web adresi/footer/kendine özgü etiket)
-    # tanınır. Karşı-taraf banka adı (ör. "ALICI BANKA :Vakıflar Bankası") ve genel alanlar
-    # (ör. ETTN — tüm e-Dekontlarda var) tetiklememelidir. Aşağıdaki imzalar ÖNCELİK sırasıyla
-    # değerlendirilir; yalnızca BİR banka seçilir (karşılıklı dışlayan).
-    # İmzalar İHRAÇÇIYA-ÖZGÜ olmalı: web adresi (footer) ve YALNIZCA ihraç edende geçen
-    # kanal/şube ifadeleri. Banka TAM ADLARI (ör. "Yapı ve Kredi Bankası A.Ş.") KULLANILMAZ;
-    # çünkü bunlar karşı-tarafta (Alan Banka / Alıcı Banka / KATILIMCI) da geçer ve yanlış
-    # bankaya yönlendirir.
-    _sig_yapikredi = "yapikredi.com" in low
-    # ZİRAAT-ÖZEL SAĞLAMLAŞTIRMA: 'İ'.lower() = 'i̇' (i + U+0307 birleşik nokta) olduğundan ham
-    # low'da 'ZİRAAT MOBİL'/'ZİRAAT SÜPER ŞUBE' düz 'ziraat...' imzalarına EŞLEŞMİYORDU; tespit
-    # yalnız footer 'ziraatbank.com' ile çalışıyordu (footer okunmazsa Ziraat kaçıyordu). _norm_tr
-    # aksanı katlar ama birleşik noktayı bırakır; onu da temizleyip kanal/şube imzalarını güvenilir
-    # yap. Bu imzalar ihraççı-özgüdür ('ziraat mobil'/'ziraat süper' yalnız Ziraat'ın KENDİ dekontunda
-    # geçer; karşı-tarafta yalnız 'ziraat bankası' ADI geçer, kanal adı değil → çakışma yok).
-    _zsig = _norm_tr(low).replace("̇", "")
-    _sig_ziraat = ("ziraatbank.com" in low
-                   or "ziraat mobil" in _zsig
-                   or "ziraat super sube" in _zsig or "ziraat super" in _zsig)
-    _sig_isbank = ("isbank.com" in low or ("e-dekont" in low and "doküman numarası" in low))
-    _sig_vakif = ("vakifbank.com" in low or ("VAKIFBANK" in up and "İŞLEM BİLGİLERİ" in up))
-    _sig_garanti = ("garantibbva" in low or ("HESAPTAN" in up and "GARANTİ" in up))
-    # ENPARA-ÖZEL: OCR Türkçe karakterleri bozunca (ş->s, Ü->U) düz-metin etiket imzaları
-    # tutmuyordu ve belge yanlışlıkla universal dala düşüp gönderen/alıcı IBAN'ını çakıştırıyordu.
-    # En sağlam imza web adresidir (enpara.com — yalnız ihraççıda geçer). Etiket imzalarını da
-    # aksan/OCR-duyarsız (_norm_tr) karşılaştır.
-    _en = _norm_tr(low)
-    _sig_enpara = ("enpara.com" in low
-                   or "enpara subesi" in _en
-                   or ("qnb.com" not in low and (
-                       ("alici unvani" in _en and "eft tutari" in _en)
-                       or ("musteri unvani" in _en and "giden fast" in _en))))
-    _sig_akbank = ("akbank.com" in low or "akbank direkt" in low)
-    _sig_ing = ("ing.com.tr" in low or "ing bank anonim" in low)
-    _sig_fiba = ("fibabanka.com" in low or "fibabanka" in _norm_tr(low))
-    # GetirFinans: Fibabanka'nın dijital markası (bankacılık hizmeti Fibabanka A.Ş.). Dekont DÜZENİ
-    # klasik Fibabanka'dan FARKLI (ALAN MÜŞTERİ / ALICI IBAN NO / GÖNDEREN MÜŞTERİ). 'getirfinans'
-    # yalnız bu markanın kendi dekontunda geçer (footer web adresi + 'getirfinans ile gönderildi'
-    # açıklaması) → ihraççı-özgü. fiba'dan ÖNCE değerlendirilir (getir dekontu 'Fibabanka' da içerir).
-    _sig_getir = ("getirfinans.com" in low or "getirfinans" in low)
-    # TEB (Türk Ekonomi Bankası): footer web adresi + kendi kanalı (CEPTETEB) ihraççı-özgü.
-    # 'TEB' salt-3-harf collision riskli olduğundan KULLANILMAZ; web adresi/kanal kullanılır.
-    # OCR footer'a boşluk sokabildiğinden ('www. teb. com. tr') boşluksuz da denetlenir.
-    _lc_ns = low.replace(" ", "")
-    _sig_teb = ("teb.com.tr" in _lc_ns or "cepteteb" in _lc_ns
-                or "bankalararasiparatransferdekontu" in _lc_ns)
-    # QNB: Enpara ile AYNI altyapı/format (Ibtech+iText); QNB markası ayrı etiketlensin.
-    # QNB'ye ÖZGÜ imza: web adresi + QNB kanal ifadeleri. DİKKAT: 'QNB Bank' salt-metin olarak
-    # Enpara belgelerinde tarihsel dipnotta geçebilir ("Enpara'nın QNB Bank A.Ş. ...") — bu yüzden
-    # 'qnb bank' tek başına KULLANILMAZ; yalnız qnb.com / QNB Telefon|İnternet Bankacılığı sayılır.
-    _nlow = _norm_tr(low)
-    _sig_qnb = ("qnb.com" in low or "qnb telefon bankaciligi" in _nlow
-                or "qnb internet bankaciligi" in _nlow)
-    # Halkbank: web adresi ihracçı-özgüdür. DİKKAT: "Halk Bankası" ADI karşı-tarafta (ALICI BANKA)
-    # da geçer; bu yüzden yalnızca 'halkbank.com' imza sayılır.
-    _sig_halk = ("halkbank.com" in low)
-    # PTT (PttBank): footer web adresi + kuruma özgü kanal/başlık ifadeleri ihracçı-özgüdür.
-    # 'PTT'/'Posta ve Telgraf' ADI karşı-tarafta pek geçmez; yine de en güvenli imza web adresidir.
-    _sig_ptt = ("pttbank.ptt.gov.tr" in low or "pttbank internet bankaciligi" in _nlow
-                or "posta ve telgraf teskilati" in _nlow)
-    # Kuveyt Türk Katılım: YALNIZCA footer web adresi ihracçı-özgüdür. "Kuveyt Türk" ADI
-    # karşı-tarafta (Alıcı Banka) geçebileceğinden ad tek başına KULLANILMAZ.
-    _sig_kuveyt = ("kuveytturk.com" in _nlow)
-    # DenizBank: footer web adresi + kuruma-özgü kanal (MobilDeniz) ihracçı-özgü ("DenizBank" adı
-    # karşı-tarafta da geçebilir, bu yüzden salt ad kullanılmaz).
-    _sig_deniz = ("denizbank.com" in low or "mobildeniz" in _nlow)
-    # Ziraat Dinamik Banka: AYRI dijital banka (ZİRAAT DİNAMİK BANKA A.Ş., ziraatdinamik.com.tr,
-    # IBAN kodu 00160). Klasik Ziraat'ten ÖNCE değerlendirilir. İmza ihracçıya-özgü olmalı:
-    # web adresi ya da KENDİ kanalı ('Ziraat Dinamik Mobil'); salt "Ziraat Dinamik" ADI karşı-
-    # tarafta (Alan Banka) geçebileceğinden tek başına kullanılmaz.
-    # ZİRAAT DİNAMİK-ÖZEL: aynı 'İ' birleşik-nokta sorunu; 'ziraat dinamik mobil' imzasını da
-    # nokta-temizlenmiş (_zsig) biçimde ara ki İ'li metinde web adresi olmadan da tanınsın.
-    _sig_ziraatdinamik = ("ziraatdinamik.com" in _nlow or "ziraat dinamik mobil" in _zsig)
-    issuer = ("yapikredi" if _sig_yapikredi
-              else "ziraatdinamik" if _sig_ziraatdinamik else "ziraat" if _sig_ziraat
-              else "isbank" if _sig_isbank else "vakif" if _sig_vakif
-              else "akbank" if _sig_akbank else "ing" if _sig_ing
-              else "getir" if _sig_getir else "fiba" if _sig_fiba
-              else "teb" if _sig_teb
-              else "qnb" if _sig_qnb else "halk" if _sig_halk
-              else "ptt" if _sig_ptt
-              else "kuveyt" if _sig_kuveyt else "deniz" if _sig_deniz
-              else "garanti" if _sig_garanti else "enpara" if _sig_enpara else "")
+    issuer = detect_issuer(joined)   # <-- BANK_REGISTRY'den (tek kaynak, öncelik sıralı)
     is_yapikredi = issuer == "yapikredi"
     is_ziraat = issuer == "ziraat"
     is_isbank = issuer == "isbank"
@@ -483,17 +495,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     is_deniz = issuer == "deniz"
     is_ziraatdinamik = issuer == "ziraatdinamik"
 
-    ex.bank = {"yapikredi": "Yapı ve Kredi Bankası", "ziraat": "T.C. Ziraat Bankası",
-               "isbank": "Türkiye İş Bankası", "vakif": "VakıfBank",
-               "garanti": "Garanti BBVA", "enpara": "Enpara.com (QNB)",
-               "akbank": "Akbank T.A.Ş.", "ing": "ING Bank A.Ş.",
-               "fiba": "Fibabanka A.Ş.", "getir": "GetirFinans (Fibabanka)",
-               "teb": "Türk Ekonomi Bankası (TEB)",
-               "qnb": "QNB Bank A.Ş.",
-               "halk": "Türkiye Halk Bankası",
-               "ptt": "PTT (PttBank)",
-               "kuveyt": "Kuveyt Türk Katılım", "deniz": "DenizBank",
-               "ziraatdinamik": "Ziraat Dinamik Banka"}.get(issuer, "")
+    ex.bank = BANK_LABELS.get(issuer, "")   # <-- registry'den
 
     # =============================================================
     #  İŞ BANKASI e-Dekont formatı
@@ -1441,13 +1443,26 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
                 ex.sender.iban = ib
                 break
 
-    # ENPARA/QNB-ÖZEL SON GÜVENCE: bu formatta gönderenin BİTİŞİK müşteri IBAN'ı OCR'da harf
-    # sızıntısıyla ('TR0...' -> 'TRO...') bozulunca yakalanamaz; kod ilk 'IBAN:' (=ALICI IBAN'ı)
-    # gönderene atayabilir. Ara-guard alıcı IBAN'ı O AN henüz boşsa atlanabildiğinden, TÜM çözümleme
-    # bittikten SONRA (return öncesi) son kez denetle: gönderen == alıcı ise farklı bir IBAN dene,
-    # yoksa gönderen IBAN'ını BOŞALT — kopya IBAN 'aynı banka' yanlış-pozitifi üretir.
-    if (is_enpara or is_qnb) and ex.sender.iban and ex.sender.iban == ex.receiver.iban:
+    # ==================================================================
+    #  GLOBAL GÜVENLİK AĞLARI (TÜM bankalar + universal) — return öncesi
+    #  Bilinen ya da bilinmeyen banka fark etmez; şu yapısal imkânsızlıklar
+    #  HİÇBİR gerçek dekontta olamaz, bu yüzden burada onarılır. Böylece
+    #  tek tek banka dalları hata yapsa bile yanlış-pozitif üretilmez.
+    # ==================================================================
+    # (a) Gönderen IBAN == Alıcı IBAN: aynı IBAN iki tarafa yazılmış (OCR tek IBAN okuyup
+    #     kopyalama / yanlış eşleme). Farklı geçerli bir IBAN varsa gönderene onu ata; yoksa
+    #     gönderen IBAN'ını BOŞALT (kopya IBAN 'aynı banka'/'ihraççı uyuşmazlığı' FP üretir).
+    if ex.sender.iban and ex.sender.iban == ex.receiver.iban:
         ex.sender.iban = next((ib for ib in ex.all_ibans if ib and ib != ex.receiver.iban), "")
+    # (b) Alıcı bankası yanlışlıkla İHRAÇÇI(=gönderen) etiketine sabitlenmiş ama alıcı IBAN BAŞKA
+    #     bankayı gösteriyorsa (bankalararası transfer), alıcı bankasını IBAN'dan DÜZELT. Aynı-banka
+    #     transferinde IBAN da ihraççıyı gösterir -> koşul tutmaz, değişmez. Yanlış
+    #     RECEIVER_BANK_MISMATCH'i kaynağında önler.
+    if ex.receiver.iban and ex.bank and ex.receiver.bank == ex.bank:
+        # alıcı bankası İHRAÇÇI etiketine BİREBİR sabitlenmiş; IBAN başka bankayı gösteriyorsa düzelt
+        _rib_bank = banks.bank_label_from_iban(ex.receiver.iban)
+        if _rib_bank and _rib_bank != ex.bank:
+            ex.receiver.bank = _rib_bank
 
     ex.confidence = _confidence(ex)
     return ex

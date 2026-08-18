@@ -499,6 +499,19 @@ _ISSUER_IBAN_CODES = {
     "ziraatdinamik": {"00160"},
 }
 
+# TEK KAYNAK (single source of truth): banka kimliği extract.BANK_REGISTRY'de tanımlıdır;
+# banka-anahtarı (_BANK_KEY) ve IBAN-kodları (_ISSUER_IBAN_CODES) ondan TÜRETİLİR. Böylece yeni
+# banka eklerken YALNIZ registry'yi güncellemek yeterlidir (burada elle güncelleme gerekmez).
+# Import başarısız olursa yukarıdaki gömülü tablolar (yedek) kullanılır — davranış bozulmaz.
+try:
+    import extract as _ext_reg
+    if getattr(_ext_reg, "ISSUER_IBAN_CODES", None):
+        _ISSUER_IBAN_CODES = {k: set(v) for k, v in _ext_reg.ISSUER_IBAN_CODES.items()}
+    if getattr(_ext_reg, "BANK_LABEL_TO_KEY", None):
+        _BANK_KEY = dict(_ext_reg.BANK_LABEL_TO_KEY)
+except Exception:
+    pass
+
 
 def _canon_bank(text: str) -> str:
     """Serbest metin banka adını kanonik ada indirger (banks.NAME_KEYWORDS ile).
