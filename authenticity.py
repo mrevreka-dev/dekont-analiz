@@ -865,6 +865,56 @@ def check_fee_rail(bkey: str, text: str, fee, learned: dict | None = None) -> di
 
 
 # ---------------------------------------------------------------------------
+#  SIRA NO (İŞLEM ANI) ↔ DÜZENLENME TARİHİ (BELGE OLUŞTURMA) TUTARLILIĞI
+#  Garanti BBVA dekontunda SIRA NO gömülü tam zaman damgası taşır:
+#     'SIRA NO : 2026-08-18-23.56.48.697190'  -> işlemin yapıldığı AN (YYYY-MM-DD-HH.MM.SS)
+#  DÜZENLENME TARİHİ ise belgenin OLUŞTURULDUĞU andır ('19.08.2026 00:15:55').
+#  MANTIK: Belge, işlemden ÖNCE oluşturulamaz. Oluşturma < işlem ise (birkaç dk toleransın
+#  ötesinde) bu İMKÂNSIZDIR -> geriye tarihleme/tahrifat. Oluşturma >= işlem ise (işlemden
+#  hemen sonra dekont alınır) TUTARLIDIR -> olumlu doğrulama. Bu, fotoğrafta da çalışır.
+# ---------------------------------------------------------------------------
+def check_seq_vs_creation(text: str) -> dict | None:
+    if not text:
+        return None
+    m1 = re.search(r"SIRA\s*NO\s*[:：]?\s*(\d{4})-(\d{2})-(\d{2})-(\d{2})[.:](\d{2})[.:](\d{2})", text, re.I)
+    m2 = re.search(r"D[ÜUÜü]ZENLENME\s*TAR[İIıi]H[İIıi]?\s*[:：]?\s*(\d{2})[.\-/](\d{2})[.\-/](\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?",
+                   text, re.I)
+    if not m1 or not m2:
+        return None
+    try:
+        txn = _dt.datetime(int(m1.group(1)), int(m1.group(2)), int(m1.group(3)),
+                           int(m1.group(4)), int(m1.group(5)), int(m1.group(6)))
+        cre = _dt.datetime(int(m2.group(3)), int(m2.group(2)), int(m2.group(1)),
+                           int(m2.group(4)), int(m2.group(5)), int(m2.group(6) or 0))
+    except Exception:
+        return None
+    gap = (cre - txn).total_seconds()
+    # Belge işlemden ÖNCE mi oluşturulmuş? (2 dk saat-kayması toleransı) -> imkânsız
+    if gap < -120:
+        return {
+            "code": "SEQ_CREATION_BACKDATE", "severity": "critical", "weight": 45,
+            "tr": f"GERİYE TARİHLEME (İMKÂNSIZ): işlem SIRA NO'ya göre {txn:%d.%m.%Y %H:%M:%S}'de yapılmış, "
+                  f"ancak belge DÜZENLENME TARİHİ {cre:%d.%m.%Y %H:%M:%S} — yani dekont işlemden ÖNCE "
+                  f"oluşturulmuş görünüyor. Bir dekont, kaydettiği işlemden önce üretilemez; SIRA NO ya da "
+                  f"düzenlenme tarihi/saati sonradan değiştirilmiş — güçlü sahtecilik işareti.",
+            "en": f"BACKDATING (IMPOSSIBLE): the transaction occurred at {txn:%Y-%m-%d %H:%M:%S} per SIRA NO, "
+                  f"but the document creation time is {cre:%Y-%m-%d %H:%M:%S} — the receipt appears created "
+                  f"BEFORE its transaction. Impossible; SIRA NO or creation time was altered — strong forgery signal.",
+            "detail": f"txn={txn:%Y-%m-%d %H:%M:%S} creation={cre:%Y-%m-%d %H:%M:%S} gap_s={gap:.0f}",
+        }
+    # Oluşturma, işlemden makul süre sonra (aynı gün/kısa süre) -> TUTARLI (olumlu bilgi)
+    return {
+        "code": "SEQ_CREATION_CONSISTENT", "severity": "info", "weight": 0,
+        "tr": f"SIRA NO işlem anı ({txn:%d.%m.%Y %H:%M:%S}) ile belgenin DÜZENLENME zamanı "
+              f"({cre:%d.%m.%Y %H:%M:%S}) tutarlı: belge işlemden sonra üretilmiş (fark "
+              f"{gap/60:.0f} dk). Bu, tarih/saat alanlarının oynanmadığını destekleyen olumlu bir işarettir.",
+        "en": f"SIRA NO transaction time ({txn:%Y-%m-%d %H:%M:%S}) is consistent with document creation "
+              f"({cre:%Y-%m-%d %H:%M:%S}); created after the transaction (+{gap/60:.0f} min). Positive signal.",
+        "detail": f"txn={txn:%Y-%m-%d %H:%M:%S} creation={cre:%Y-%m-%d %H:%M:%S} gap_s={gap:.0f}",
+    }
+
+
+# ---------------------------------------------------------------------------
 #  TARİH MANTIK ZİNCİRİ (içerik bazlı — fotoğrafta da çalışır)
 #  Saldırgan tarih alanlarını değiştirdiğinde mantık kırılır: dekont işlemden önce
 #  üretilemez, hiçbir tarih gelecekte olamaz, valör işlemden önce olamaz.

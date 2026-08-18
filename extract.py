@@ -553,7 +553,11 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.sender.customer_no = _find_label(joined, ["MÜŞTERİ NUMARASI", "MUSTERI NUMARASI"])
         ex.sender.account_no = _find_label(joined, ["HESAP NUMARASI"])
         ex.sender.tckn = _find_label(joined, ["TC KİMLİK NO", "TC KIMLIK NO"])
-        ex.transaction.date = _find_label(joined, ["DÜZENLENME TARİHİ", "İŞLEM TARİHİ", "ISLEM TARIHI"])
+        # İŞLEM TARİHİ = işlemin yapıldığı gün; DÜZENLENME TARİHİ = belgenin oluşturulduğu an (FARKLI!).
+        # İşlem tarihi olarak DÜZENLENME'yi DEĞİL işlem gününü/anını kullan (SIRA NO tam saati aşağıda verir).
+        ex.transaction.date = _find_label(joined, ["İŞLEM TARİHİ", "ISLEM TARIHI"]) \
+            or _find_label(joined, ["DÜZENLENME TARİHİ", "DUZENLENME TARIHI"])
+        ex.transaction.value_date = _find_label(joined, ["DÜZENLENME TARİHİ", "DUZENLENME TARIHI"])
         ex.transaction.channel = _find_label(joined, ["İŞLEM YERİ", "ISLEM YERI"])
         ex.transaction.ref_no = _find_label(joined, ["FAST REF NO", "REF NO"])
         # Gönderici adı: "SAYIN" sonrası satır
@@ -587,10 +591,16 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         # NOT: Garanti dekontunda ayrı bir işlem 'TOPLAM'ı yok; TUTAR transfer tutarıdır,
         # 'MASRAF/KOMİSYON TOPLAMI' yalnız ücret toplamıdır -> ex.amount.total'a YAZMA.
         ex.amount.total = None
-        # Sıra No (dekont referansı)
+        # Sıra No (dekont referansı) — Garanti'de SIRA NO gömülü TAM ZAMAN DAMGASI taşır:
+        # '2026-08-18-23.56.48.697190' = işlemin yapıldığı AN. İşlem tarihini bundan (en hassas)
+        # türet; ayrıca DÜZENLENME (belge oluşturma) ile tutarlılık authenticity'de denetlenir.
         _sira = _find_label(joined, ["SIRA NO"])
         if _sira:
             ex.transaction.receipt_no = re.split(r"\s{2,}|TUTAR", _sira)[0].strip()
+        _sdt = re.search(r"SIRA\s*NO\s*[:：]?\s*(\d{4})-(\d{2})-(\d{2})-(\d{2})[.:](\d{2})[.:](\d{2})", joined, re.I)
+        if _sdt:
+            ex.transaction.date = (f"{_sdt.group(3)}.{_sdt.group(2)}.{_sdt.group(1)} "
+                                   f"{_sdt.group(4)}:{_sdt.group(5)}:{_sdt.group(6)}")
 
     # =============================================================
     #  VAKIFBANK formatı (çok sütunlu; okuma-sırası metni ile)

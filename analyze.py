@@ -771,6 +771,12 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _fr:
                 findings.append(Finding(_fr["code"], _fr["severity"], "content", _fr["weight"],
                                         tr=_fr["tr"], en=_fr["en"], detail=_fr.get("detail", "")))
+            # SIRA NO (işlem anı) ↔ DÜZENLENME TARİHİ (belge oluşturma) tutarlılığı (Garanti vb.):
+            # belge işlemden ÖNCE oluşturulmuşsa geriye tarihleme (kritik); sonraysa TUTARLI (olumlu).
+            _sc = _auth.check_seq_vs_creation(text_layout)
+            if _sc:
+                findings.append(Finding(_sc["code"], _sc["severity"], "content", _sc["weight"],
+                                        tr=_sc["tr"], en=_sc["en"], detail=_sc.get("detail", "")))
             # Fotoğraf dekontlarda GÖRSEL yazı/karakter tahrifatı: vision modelinin alan-bazlı
             # değerlendirmesi (yazı tipi/hizalama/üst üste binme/keskinlik farkı). Olasılıksal
             # olduğundan konservatif ağırlıklandırılır; deterministik kontrollerin yerini almaz.
@@ -778,9 +784,17 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 _conf = int(vision_result.get("tamper_confidence") or 0)
                 _tf = vision_result.get("tamper_fields") or []
                 _reason = (vision_result.get("tamper_reason") or "").strip()
+                # Fotoğraf-vision tahrifat SEZGİSİ olasılıksaldır ve düşük güvende yanlış-pozitif
+                # üretir (ör. yoğun/monospace alanları 'yazı tipi farklı' sanmak, ya da SIRA NO↔
+                # DÜZENLENME zaman sırasını 'çelişki' zannetmek). Bu yüzden güven <60 ise SKORU
+                # DÜŞÜRMEYEN bir BİLGİ notu olarak verilir; yalnız >=60 gerçek bulgu sayılır.
                 if _conf >= 40:
-                    _sev, _w = (("critical", 30) if _conf >= 80 else
-                                ("high", 16) if _conf >= 60 else ("medium", 8))
+                    if _conf >= 80:
+                        _sev, _w = "high", 18
+                    elif _conf >= 60:
+                        _sev, _w = "medium", 8
+                    else:
+                        _sev, _w = "info", 0        # 40–59: bilgilendirme (puanı düşürmez)
                     findings.append(Finding(
                         "VISION_TEXT_TAMPER", _sev, "content", _w,
                         tr=f"GÖRSEL YAZI TAHRİFATI ŞÜPHESİ (güven %{_conf}): {_reason} "

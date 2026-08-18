@@ -120,6 +120,12 @@ def extract_from_image(pil_img, timeout: float = 45.0) -> dict | None:
                   "tarihleri TAMAMEN NORMALDİR — bunları ASLA 'gelecek tarih' diye tahrifat "
                   "işaretleme. Yalnızca bu tarihten KESİNLİKLE SONRAKİ tarihler geleceğe aittir.") \
         if _today else ""
+    # Garanti BBVA: 'SIRA NO' işlemin yapıldığı ANI (YYYY-MM-DD-HH.MM.SS), 'DÜZENLENME TARİHİ' ise
+    # belgenin OLUŞTURULDUĞU anı gösterir. Belgenin işlemden birkaç dakika/saniye SONRA (gece yarısını
+    # geçse bile) oluşturulması TAMAMEN NORMALDİR — bunu ASLA 'zaman çelişkisi/tahrifat' diye işaretleme.
+    _seq_note = ("\n\nÖNEMLİ (Garanti/benzeri): 'SIRA NO'daki zaman = işlem anı; 'DÜZENLENME TARİHİ' = "
+                 "belge oluşturma anı. Oluşturma zamanının işlemden biraz SONRA olması NORMALDİR, çelişki "
+                 "DEĞİLDİR — bunu tahrifat sayma.")
 
     body = {
         "model": model,
@@ -130,7 +136,7 @@ def extract_from_image(pil_img, timeout: float = 45.0) -> dict | None:
             "role": "user",
             "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": media, "data": b64}},
-                {"type": "text", "text": _PROMPT + _date_note},
+                {"type": "text", "text": _PROMPT + _date_note + _seq_note},
             ],
         }],
     }
