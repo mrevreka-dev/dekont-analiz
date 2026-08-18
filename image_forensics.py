@@ -65,6 +65,13 @@ class ImageForensics:
     double_compression_suspected: bool = False
     noise_inconsistency: float = 0.0
 
+    # Recapture (ekranın yeniden çekimi) / moiré — BİLGİ amaçlı (ceza değil):
+    # ekran-görüntüsü (screenshot, kolay düzenlenir) ile ikinci-cihaz çekimi (recapture,
+    # moiré içerir, düzenlemesi zor) ayrımını yapmaya yarar.
+    moire_score: float = 0.0
+    recapture_suspected: bool = False
+    ela_hotspot_concentrated: bool = False   # ELA sıcak noktaları küçük bir bölgede yoğunlaşmış (yapıştırma)
+
     # Zemin rengi / renk tonu analizi
     bg_color: list = field(default_factory=list)     # baskın zemin rengi (RGB)
     bg_dev_max: float = 0.0                            # en yüksek bölgesel zemin sapması
@@ -128,6 +135,65 @@ def estimate_jpeg_quality(raw: bytes) -> int:
         return 0
 
 
+def _moire_recapture_score(img: Image.Image) -> float:
+    """Ekranın yeniden çekiminde (recapture) oluşan periyodik piksel-ızgara deseni (moiré),
+    frekans uzayında (FFT) orta-yüksek bantta belirgin izole TEPELER üretir. Skor = bu bandın
+    99.9 persentili / medyanı. Yüksek skor = güçlü periyodik desen = ekran-çekimi olasılığı.
+    NOT: Bu bir SAHTECİLİK sinyali DEĞİLDİR; yalnızca screenshot↔recapture ayrımı için bilgidir."""
+    import numpy as np
+    try:
+        g = np.asarray(img.convert("L"), dtype=np.float32)
+        h, w = g.shape
+        m = max(h, w)
+        if m > 1000:
+            import cv2
+            s = 1000.0 / m
+            g = cv2.resize(g, (max(1, int(w * s)), max(1, int(h * s))), interpolation=cv2.INTER_AREA)
+        g = g - float(g.mean())
+        # Hann penceresi (kenar sızıntısını azalt)
+        H, W = g.shape
+        wy = np.hanning(H)[:, None]; wx = np.hanning(W)[None, :]
+        g = g * wy * wx
+        mag = np.abs(np.fft.fftshift(np.fft.fft2(g)))
+        cy, cx = H // 2, W // 2
+        yy, xx = np.ogrid[:H, :W]
+        rad = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
+        rmin = min(H, W) * 0.12
+        rmax = min(H, W) * 0.48
+        band = mag[(rad > rmin) & (rad < rmax)]
+        if band.size < 50:
+            return 0.0
+        med = float(np.median(band)) + 1e-6
+        peak = float(np.percentile(band, 99.9))
+        return round(peak / med, 1)
+    except Exception:
+        return 0.0
+
+
+def _ela_concentration(img: Image.Image) -> bool:
+    """ELA sıcak-noktaları görselin KÜÇÜK ve BİTİŞİK bir bölgesinde toplanmışsa (tüm belgeye
+    yayılmak yerine), bu lokalize bir düzenlemeye (tek bir alanın yapıştırılması) işaret eder."""
+    import numpy as np
+    try:
+        rgb = img.convert("RGB")
+        resaved = Image.open(io.BytesIO(_to_bytes(rgb, "JPEG", 90))).convert("RGB")
+        lum = np.asarray(ImageChops.difference(rgb, resaved)).astype(np.float32).max(axis=2)
+        thr = max(30.0, float(np.percentile(lum, 99)) * 0.8)
+        hot = lum > thr
+        frac = float(hot.mean())
+        if frac < 0.001 or frac > 0.08:
+            return False       # ya çok az ya da yaygın -> lokalize paste değil
+        # sıcak piksellerin uzaysal yayılımı: dar bir kutuya sığıyorsa yoğunlaşmış demektir
+        ys, xs = np.where(hot)
+        if ys.size < 30:
+            return False
+        bh = (ys.max() - ys.min() + 1) / lum.shape[0]
+        bw = (xs.max() - xs.min() + 1) / lum.shape[1]
+        return (bh * bw) < 0.12    # sıcak alan, kadrajın <%12'lik bir kutusuna sığıyor
+    except Exception:
+        return False
+
+
 def analyze_image(img: Image.Image, raw: bytes | None = None) -> ImageForensics:
     r = ImageForensics()
     r.analyzed = True
@@ -177,10 +243,34 @@ def analyze_image(img: Image.Image, raw: bytes | None = None) -> ImageForensics:
     # --- JPEG kalite / çift sıkıştırma ---
     if raw:
         r.jpeg_quality_est = estimate_jpeg_quality(raw)
+        # Çift sıkıştırma sezgisi (muhafazakâr): görsel kendi tahmini kalitesinde yeniden
+        # kaydedildiğinde tek-sıkıştırılmış bir görselde fark ~0 olmalıdır; belirgin bir artık
+        # fark, görselin DAHA ÖNCE de sıkıştırıldığına (açılıp yeniden dışa aktarıldığına) işarettir.
+        try:
+            if (r.format or "").upper() in ("JPEG", "JPG") and r.jpeg_quality_est:
+                q = max(60, min(95, r.jpeg_quality_est))
+                r2 = Image.open(io.BytesIO(_to_bytes(img, "JPEG", q))).convert("RGB")
+                d = np.asarray(ImageChops.difference(img.convert("RGB"), r2)).astype(np.float32).max(axis=2)
+                r.double_compression_suspected = float(d.mean()) > 4.0
+        except Exception:
+            pass
 
     # --- Gürültü tutarsızlığı (bloklar arası std sapması) ---
     try:
         r.noise_inconsistency = _noise_inconsistency(img)
+    except Exception:
+        pass
+
+    # --- Moiré / recapture (ekranın yeniden çekimi) — BİLGİ amaçlı ---
+    try:
+        r.moire_score = _moire_recapture_score(img)
+        r.recapture_suspected = r.moire_score >= 12.0
+    except Exception:
+        pass
+
+    # --- ELA sıcak-noktası yoğunlaşması (lokalize yapıştırma) ---
+    try:
+        r.ela_hotspot_concentrated = _ela_concentration(img)
     except Exception:
         pass
 
@@ -396,14 +486,50 @@ def _score_image(r: ImageForensics) -> None:
                           f"birleştirme (splicing) olasılığı.",
                     "en": f"Strongly inconsistent noise distribution (coef {r.noise_inconsistency:.2f}) — possible splicing."})
 
-    # Kamera/tarayıcı metadata'sı yok + fotoğrafik boyut -> screenshot/synthetic
+    # RECAPTURE (ekranın ikinci cihazla çekimi) — BİLGİ amaçlı, CEZA YOK.
+    # Not: recapture, ekran-görüntüsüne (screenshot) göre düzenlemesi ZOR bir üretim biçimidir;
+    # bu yüzden şüphe değil, olumlu/nötr bir bağlamdır.
+    if r.recapture_suspected:
+        sig.append({"severity": "info", "category": "image",
+                    "tr": f"Bu görsel, bir ekranın İKİNCİ BİR CİHAZLA yeniden çekimi (recapture) olabilir "
+                          f"(moiré/periyodik desen skoru {r.moire_score:.0f}). Recapture, ekran görüntüsüne göre "
+                          f"dijital düzenlemesi daha zordur — bu bir SAHTECİLİK işareti değil, bilgilendirici bir bağlamdır.",
+                    "en": f"This image may be a re-capture of a screen with a second device (moiré score "
+                          f"{r.moire_score:.0f}). Recapture is harder to digitally edit than a screenshot — informational, not a forgery sign."})
+
+    # Kamera/tarayıcı metadata'sı yok + fotoğrafik boyut. Recapture varsa 'ekran görüntüsü' değil
+    # ikinci-cihaz çekimi olması muhtemel; recapture yoksa screenshot (kolay düzenlenir) uyarısı verilir.
     if not r.has_exif and not r.exif_make and (r.width * r.height) > 500 * 500:
-        ai += 8
-        manip += 5
-        sig.append({"severity": "low", "category": "image",
-                    "tr": "Görselde kamera/tarayıcı EXIF bilgisi yok. Ekran görüntüsü ya da yeniden üretilmiş olabilir "
-                          "(tek başına kanıt değildir).",
-                    "en": "No camera/scanner EXIF present — may be a screenshot or re-generated image (not conclusive alone)."})
+        if r.recapture_suspected:
+            pass  # recapture bağlamı yukarıda bilgi olarak verildi; ek şüphe/ceza yok
+        else:
+            ai += 8
+            manip += 5
+            sig.append({"severity": "low", "category": "image",
+                        "tr": "Görselde kamera/tarayıcı EXIF bilgisi yok ve ekran-çekimi (recapture) deseni de yok — "
+                              "bu bir EKRAN GÖRÜNTÜSÜ (screenshot) ya da yeniden üretilmiş görsel olabilir. Ekran "
+                              "görüntüleri dijital olarak KOLAY düzenlenebilir; şüpheli durumda orijinal PDF ya da "
+                              "ikinci bir cihazla çekilmiş görüntü/video isteyin (tek başına kanıt değildir).",
+                        "en": "No camera EXIF and no screen-recapture pattern — may be a screenshot or re-generated image "
+                              "(screenshots are easy to edit; request the original PDF or a second-device capture)."})
+
+    # ELA sıcak-noktası küçük bir bölgede YOĞUNLAŞMIŞSA: lokalize düzenleme (tek alanın yapıştırılması)
+    if r.ela_hotspot_concentrated:
+        manip += 14
+        sig.append({"severity": "high", "category": "image",
+                    "tr": "ELA sıcak-noktaları görselin KÜÇÜK ve BİTİŞİK bir bölgesinde yoğunlaşmış — belgenin geri "
+                          "kalanından farklı hata seviyesi taşıyan bu alan, tek bir bölgenin (ör. tutar/isim) sonradan "
+                          "DÜZENLENDİĞİNE/yapıştırıldığına işaret edebilir. Fotoğrafta kesinlik düşüktür; orijinal PDF isteyin.",
+                    "en": "ELA hotspots are concentrated in a small contiguous region — this area carries a different error "
+                          "level than the rest, which can indicate a single field (e.g. amount/name) was edited/pasted."})
+
+    # Çift JPEG sıkıştırma: düşük tahmini kalite + belirgin ELA -> yeniden kaydedilmiş/düzenlenmiş
+    if r.double_compression_suspected:
+        manip += 8
+        sig.append({"severity": "medium", "category": "image",
+                    "tr": "Görselde çift JPEG sıkıştırma izi var — görsel en az bir kez açılıp yeniden kaydedilmiş; "
+                          "düzenleme sonrası yeniden dışa aktarma olasılığı (fotoğrafta tek başına kanıt değildir).",
+                    "en": "Double JPEG compression traces — the image was re-saved at least once; possible edit-and-re-export."})
 
     r.manipulation_score = float(min(100, manip))
     r.ai_score = float(min(100, ai))

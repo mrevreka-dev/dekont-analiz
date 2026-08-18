@@ -910,7 +910,11 @@ def check_date_chain(text: str, txn_date_str: str, value_date_str: str, now=None
 #  gösteriyorsa (Photoshop, GIMP, Photopea...), belge düzenlenmiş demektir.
 # ---------------------------------------------------------------------------
 _HEAVY_EDITORS = ("photoshop", "gimp", "photopea", "pixlr", "affinity", "coreldraw",
-                  "paint.net", "krita", "inkscape", "illustrator", "lightroom")
+                  "paint.net", "krita", "inkscape", "illustrator", "lightroom",
+                  # TASARIM/MOCKUP araçları: bir banka dekontu fotoğrafı/ekran görüntüsü bu
+                  # araçlardan ASLA geçmez — dekont bunlarda "derlenmişse" neredeyse kesin sahtedir.
+                  "canva", "figma", "sketch", "pixelmator", "adobe express", "adobe xd",
+                  "indesign", "publisher", "microsoft designer", "adobe firefly", "picsart")
 
 
 def check_image_editor(exif_software: str, edit_hits, c2pa_present: bool) -> dict | None:
