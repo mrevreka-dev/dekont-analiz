@@ -109,6 +109,18 @@ def extract_from_image(pil_img, timeout: float = 45.0) -> dict | None:
     except Exception:
         return None
 
+    # Bugünün tarihini prompt'a ekle: vision, bugüne/geçmişe ait GEÇERLİ işlem tarihlerini
+    # ısrarla 'gelecek tarih' sanıp yanlış tahrifat şüphesi üretiyordu. Bu bağlam onu keser.
+    import datetime as _dt
+    try:
+        _today = _dt.date.today().strftime("%d.%m.%Y")
+    except Exception:
+        _today = ""
+    _date_note = (f"\n\nBUGÜNÜN TARİHİ: {_today}. Bu tarihe EŞİT ya da ÖNCESİNDEKİ işlem/belge "
+                  "tarihleri TAMAMEN NORMALDİR — bunları ASLA 'gelecek tarih' diye tahrifat "
+                  "işaretleme. Yalnızca bu tarihten KESİNLİKLE SONRAKİ tarihler geleceğe aittir.") \
+        if _today else ""
+
     body = {
         "model": model,
         # full_text (tam metin dökümü) + yapısal alanlar + tahrifat analizi tek yanıtta döner;
@@ -118,7 +130,7 @@ def extract_from_image(pil_img, timeout: float = 45.0) -> dict | None:
             "role": "user",
             "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": media, "data": b64}},
-                {"type": "text", "text": _PROMPT},
+                {"type": "text", "text": _PROMPT + _date_note},
             ],
         }],
     }
