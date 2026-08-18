@@ -710,12 +710,13 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             # Deterministik IBAN/banka-tutarlılığı (mod-97, ihracçı-taraf, alıcı-bankası)
             for _d in _auth.deterministic_checks(_bkey, ex.sender.iban, ex.receiver.iban,
                                                  ex.receiver.bank, ex.all_ibans):
-                # SAF TESSERACT OCR (vision değil/başarısız): IBAN'a-dayalı sert kontroller
-                # GÜVENİLMEZDİR — OCR rakamları bozar (bulanık ekran-fotoğrafı). Gerçek dekontta
-                # IBAN her zaman geçerlidir; OCR'da geçersiz çıkması bir OCR HATASIDIR, tahrifat
-                # kanıtı DEĞİL. Bu yüzden foto+ocr'da IBAN_INVALID/ISSUER/RECEIVER_BANK bastırılır
-                # (dijital PDF ve vision okumalarında normal çalışır).
-                if extraction.text_source == "ocr" and _d["code"] in (
+                # FOTOĞRAF/OCR: IBAN'a-dayalı sert kontroller GÜVENİLMEZDİR — pikselden okuma
+                # (ister tesseract ister vision) rakamları/basamak sırasını bozabilir (yoğun
+                # monospace IBAN). Gerçek dekontta IBAN her zaman geçerlidir; fotoğrafta geçersiz
+                # çıkması bir OKUMA HATASIDIR, tahrifat kanıtı DEĞİL. Bu yüzden TÜM fotoğraflarda
+                # (input_kind=='image', vision dahil) VE taranmış/ocr PDF'lerde IBAN_INVALID/
+                # ISSUER/RECEIVER_BANK bastırılır — yalnız dijital-metin PDF'te normal çalışır.
+                if (input_kind == "image" or extraction.text_source == "ocr") and _d["code"] in (
                         "IBAN_INVALID", "ISSUER_IBAN_MISMATCH", "RECEIVER_BANK_MISMATCH"):
                     continue
                 findings.append(Finding(_d["code"], _d["severity"], "content", _d["weight"],

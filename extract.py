@@ -422,6 +422,12 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     # yalnız bu markanın kendi dekontunda geçer (footer web adresi + 'getirfinans ile gönderildi'
     # açıklaması) → ihraççı-özgü. fiba'dan ÖNCE değerlendirilir (getir dekontu 'Fibabanka' da içerir).
     _sig_getir = ("getirfinans.com" in low or "getirfinans" in low)
+    # TEB (Türk Ekonomi Bankası): footer web adresi + kendi kanalı (CEPTETEB) ihraççı-özgü.
+    # 'TEB' salt-3-harf collision riskli olduğundan KULLANILMAZ; web adresi/kanal kullanılır.
+    # OCR footer'a boşluk sokabildiğinden ('www. teb. com. tr') boşluksuz da denetlenir.
+    _lc_ns = low.replace(" ", "")
+    _sig_teb = ("teb.com.tr" in _lc_ns or "cepteteb" in _lc_ns
+                or "bankalararasiparatransferdekontu" in _lc_ns)
     # QNB: Enpara ile AYNI altyapı/format (Ibtech+iText); QNB markası ayrı etiketlensin.
     # QNB'ye ÖZGÜ imza: web adresi + QNB kanal ifadeleri. DİKKAT: 'QNB Bank' salt-metin olarak
     # Enpara belgelerinde tarihsel dipnotta geçebilir ("Enpara'nın QNB Bank A.Ş. ...") — bu yüzden
@@ -454,6 +460,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
               else "isbank" if _sig_isbank else "vakif" if _sig_vakif
               else "akbank" if _sig_akbank else "ing" if _sig_ing
               else "getir" if _sig_getir else "fiba" if _sig_fiba
+              else "teb" if _sig_teb
               else "qnb" if _sig_qnb else "halk" if _sig_halk
               else "ptt" if _sig_ptt
               else "kuveyt" if _sig_kuveyt else "deniz" if _sig_deniz
@@ -468,6 +475,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     is_ing = issuer == "ing"
     is_fiba = issuer == "fiba"
     is_getir = issuer == "getir"
+    is_teb = issuer == "teb"
     is_qnb = issuer == "qnb"
     is_halk = issuer == "halk"
     is_ptt = issuer == "ptt"
@@ -480,6 +488,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
                "garanti": "Garanti BBVA", "enpara": "Enpara.com (QNB)",
                "akbank": "Akbank T.A.Ş.", "ing": "ING Bank A.Ş.",
                "fiba": "Fibabanka A.Ş.", "getir": "GetirFinans (Fibabanka)",
+               "teb": "Türk Ekonomi Bankası (TEB)",
                "qnb": "QNB Bank A.Ş.",
                "halk": "Türkiye Halk Bankası",
                "ptt": "PTT (PttBank)",
@@ -1043,6 +1052,51 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.transaction.document_no = _find_label(rt, ["Dekont No"])
         ex.sender.tckn = _find_label(rt, ["Vergi No"])
         ex.sender.bank = "ING Bank A.Ş."
+
+    # =============================================================
+    #  TÜRK EKONOMİ BANKASI (TEB) — Bankalararası Para Transfer (FAST) Dekontu
+    # =============================================================
+    elif is_teb:
+        # Düzen: kutu1 gönderen (Hesap Sahibi + IBAN + FAST No), kutu2 tutar + Alacaklı Adı/Hesap.
+        # KRİTİK: TEB İHRAÇÇI (=gönderen) bankasıdır; ALICI bankası alıcı IBAN'ından türetilir
+        # (bankalararası FAST'te alıcı başka bankada olabilir — TEB'i alıcı bankası SANMA, aksi
+        # halde yanlış RECEIVER_BANK_MISMATCH üretilir; kullanıcı bildirdi).
+        ex.doc_kind = "Bankalararası Para Transfer Dekontu"
+        rt = rjoined or joined
+        _td = re.search(r"Tarih[- ]?Saat\s*[:：]?\s*(\d{2}/\d{2}/\d{4})\s*(\d{2}:\d{2})?", rt, re.I)
+        ex.transaction.date = ((_td.group(1) + ((" " + _td.group(2)) if _td.group(2) else "")) if _td else "")
+        _in = re.search(r"[İIıi]?[şs]lem\s*No\s*[:：]?\s*([A-Za-z0-9]+)", rt, re.I)
+        ex.transaction.document_no = _in.group(1) if _in else ""
+        # Gönderen (Hesap Sahibi) + kimlik/hesap/şube
+        ex.sender.name = _clean_name(_find_label(rt, ["Hesap Sahibi"]))
+        ex.sender.customer_no = _find_label(rt, ["Müşteri Numarası", "Musteri Numarasi", "Müşteri No"])
+        ex.sender.account_no = _find_label(rt, ["Hesap Numarası", "Hesap Numarasi"])
+        ex.sender.branch = _find_label(rt, ["Hesap Şubesi", "Hesap Subesi"])
+        _sib = re.search(r"\bIBAN\s*[:：]?\s*(TR[0-9 ]{20,34})", rt, re.I)
+        ex.sender.iban = banks.normalize_iban(_sib.group(1)) if _sib else ""
+        _fn = re.search(r"FAST\s*No\s*[:：]?\s*(\d{6,})", rt, re.I)
+        ex.transaction.ref_no = _fn.group(1) if _fn else ""
+        # Alıcı (Alacaklı Adı) + alıcı IBAN (Alacaklı Hesap) — OCR 'Alacaklıhesap' bitişik olabilir
+        ex.receiver.name = _clean_name(_after_label(rt, "Alacaklı Adı",
+                                       ["Alacaklı Hesap", "Alacaklıhesap", "Sayın", "Açıklama", "IBAN"])
+                                       or _after_label(rt, "AlacaklıAdı", ["Alacaklı", "Sayın", "IBAN"]))
+        _rib = re.search(r"Alacakl[ıi]\s*[Hh]esap\s*[:：]?\s*(TR[0-9 ]{20,34})", rt) \
+            or re.search(r"Alacakl[ıi][Hh]esap\s*[:：]?\s*(TR[0-9 ]{20,34})", rt) \
+            or re.search(r"Alacakl[ıi][^\n]*?(TR[0-9 ]{22,34})", rt)
+        ex.receiver.iban = banks.normalize_iban(_rib.group(1)) if _rib else ""
+        # Gönderen IBAN alıcıya eşitse (tek IBAN okunması) düzelt
+        if ex.sender.iban and ex.sender.iban == ex.receiver.iban:
+            ex.sender.iban = next((ib for ib in ex.all_ibans if ib and ib != ex.receiver.iban), ex.sender.iban)
+        # Tutar: 'TL 10.000,00' / 'TL10.000,00'
+        _am = re.search(r"(?:TL|TRY)\s*([0-9][0-9.]*,[0-9]{2})", rt) \
+            or re.search(r"([0-9][0-9.]*,[0-9]{2})\s*(?:TL|TRY)", rt)
+        ex.amount.value = parse_amount(_am.group(1)) if _am else None
+        ex.amount.currency = "TL"
+        # İşlem türü: bankalararası para transferi = FAST
+        ex.transaction.type = "FAST"
+        ex.transaction.channel = _find_label(rt, ["İşlem Yeri", "Islem Yeri"]) or "CEPTETEB Mobil"
+        ex.sender.bank = "Türk Ekonomi Bankası (TEB)"
+        # receiver.bank BOŞ bırakılır -> alıcı IBAN'ından türetilir (ör. Yapı Kredi). TEB atanmaz.
 
     # =============================================================
     #  GETİRFİNANS (Fibabanka markası) E-Dekont

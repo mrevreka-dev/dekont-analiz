@@ -38,6 +38,7 @@ _BANK_KEY = {
     "ing bank a.ş.": "ing",
     "fibabanka a.ş.": "fiba",
     "getirfinans (fibabanka)": "getir",
+    "türk ekonomi bankası (teb)": "teb",
     "türkiye halk bankası": "halk",
     "ptt (pttbank)": "ptt",
     "kuveyt türk katılım": "kuveyt",
@@ -489,6 +490,7 @@ _ISSUER_IBAN_CODES = {
     "ing":    {"00099"},
     "fiba":   {"00103"},
     "getir":  {"00103"},                       # GetirFinans = Fibabanka altyapısı (IBAN kodu 00103)
+    "teb":    {"00032"},                        # Türk Ekonomi Bankası (TEB)
     "qnb":    {"00111"},
     "enpara": {"00157", "00111"},
     "ptt":    {"00807"},
