@@ -38,6 +38,10 @@ _BANK_KEY = {
     "ing bank a.ş.": "ing",
     "fibabanka a.ş.": "fiba",
     "türkiye halk bankası": "halk",
+    "ptt (pttbank)": "ptt",
+    "kuveyt türk katılım": "kuveyt",
+    "denizbank": "deniz",
+    "ziraat dinamik banka": "ziraatdinamik",
 }
 
 
@@ -482,6 +486,10 @@ _ISSUER_IBAN_CODES = {
     "fiba":   {"00103"},
     "qnb":    {"00111"},
     "enpara": {"00157", "00111"},
+    "ptt":    {"00807"},
+    "kuveyt": {"00205"},
+    "deniz":  {"00134"},
+    "ziraatdinamik": {"00160"},
 }
 
 

@@ -410,11 +410,24 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     # 'PTT'/'Posta ve Telgraf' ADI karşı-tarafta pek geçmez; yine de en güvenli imza web adresidir.
     _sig_ptt = ("pttbank.ptt.gov.tr" in low or "pttbank internet bankaciligi" in _nlow
                 or "posta ve telgraf teskilati" in _nlow)
-    issuer = ("yapikredi" if _sig_yapikredi else "ziraat" if _sig_ziraat
+    # Kuveyt Türk Katılım: YALNIZCA footer web adresi ihracçı-özgüdür. "Kuveyt Türk" ADI
+    # karşı-tarafta (Alıcı Banka) geçebileceğinden ad tek başına KULLANILMAZ.
+    _sig_kuveyt = ("kuveytturk.com" in _nlow)
+    # DenizBank: footer web adresi + kuruma-özgü kanal (MobilDeniz) ihracçı-özgü ("DenizBank" adı
+    # karşı-tarafta da geçebilir, bu yüzden salt ad kullanılmaz).
+    _sig_deniz = ("denizbank.com" in low or "mobildeniz" in _nlow)
+    # Ziraat Dinamik Banka: AYRI dijital banka (ZİRAAT DİNAMİK BANKA A.Ş., ziraatdinamik.com.tr,
+    # IBAN kodu 00160). Klasik Ziraat'ten ÖNCE değerlendirilir. İmza ihracçıya-özgü olmalı:
+    # web adresi ya da KENDİ kanalı ('Ziraat Dinamik Mobil'); salt "Ziraat Dinamik" ADI karşı-
+    # tarafta (Alan Banka) geçebileceğinden tek başına kullanılmaz.
+    _sig_ziraatdinamik = ("ziraatdinamik.com" in _nlow or "ziraat dinamik mobil" in _nlow)
+    issuer = ("yapikredi" if _sig_yapikredi
+              else "ziraatdinamik" if _sig_ziraatdinamik else "ziraat" if _sig_ziraat
               else "isbank" if _sig_isbank else "vakif" if _sig_vakif
               else "akbank" if _sig_akbank else "ing" if _sig_ing
               else "fiba" if _sig_fiba else "qnb" if _sig_qnb else "halk" if _sig_halk
               else "ptt" if _sig_ptt
+              else "kuveyt" if _sig_kuveyt else "deniz" if _sig_deniz
               else "garanti" if _sig_garanti else "enpara" if _sig_enpara else "")
     is_yapikredi = issuer == "yapikredi"
     is_ziraat = issuer == "ziraat"
@@ -428,6 +441,9 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     is_qnb = issuer == "qnb"
     is_halk = issuer == "halk"
     is_ptt = issuer == "ptt"
+    is_kuveyt = issuer == "kuveyt"
+    is_deniz = issuer == "deniz"
+    is_ziraatdinamik = issuer == "ziraatdinamik"
 
     ex.bank = {"yapikredi": "Yapı ve Kredi Bankası", "ziraat": "T.C. Ziraat Bankası",
                "isbank": "Türkiye İş Bankası", "vakif": "VakıfBank",
@@ -435,7 +451,9 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
                "akbank": "Akbank T.A.Ş.", "ing": "ING Bank A.Ş.",
                "fiba": "Fibabanka A.Ş.", "qnb": "QNB Bank A.Ş.",
                "halk": "Türkiye Halk Bankası",
-               "ptt": "PTT (PttBank)"}.get(issuer, "")
+               "ptt": "PTT (PttBank)",
+               "kuveyt": "Kuveyt Türk Katılım", "deniz": "DenizBank",
+               "ziraatdinamik": "Ziraat Dinamik Banka"}.get(issuer, "")
 
     # =============================================================
     #  İŞ BANKASI e-Dekont formatı
@@ -700,7 +718,9 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     # =============================================================
     #  T.C. ZİRAAT BANKASI (HESAPTAN FAST / EFT / HAVALE)
     # =============================================================
-    elif is_ziraat:
+    elif is_ziraat or is_ziraatdinamik:
+        # Ziraat ve Ziraat Dinamik AYRI bankalardır; dekont düzeni (BİRİM/HESAP/Gönderen/Alan Banka/
+        # Alıcı Hesap/İşlem Tutarı/Fast Sorgu No) neredeyse AYNI olduğundan ÇIKARIM KODU ortaktır.
         ex.doc_kind = _detect_garanti_kind(joined)  # HESAPTAN FAST / EFT / HAVALE
         rt = joined                                  # Ziraat'ta hizalı layout metni daha güvenilir
         # İki Ziraat formatı desteklenir:
@@ -758,7 +778,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.sender.branch = _find_label(rt, ["ŞUBE KODU/ADI", "SUBE KODU/ADI", "ŞUBE ADI"])
         ex.sender.account_no = _find_label(rt, ["HESAP NUMARASI"])
         ex.sender.tckn = _find_label(rt, ["VERGİ KİMLİK NO", "TC KİMLİK", "VERGI KIMLIK NO"])
-        ex.sender.bank = "T.C. Ziraat Bankası"
+        ex.sender.bank = "Ziraat Dinamik Banka" if is_ziraatdinamik else "T.C. Ziraat Bankası"
 
     # =============================================================
     #  YAPI VE KREDİ BANKASI (FAST GÖNDERİMİ / EFT e-Dekont)
@@ -1083,6 +1103,73 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         _tm = re.search(r"Hesab[ıi]n[ıi]zdan\s+(" + AMOUNT_RE.pattern + r")", rt)
         if _tm:
             ex.amount.total = parse_amount(_tm.group(1))
+        ex.amount.currency = "TL"
+
+    # =============================================================
+    #  KUVEYT TÜRK KATILIM — e-Dekont (IBAN'a Para Transferi / Giden)
+    # =============================================================
+    #  İki-bloklu: solda gönderen/müşteri, sağda belge bilgisi. Alıcı IBAN 'Gönderilen IBAN'
+    #  etiketiyle verilir (gönderilen = alıcıya). Gönderenin kendi IBAN'ı çoğu dekontta yer almaz.
+    elif is_kuveyt:
+        rt = joined
+        ex.doc_kind = "e-Dekont"
+        _KS = ["Gönderen Kişi", "Gönderen", "Alıcı Banka", "Alıcı", "Gönderilen IBAN",
+               "İşlem Yeri", "Açıklama", "Tutar", "Belge No", "Belge Tarihi", "ETTN",
+               "Senaryo", "Müşteri No", "TCKN", "İşlem Ref", "Düzenleyen", "Şube Adı"]
+        ex.transaction.type = _find_label(rt, ["Senaryo/Tip", "Senaryo"])
+        ex.transaction.document_no = _find_label(rt, ["Belge No"])
+        ex.transaction.ettn = _find_label(rt, ["ETTN"])
+        ex.transaction.ref_no = _find_label(rt, ["İşlem Ref"])
+        ex.transaction.date = _find_label(rt, ["Belge Tarihi"])
+        ex.transaction.channel = _clean_name(_after_label(rt, "İşlem Yeri", _KS)) \
+            or _find_label(rt, ["Düzenleyen"])
+        ex.transaction.description = _after_label(rt, "Açıklama", ["Tutar", "Kuveyt", "Müşteri İmza"])
+        ex.sender.customer_no = _find_label(rt, ["Müşteri No"])
+        ex.sender.tckn = _find_label(rt, ["TCKN"])
+        ex.sender.name = _clean_name(_after_label(rt, "Gönderen Kişi", _KS)) \
+            or _clean_name(_after_label(rt, "Gönderen", _KS))
+        ex.sender.bank = "Kuveyt Türk Katılım"
+        # Alıcı adı 'Alıcı :' (Alıcı Banka'dan ÖNCE gelir). Alıcı IBAN = 'Gönderilen IBAN'.
+        ex.receiver.name = _clean_name(_after_label(rt, "Alıcı", ["Gönderilen IBAN", "Alıcı Banka",
+                                                                   "IBAN", "İşlem Yeri"]))
+        ex.receiver.bank = _clean_name(_after_label(rt, "Alıcı Banka", ["İşlem Yeri", "Açıklama", "Tutar"]))
+        _rib = IBAN_RE.search(_after_label(rt, "Gönderilen IBAN", ["Alıcı Banka", "İşlem Yeri"]) or "")
+        ex.receiver.iban = banks.normalize_iban(_rib.group(0)) if _rib else ""
+        ex.amount.value = parse_amount(_find_label(rt, ["Tutar"]))
+        ex.amount.currency = "TL"
+
+    # =============================================================
+    #  DENİZBANK — Dekont (Giden FAST / EFT)
+    # =============================================================
+    #  Müşteri Bilgisi (gönderen: Adı Soyadı, VKN/TOKEN, IBAN) + İşlem Açıklaması
+    #  (Alıcı Banka, Alıcı IBAN, Alıcı Adı Soyadı, Tutar, Masraf, İşlem Yapılan Kanal).
+    elif is_deniz:
+        rt = joined
+        ex.doc_kind = _find_label(rt, ["İşlem Türü"]) or "FAST"
+        ex.transaction.type = _find_label(rt, ["İşlem Türü"])
+        ex.transaction.date = _find_label(rt, ["İşlem Tarihi"])
+        ex.transaction.value_date = _find_label(rt, ["Valör Tarihi", "Valör"])
+        ex.transaction.channel = _clean_name(_after_label(rt, "İşlem Yapılan Kanal",
+                                                          ["Açıklama", "Referans", "FAST", "Ödeme"]))
+        ex.transaction.ref_no = _find_label(rt, ["FAST Sorgu Numarası", "FAST Sorgu No"])
+        ex.sender.name = _clean_name(_after_label(rt, "Adı Soyadı", ["VKN", "TOKEN", "IBAN", "İşlem"]))
+        ex.sender.tckn = _find_label(rt, ["VKN / TOKEN", "VKN/TOKEN", "VKN"])
+        ex.sender.bank = "DenizBank"
+        # Alıcı
+        ex.receiver.name = _clean_name(_after_label(rt, "Alıcı Adı Soyadı",
+                                                    ["Tutar", "Masraf", "Ödeme", "İşlem", "Referans"]))
+        ex.receiver.bank = _clean_name(_after_label(rt, "Alıcı Banka",
+                                                    ["Kolay Adres", "Alıcı IBAN", "Alıcı Adı", "Alıcı"]))
+        _rib = IBAN_RE.search(_after_label(rt, "Alıcı IBAN", ["Alıcı Adı", "Tutar", "Masraf"]) or "")
+        ex.receiver.iban = banks.normalize_iban(_rib.group(0)) if _rib else ""
+        # Gönderen IBAN: alıcıdan FARKLI ilk IBAN (Müşteri Bilgisi'ndeki IBAN, kod 00134)
+        for ib in ex.all_ibans:
+            if ib and ib != ex.receiver.iban:
+                ex.sender.iban = ib
+                break
+        # Tutar / masraf. 'Masraf : 8,37' (toplam) ilk geçtiği için _find_label onu döndürür.
+        ex.amount.value = parse_amount(_find_label(rt, ["Tutar"]))
+        ex.amount.fee = parse_amount(_find_label(rt, ["Masraf"]))
         ex.amount.currency = "TL"
 
     # =============================================================
