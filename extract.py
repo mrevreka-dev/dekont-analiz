@@ -506,6 +506,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     # =============================================================
     elif is_garanti:
         ex.doc_kind = _detect_garanti_kind(joined)
+        ex.transaction.type = ex.doc_kind          # İşlem Türü alanı boş kalmasın (HESAPTAN FAST/EFT/HAVALE)
         ex.sender.branch = _find_label(joined, ["ŞUBE ADI", "SUBE ADI"])
         ex.sender.customer_no = _find_label(joined, ["MÜŞTERİ NUMARASI", "MUSTERI NUMARASI"])
         ex.sender.account_no = _find_label(joined, ["HESAP NUMARASI"])
@@ -535,7 +536,10 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         # Ücret: HAVALE'de "MASRAF TOPLAMI" (masraf+BSMV, tüm kesilen ücret) en doğrusu; yoksa
         # FAST "MASRAF : 7,97" / HAVALE "MASRAF TUTARI : 7,98". (MASRAF HESABI bir hesap no'dur.)
         # DİKKAT: "MASRAF TOPLAMI" işlem TOPLAMI DEĞİLDİR (yalnız ücretlerin toplamı) -> total'a yazma.
-        ex.amount.fee = parse_amount(_after_label(joined, "MASRAF TOPLAMI", ["YALNIZ", "SIRA", "TUTAR"])) \
+        # Garanti FAST dekontu ücret toplamını "KOMİSYON TOPLAMI : 8,37 TL" ile basar (MASRAF+BSMV);
+        # tek başına "MASRAF : 7,97" eksik kalır. Önce KOMİSYON/MASRAF TOPLAMI, yoksa tekil MASRAF.
+        ex.amount.fee = parse_amount(_after_label(joined, "KOMİSYON TOPLAMI", ["YALNIZ", "SIRA", "TUTAR"])) \
+            or parse_amount(_after_label(joined, "MASRAF TOPLAMI", ["YALNIZ", "SIRA", "TUTAR"])) \
             or parse_amount(_after_label(joined, "MASRAF TUTARI", ["BSMV", "TUTAR"])) \
             or parse_amount(_after_label(joined, "MASRAF", ["BSMV", "SIRA", "TUTAR", "HESABI"]))
         # NOT: Garanti dekontunda ayrı bir işlem 'TOPLAM'ı yok; TUTAR transfer tutarıdır,
@@ -702,6 +706,21 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
             if _fee is None and re.match(r"\s*0(\s|$|TL)", fee_txt or ""):
                 _fee = 0.0                        # "0 TL" gibi ücretsiz durum
             ex.amount.fee = _fee
+        # İşlem türü (display): Enpara/QNB'de doc_kind çoğu kez 'Dekont'a düşer ('GİDEN FAST EFT'
+        # başlığını _detect_garanti_kind yakalamıyor). Metinden çıkar; İşlem Türü alanı boş kalmasın.
+        _lj = _norm_tr(joined).lower()
+        if "havaleyi alan" in _lj or "hesaptan hesaba havale" in _lj:
+            ex.transaction.type = "Hesaptan Hesaba Havale"
+        elif "fast" in _lj:
+            ex.transaction.type = "Giden FAST"
+        elif "eft" in _lj:
+            ex.transaction.type = "Giden EFT"
+        else:
+            ex.transaction.type = ex.doc_kind or "Dekont"
+        # Gönderen/Alıcı IBAN çakışması (vision bitişik müşteri IBAN'ını yanlış okursa gönderen=alıcı
+        # olabilir): aynıysa farklı bir IBAN dene, yoksa gönderen IBAN'ı boşalt (yanlış 'aynı banka' üretme).
+        if ex.sender.iban and ex.sender.iban == ex.receiver.iban:
+            ex.sender.iban = next((ib for ib in ex.all_ibans if ib and ib != ex.receiver.iban), "")
         # TCKN, açıklama, referans, sıra/fiş no
         ex.sender.tckn = _find_label(rt, ["TC kimlik numarası", "TC Kimlik"])
         ex.transaction.description = _after_label(rt, "AÇIKLAMA", ["SIRA NO", "FİŞ NO"]) \
@@ -721,7 +740,19 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     elif is_ziraat or is_ziraatdinamik:
         # Ziraat ve Ziraat Dinamik AYRI bankalardır; dekont düzeni (BİRİM/HESAP/Gönderen/Alan Banka/
         # Alıcı Hesap/İşlem Tutarı/Fast Sorgu No) neredeyse AYNI olduğundan ÇIKARIM KODU ortaktır.
-        ex.doc_kind = _detect_garanti_kind(joined)  # HESAPTAN FAST / EFT / HAVALE
+        # İşlem türü (başlık): Ziraat başlığı 'Hesaptan Hesaba Havale' / 'Hesaptan FAST' /
+        # 'Hesaptan EFT' olabilir. _detect_garanti_kind BÜYÜK-HARF 'HAVALE' arıyordu; Ziraat
+        # başlığı karışık-harf ('Hesaba Havale') olduğundan yanlışlıkla 'Dekont'a düşüyordu.
+        # ZİRAAT-ÖZEL: aksan/büyük-küçük duyarsız algıla (yalnız bu dalda).
+        _zt = _norm_tr(joined).lower()
+        if "hesaptan fast" in _zt:
+            ex.doc_kind = "Hesaptan FAST"
+        elif "hesaptan eft" in _zt:
+            ex.doc_kind = "Hesaptan EFT"
+        elif "hesaba havale" in _zt:
+            ex.doc_kind = "Hesaptan Hesaba Havale"
+        else:
+            ex.doc_kind = _detect_garanti_kind(joined)  # HESAPTAN FAST / EFT / HAVALE
         rt = joined                                  # Ziraat'ta hizalı layout metni daha güvenilir
         # İki Ziraat formatı desteklenir:
         #  (a) HESAPTAN FAST/EFT: 'Gönderen', 'Alıcı', 'Alan Banka', 'İşlem Tutarı'
@@ -739,6 +770,13 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
             iban_line = IBAN_RE.sub(" ", iban_line or "")
             iban_line = re.sub(r"\bSAYIN\b", " ", iban_line, flags=re.I)
             s_name = _clean_name(iban_line)
+        if not s_name:
+            # ZİRAAT-ÖZEL: 'Hesaptan Hesaba Havale' formatında 'Gönderen' etiketi YOKTUR; hesap
+            # sahibi (=gönderen) sağ sütundaki 'SAYIN' başlığının hemen ALTINDAKİ satırdır.
+            # SAYIN'dan sonraki İLK büyük-harf isim satırını al (adres/rakam satırından önce).
+            _sm = re.search(r"\bSAYIN\b[ \t]*\n?[ \t]*([A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜ.\-' ]{2,})", rt, re.I)
+            if _sm:
+                s_name = _clean_name(_sm.group(1))
         ex.sender.name = s_name
         # --- Alıcı adı: 'Alacaklı Adı Soyadı' (havale) ya da 'Alıcı' (FAST) ---
         ex.receiver.name = _clean_name(_after_label(rt, "Alacaklı Adı Soyadı", _ZS)
@@ -778,14 +816,31 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         # Şube/birim: Ziraat 'ŞUBE KODU/ADI'; Ziraat Dinamik 'BİRİM KODU/ADI'
         ex.sender.branch = _find_label(rt, ["ŞUBE KODU/ADI", "SUBE KODU/ADI", "ŞUBE ADI",
                                             "BİRİM KODU/ADI", "BIRIM KODU/ADI"])
+        # ZİRAAT-ÖZEL: sol sütundaki 'ŞUBE KODU/ADI' değeri ile sağ sütunun başlığı 'SAYIN'
+        # aynı satıra binince değere 'SAYIN' (ve sonrası) sızabilir; şube değerinden temizle.
+        if ex.sender.branch:
+            ex.sender.branch = re.sub(r"\s+SAYIN\b.*$", "", ex.sender.branch, flags=re.I).strip()
         ex.sender.account_no = _find_label(rt, ["HESAP NUMARASI"])
         ex.sender.tckn = _find_label(rt, ["VERGİ KİMLİK NO", "TC KİMLİK", "VERGI KIMLIK NO"])
-        # ZİRAAT-ÖZEL: bu formatta 'VERGİ KİMLİK NO' çoğu bireysel dekontta BOŞTUR ve sağ sütundaki
-        # adresin posta/kapı rakamları (ör. 'No:111/1 54100' -> '1114154100') bu alana sızabilir.
-        # Çıkan değer geçerli bir TCKN(11)/VKN(10) sağlamasını GEÇMİYORSA gerçek kimlik değildir
-        # (adres sızıntısı/OCR gürültüsü) -> temizle. Böylece yanlış 'geçersiz VKN -> sahte' üretilmez.
-        if ex.sender.tckn and "*" not in ex.sender.tckn and banks.id_valid(ex.sender.tckn) is False:
-            ex.sender.tckn = ""
+        # ZİRAAT-ÖZEL: bu formatta 'VERGİ KİMLİK NO' çoğu bireysel dekontta BOŞTUR. Alan boşken
+        # _find_label bir sonraki satırı ('İŞLEM TARİHİ ...') ya da sağ sütundaki adresin posta/kapı
+        # rakamlarını (ör. 'No:111/1 54100' -> '1114154100') bu alana sızdırabilir. Gerçek kimlik
+        # SADECE rakam/boşluk/maske(*) içerir; harf/etiket sözcüğü içeriyorsa sızıntıdır -> temizle.
+        # Ayrıca maskesiz ama geçersiz sağlama (TCKN/VKN) da adres sızıntısıdır -> temizle.
+        # Böylece yanlış 'geçersiz VKN -> sahte' üretilmez.
+        if ex.sender.tckn:
+            _idraw = ex.sender.tckn.strip()
+            if "*" in _idraw:
+                # Maskeli kimlik (ör. '14***16', '39*******34'): DOĞRULANAMAZ ama meşrudur; kısa da
+                # olsa OLDUĞU GİBİ tut. Yalnız rakam/*/boşluk dışı karakter (harf/etiket sızıntısı) varsa temizle.
+                if not re.fullmatch(r"[0-9*\s]+", _idraw):
+                    ex.sender.tckn = ""
+            else:
+                # Maskesiz: gerçek kimlik yalnız 10-11 haneli rakamdır. Harf/etiket sızıntısı
+                # ('İŞLEM TARİHİ ...') ya da adres rakamı ('1114154100') sağlama tutmaz -> temizle.
+                _d = re.sub(r"\s", "", _idraw)
+                if not (_d.isdigit() and len(_d) in (10, 11) and banks.id_valid(_d) is not False):
+                    ex.sender.tckn = ""
         ex.sender.bank = "Ziraat Dinamik Banka" if is_ziraatdinamik else "T.C. Ziraat Bankası"
 
     # =============================================================
