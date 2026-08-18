@@ -795,6 +795,20 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.receiver.name = _clean_name(_after_label(rt, "Alacaklı Adı Soyadı", _ZS)
                                        or _after_label(rt, "Alacaklı Adı Soyadı", _ZS)
                                        or _after_label(rt, "Alıcı", _ZS))
+        # ZİRAAT-ÖZEL: FAST'te 'Alıcı : <ad>' değeri satır sonunda kesilip SOYAD bir alt satıra
+        # kayabilir (ör. 'Alıcı : Yasin' \n 'epaydın'). Alıcı adı TEK sözcükse ve hemen sonraki
+        # satır bir etiket/rakam DEĞİL, isim-devamı bir sözcükse onu ekle (soyad düşmesin).
+        if ex.receiver.name and " " not in ex.receiver.name.strip():
+            _cm = re.search(r"Al[ıi]c[ıi]\s*[:：]\s*" + re.escape(ex.receiver.name)
+                            + r"[ \t]*\n[ \t]*([A-Za-zÇĞİÖŞÜçğıöşü][A-Za-zÇĞİÖŞÜçğıöşü.\-']{1,30})", rt)
+            if _cm:
+                _cont = _cm.group(1).strip()
+                # stop sözcükleri NORMALİZE (aksan/İ-katlamalı) biçimde; _norm_tr ş->s, İ->i, ı->i ...
+                _stop_w = {"islem", "komisyon", "toplam", "alan", "fast", "bsmv", "mesaj", "tutar",
+                           "hesap", "valor", "gonderen", "iban", "sube", "aciklama", "sayin",
+                           "vergi", "banka", "alici", "alacakli", "havale"}
+                if _norm_tr(_cont) not in _stop_w and not _cont[0].isdigit():
+                    ex.receiver.name = _clean_name(ex.receiver.name + " " + _cont)
         ex.receiver.bank = _clean_name(_after_label(rt, "Alan Banka", _ZS))
         ex.receiver.branch = _clean_name(_after_label(rt, "Alacaklı Şube", _ZS))
         # IBAN'lar: alıcı 'Alacaklı IBAN'/'Alıcı Hesap', gönderen üstteki 'IBAN :'
