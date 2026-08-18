@@ -202,6 +202,10 @@ def _apply_vision(ex, v: dict, bank_ex=None) -> None:
     _rb = (be.receiver.bank if _be_ok else "") or _s("receiver_bank")
     if _rb:
         ex.receiver.bank = _rb
+    # Gönderici bankası (banka-özel dökümden): ihraççı bankası. Kopyalanmazsa gönderen IBAN'ı
+    # yoksa alıcı bankası (ör. ING) yanlışlıkla gönderici bankası gibi görünebilir.
+    if _be_ok and be.sender.bank:
+        ex.sender.bank = be.sender.bank
     # Kimlik/müşteri no (banka-özel dökümden)
     if _be_ok:
         if be.sender.tckn and not ex.sender.tckn:
@@ -344,10 +348,17 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     vision_result = None
     if text_source in ("ocr", "none"):
         import vision_ocr
+        import banks as _bkv
         _crit_required = (extraction.receiver.name, extraction.receiver.iban,
                           extraction.amount.value, extraction.transaction.date)
         _missing = [1 for v in _crit_required if not v]
-        if vision_ocr.is_configured() and len(_missing) >= 1:
+        # GEÇERSİZ IBAN → OCR bozulması: bulanık ekran-fotoğraflarında Tesseract IBAN'ı yanlış
+        # okuyup mod-97'yi bozabilir. Gerçek dekontta IBAN her zaman geçerlidir; bu yüzden bir
+        # taraf IBAN'ı OKUNDUĞU HALDE geçersizse (mod-97 tutmuyorsa) OCR güvenilmezdir → Vision'a
+        # yüksel ki doğru IBAN okunsun ve yanlış IBAN_INVALID üretilmesin.
+        _iban_bad = any(_bkv.iban_valid(ib) is False
+                        for ib in (extraction.sender.iban, extraction.receiver.iban) if ib)
+        if vision_ocr.is_configured() and (len(_missing) >= 1 or _iban_bad):
             try:
                 _pil = ocr.render_page_to_image(pdf_bytes, 0, scale=2.0)
                 vision_result = vision_ocr.extract_from_image(_pil)
