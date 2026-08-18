@@ -391,8 +391,16 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     # çünkü bunlar karşı-tarafta (Alan Banka / Alıcı Banka / KATILIMCI) da geçer ve yanlış
     # bankaya yönlendirir.
     _sig_yapikredi = "yapikredi.com" in low
-    _sig_ziraat = ("ziraatbank.com" in low or "ziraat süper şube" in low
-                   or "ziraat mobil" in low or "ziraat süper" in low)
+    # ZİRAAT-ÖZEL SAĞLAMLAŞTIRMA: 'İ'.lower() = 'i̇' (i + U+0307 birleşik nokta) olduğundan ham
+    # low'da 'ZİRAAT MOBİL'/'ZİRAAT SÜPER ŞUBE' düz 'ziraat...' imzalarına EŞLEŞMİYORDU; tespit
+    # yalnız footer 'ziraatbank.com' ile çalışıyordu (footer okunmazsa Ziraat kaçıyordu). _norm_tr
+    # aksanı katlar ama birleşik noktayı bırakır; onu da temizleyip kanal/şube imzalarını güvenilir
+    # yap. Bu imzalar ihraççı-özgüdür ('ziraat mobil'/'ziraat süper' yalnız Ziraat'ın KENDİ dekontunda
+    # geçer; karşı-tarafta yalnız 'ziraat bankası' ADI geçer, kanal adı değil → çakışma yok).
+    _zsig = _norm_tr(low).replace("̇", "")
+    _sig_ziraat = ("ziraatbank.com" in low
+                   or "ziraat mobil" in _zsig
+                   or "ziraat super sube" in _zsig or "ziraat super" in _zsig)
     _sig_isbank = ("isbank.com" in low or ("e-dekont" in low and "doküman numarası" in low))
     _sig_vakif = ("vakifbank.com" in low or ("VAKIFBANK" in up and "İŞLEM BİLGİLERİ" in up))
     _sig_garanti = ("garantibbva" in low or ("HESAPTAN" in up and "GARANTİ" in up))
@@ -433,7 +441,9 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     # IBAN kodu 00160). Klasik Ziraat'ten ÖNCE değerlendirilir. İmza ihracçıya-özgü olmalı:
     # web adresi ya da KENDİ kanalı ('Ziraat Dinamik Mobil'); salt "Ziraat Dinamik" ADI karşı-
     # tarafta (Alan Banka) geçebileceğinden tek başına kullanılmaz.
-    _sig_ziraatdinamik = ("ziraatdinamik.com" in _nlow or "ziraat dinamik mobil" in _nlow)
+    # ZİRAAT DİNAMİK-ÖZEL: aynı 'İ' birleşik-nokta sorunu; 'ziraat dinamik mobil' imzasını da
+    # nokta-temizlenmiş (_zsig) biçimde ara ki İ'li metinde web adresi olmadan da tanınsın.
+    _sig_ziraatdinamik = ("ziraatdinamik.com" in _nlow or "ziraat dinamik mobil" in _zsig)
     issuer = ("yapikredi" if _sig_yapikredi
               else "ziraatdinamik" if _sig_ziraatdinamik else "ziraat" if _sig_ziraat
               else "isbank" if _sig_isbank else "vakif" if _sig_vakif
