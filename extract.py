@@ -780,6 +780,12 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
                                             "BİRİM KODU/ADI", "BIRIM KODU/ADI"])
         ex.sender.account_no = _find_label(rt, ["HESAP NUMARASI"])
         ex.sender.tckn = _find_label(rt, ["VERGİ KİMLİK NO", "TC KİMLİK", "VERGI KIMLIK NO"])
+        # ZİRAAT-ÖZEL: bu formatta 'VERGİ KİMLİK NO' çoğu bireysel dekontta BOŞTUR ve sağ sütundaki
+        # adresin posta/kapı rakamları (ör. 'No:111/1 54100' -> '1114154100') bu alana sızabilir.
+        # Çıkan değer geçerli bir TCKN(11)/VKN(10) sağlamasını GEÇMİYORSA gerçek kimlik değildir
+        # (adres sızıntısı/OCR gürültüsü) -> temizle. Böylece yanlış 'geçersiz VKN -> sahte' üretilmez.
+        if ex.sender.tckn and "*" not in ex.sender.tckn and banks.id_valid(ex.sender.tckn) is False:
+            ex.sender.tckn = ""
         ex.sender.bank = "Ziraat Dinamik Banka" if is_ziraatdinamik else "T.C. Ziraat Bankası"
 
     # =============================================================

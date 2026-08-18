@@ -816,7 +816,9 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                                               ex.transaction.value_date):
                 findings.append(Finding(_dc["code"], _dc["severity"], "content", _dc["weight"],
                                         tr=_dc["tr"], en=_dc["en"], detail=_dc.get("detail", "")))
-            # Kimlik (TCKN/VKN) sağlaması — maskeli değilse kontrol basamağı tutmalı
+            # Kimlik (TCKN/VKN) sağlaması — maskeli değilse kontrol basamağı tutmalı.
+            # (Banka-özel temizlikler extract.py'deki ilgili banka dalında yapılır; ör. Ziraat'ta
+            #  boş 'VERGİ KİMLİK NO' alanına adres rakamlarının sızması orada engellenir.)
             _id = _auth.check_identity(ex.sender.tckn, "gönderen")
             if _id:
                 findings.append(Finding(_id["code"], _id["severity"], "content", _id["weight"],
