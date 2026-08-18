@@ -834,8 +834,21 @@ def check_fee_rail(bkey: str, text: str, fee, learned: dict | None = None) -> di
 
     if _near(fee, prof[rail]):
         return None                       # ücret kendi rail'ine uyuyor -> sorun yok
+    # DÜŞÜK-ÜCRET AYIRT-EDİLEMEZLİK KAPISI: Türk bankalarında küçük tutarlarda FAST/EFT/HAVALE
+    # ücretleri neredeyse AYNIDIR (komisyon+BSMV; ör. YKB FAST 8,37 ↔ HAVALE 8,38 = 1 kuruş fark).
+    # FAST ÜCRETİ TUTARA GÖRE KADEMELİDİR; öğrenilmiş tek bir yüksek değer (ör. 16,76) o rail'in
+    # TÜM tarifesi değildir. Bu yüzden ücret bu eşiğin ALTINDAYSA rail'ler ücretle ayırt edilemez
+    # → yanlış 'ÜCRET–İŞLEM TÜRÜ ÇELİŞKİSİ' üretme (kullanıcı bildirdi: 1 kuruşluk fark).
+    _fee_rail_min = 12.0
+    try:
+        _fee_rail_min = float(os.environ.get("DEKONT_FEE_RAIL_MIN", "12"))
+    except Exception:
+        _fee_rail_min = 12.0
+    if fee < _fee_rail_min:
+        return None
     for other, refs in prof.items():
-        if other != rail and _near(fee, refs):
+        # eşleşilen KARŞI rail değeri de ayırt-edilebilir seviyede olmalı (düşük değerlerde çakışır)
+        if other != rail and _near(fee, refs) and min(refs) >= _fee_rail_min:
             return {
                 "code": "FEE_RAIL_MISMATCH", "severity": "critical", "weight": 40,
                 "tr": f"ÜCRET–İŞLEM TÜRÜ ÇELİŞKİSİ: işlem {_RAIL_LABEL[rail]} olarak görünüyor ama ücret+vergi "
