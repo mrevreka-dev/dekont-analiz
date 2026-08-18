@@ -198,8 +198,14 @@ def ocr_recover(ex: "Extraction", text: str) -> None:
         if found:
             if not ex.receiver.iban:
                 ex.receiver.iban = found[0]
-            if not ex.sender.iban and len(found) > 1:
-                ex.sender.iban = found[1]
+            # Gönderen IBAN'ını KÖRLEMESİNE found[1] atama: alıcı zaten found içindeki bir IBAN'a
+            # (ör. found[1]) eşitse gönderen = alıcı çakışması doğar. Bunun yerine ALICI'dan FARKLI
+            # ilk adayı ata; farklı aday yoksa boş bırak (kopya IBAN 'aynı banka' yanlış-pozitifi üretir).
+            if not ex.sender.iban:
+                for _ib in found:
+                    if _ib != ex.receiver.iban:
+                        ex.sender.iban = _ib
+                        break
     # IBAN'dan banka tamamla
     if not ex.receiver.bank and ex.receiver.iban:
         ex.receiver.bank = banks.bank_label_from_iban(ex.receiver.iban)
