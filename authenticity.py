@@ -37,6 +37,7 @@ _BANK_KEY = {
     "akbank t.a.ş.": "akbank",
     "ing bank a.ş.": "ing",
     "fibabanka a.ş.": "fiba",
+    "getirfinans (fibabanka)": "getir",
     "türkiye halk bankası": "halk",
     "ptt (pttbank)": "ptt",
     "kuveyt türk katılım": "kuveyt",
@@ -64,6 +65,7 @@ EXPECTED_PRODUCERS = {
     "ing":       ["evopdf", "html to pdf"],   # ING -> EvoPdf HTML-to-PDF
     "isbank":    ["openpdf", "jasperreports", "itext"],  # İş Bankası -> JasperReports + OpenPDF
     "fiba":      ["aspose"],                   # Fibabanka -> Aspose.Words
+    "getir":     ["aspose"],                   # GetirFinans (Fibabanka) -> Aspose.Words
     "garanti":   ["adobe experience manager", "skia"],  # Garanti: web=Adobe AEM, mobil=Skia
     "vakif":     ["skia", "chromium", "quartz"],  # VakıfBank: web=Skia/Chromium, mobil=iOS Quartz
     "halk":      ["ironpdf"],                  # Halkbank -> IronPdf (HTML-to-PDF, .NET)
@@ -153,6 +155,7 @@ BANK_FONT_PROFILE = {
     "ing":       {"style": "none"},                             # gömülü font yok
     "isbank":    {"style": "random", "require": {"arialmt"}},   # OpenPDF/JasperReports: ArialMT + Consolas
     "fiba":      {"style": "random"},                           # Aspose: FreeSans
+    "getir":     {"style": "random"},                           # GetirFinans (Fibabanka): Aspose
     "halk":      {"style": "seq"},                              # IronPdf (Chromium): DejaVu, sıralı önek
 }
 
@@ -413,6 +416,7 @@ PRODUCER_LABEL = {
     "ing":       "EvoPdf (HTML-to-PDF)",
     "isbank":    "OpenPDF / JasperReports",
     "fiba":      "Aspose.Words",
+    "getir":     "Aspose.Words",
     "garanti":   "Adobe AEM (web) / Skia (mobil)",
     "vakif":     "Skia/Chromium (web) / iOS Quartz (mobil)",
     "halk":      "IronPdf",
@@ -484,6 +488,7 @@ _ISSUER_IBAN_CODES = {
     "yapikredi": {"00067"},
     "ing":    {"00099"},
     "fiba":   {"00103"},
+    "getir":  {"00103"},                       # GetirFinans = Fibabanka altyapısı (IBAN kodu 00103)
     "qnb":    {"00111"},
     "enpara": {"00157", "00111"},
     "ptt":    {"00807"},

@@ -417,6 +417,11 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     _sig_akbank = ("akbank.com" in low or "akbank direkt" in low)
     _sig_ing = ("ing.com.tr" in low or "ing bank anonim" in low)
     _sig_fiba = ("fibabanka.com" in low or "fibabanka" in _norm_tr(low))
+    # GetirFinans: Fibabanka'nın dijital markası (bankacılık hizmeti Fibabanka A.Ş.). Dekont DÜZENİ
+    # klasik Fibabanka'dan FARKLI (ALAN MÜŞTERİ / ALICI IBAN NO / GÖNDEREN MÜŞTERİ). 'getirfinans'
+    # yalnız bu markanın kendi dekontunda geçer (footer web adresi + 'getirfinans ile gönderildi'
+    # açıklaması) → ihraççı-özgü. fiba'dan ÖNCE değerlendirilir (getir dekontu 'Fibabanka' da içerir).
+    _sig_getir = ("getirfinans.com" in low or "getirfinans" in low)
     # QNB: Enpara ile AYNI altyapı/format (Ibtech+iText); QNB markası ayrı etiketlensin.
     # QNB'ye ÖZGÜ imza: web adresi + QNB kanal ifadeleri. DİKKAT: 'QNB Bank' salt-metin olarak
     # Enpara belgelerinde tarihsel dipnotta geçebilir ("Enpara'nın QNB Bank A.Ş. ...") — bu yüzden
@@ -448,7 +453,8 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
               else "ziraatdinamik" if _sig_ziraatdinamik else "ziraat" if _sig_ziraat
               else "isbank" if _sig_isbank else "vakif" if _sig_vakif
               else "akbank" if _sig_akbank else "ing" if _sig_ing
-              else "fiba" if _sig_fiba else "qnb" if _sig_qnb else "halk" if _sig_halk
+              else "getir" if _sig_getir else "fiba" if _sig_fiba
+              else "qnb" if _sig_qnb else "halk" if _sig_halk
               else "ptt" if _sig_ptt
               else "kuveyt" if _sig_kuveyt else "deniz" if _sig_deniz
               else "garanti" if _sig_garanti else "enpara" if _sig_enpara else "")
@@ -461,6 +467,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     is_akbank = issuer == "akbank"
     is_ing = issuer == "ing"
     is_fiba = issuer == "fiba"
+    is_getir = issuer == "getir"
     is_qnb = issuer == "qnb"
     is_halk = issuer == "halk"
     is_ptt = issuer == "ptt"
@@ -472,7 +479,8 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
                "isbank": "Türkiye İş Bankası", "vakif": "VakıfBank",
                "garanti": "Garanti BBVA", "enpara": "Enpara.com (QNB)",
                "akbank": "Akbank T.A.Ş.", "ing": "ING Bank A.Ş.",
-               "fiba": "Fibabanka A.Ş.", "qnb": "QNB Bank A.Ş.",
+               "fiba": "Fibabanka A.Ş.", "getir": "GetirFinans (Fibabanka)",
+               "qnb": "QNB Bank A.Ş.",
                "halk": "Türkiye Halk Bankası",
                "ptt": "PTT (PttBank)",
                "kuveyt": "Kuveyt Türk Katılım", "deniz": "DenizBank",
@@ -1035,6 +1043,60 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.transaction.document_no = _find_label(rt, ["Dekont No"])
         ex.sender.tckn = _find_label(rt, ["Vergi No"])
         ex.sender.bank = "ING Bank A.Ş."
+
+    # =============================================================
+    #  GETİRFİNANS (Fibabanka markası) E-Dekont
+    # =============================================================
+    elif is_getir:
+        # Düzen: sol sütun kimlik/hesap, sağ sütun ad/valör; alt blokta HAVALE +
+        #   ALAN MÜŞTERİ (=ALICI adı) / ALICI IBAN NO (=alıcı IBAN) / GÖNDEREN MÜŞTERİ (=gönderen adı).
+        # KRİTİK — IBAN AYRIMI: alıcı IBAN 'ALICI IBAN NO' etiketinden; gönderen IBAN '(-)' borç
+        # satırındaki IBAN'dan (hesap no ile eşleşir). all_ibans[0]'a düşme — o gönderenindir, aksi
+        # halde alıcı IBAN'ı gönderenin IBAN'ıyla karışır (kullanıcı bildirdi).
+        ex.doc_kind = "E-Dekont"
+        rt = rjoined or joined
+        _gd = re.search(r"\b(\d{2}/\d{2}/\d{4})\b", rt)
+        ex.transaction.date = _gd.group(1) if _gd else ""
+        # Taraf adları
+        ex.receiver.name = _clean_name(_after_label(rt, "ALAN MÜŞTERİ",
+                                       ["ALICI IBAN", "ALICI", "GÖNDEREN", "İşlemi", "Ürün", "IBAN"]))
+        _gsn = _after_label(rt, "GÖNDEREN MÜŞTERİ", ["İşlemi", "Ürün", "AÇIKLAMA", "ALAN", "IBAN"])
+        if not _gsn:
+            _gsn = _after_label(rt, "Full Name", ["Dekont", "Vergi", "Receipt", "Tax"])
+        ex.sender.name = _clean_name(_gsn)
+        # Alıcı IBAN: 'ALICI IBAN NO : TR..'
+        _grib = re.search(r"ALICI\s*IBAN\s*NO\s*[:：]?\s*(TR[0-9 ]{20,34})", rt, re.I)
+        ex.receiver.iban = banks.normalize_iban(_grib.group(1)) if _grib else ""
+        # Gönderen IBAN: '(-)' borç satırındaki IBAN; yoksa alıcıdan FARKLI ilk IBAN
+        _gsib = re.search(r"\(-\)\s*(TR[0-9 ]{20,34})", rt) or re.search(r"(TR[0-9 ]{20,34})", rt)
+        _gscand = banks.normalize_iban(_gsib.group(1)) if _gsib else ""
+        if _gscand and _gscand != ex.receiver.iban:
+            ex.sender.iban = _gscand
+        else:
+            ex.sender.iban = next((ib for ib in ex.all_ibans if ib and ib != ex.receiver.iban), "")
+        # Hesap no / şube
+        ex.sender.account_no = _find_label(rt, ["Account Number", "Hesap No"])
+        ex.sender.branch = _clean_name(_after_label(rt, "Branch", ["Vergi", "Tax", "Hesap", "Account", "Valör"])
+                                       or _after_label(rt, "Şube", ["Vergi", "Hesap", "Valör"]))
+        ex.transaction.channel = ex.sender.branch
+        # Tutar: '2.000,00 TRY'
+        _gam = re.search(r"([0-9][0-9.]*,[0-9]{2})\s*(TRY|TL|USD|EUR|GBP)", rt) \
+            or re.search(r"\(-\)\s*(TRY|TL|USD|EUR|GBP)\s*([0-9][0-9.,]*)", rt, re.I)
+        if _gam:
+            g1, g2 = _gam.group(1), _gam.group(2)
+            if g2 and g2.upper() in ("TRY", "TL", "USD", "EUR", "GBP"):
+                ex.amount.value = parse_amount(g1); ex.amount.currency = g2.upper()
+            else:
+                ex.amount.currency = g1.upper(); ex.amount.value = parse_amount(g2)
+        # İşlem türü / dekont no / ürün referansı
+        if re.search(r"\bHAVALE\b", rt, re.I):
+            ex.transaction.type = "HAVALE"
+        _gdn = re.search(r"\b(\d{4,6}-\d{6,})\b", rt)
+        ex.transaction.document_no = _gdn.group(1) if _gdn else ""
+        ex.transaction.receipt_no = ex.transaction.document_no
+        _grf = re.search(r"Ür[üu]n\s*Referans[ıiİI]?\s*[:：]?\s*(\d{6,})", rt, re.I)
+        ex.transaction.ref_no = _grf.group(1) if _grf else ""
+        ex.sender.bank = ex.bank or "GetirFinans (Fibabanka)"
 
     # =============================================================
     #  FİBABANKA E-Dekont (iki-sütun etiket/değer; alıcı açıklamaya gömülü)
