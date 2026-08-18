@@ -111,7 +111,9 @@ def extract_from_image(pil_img, timeout: float = 45.0) -> dict | None:
 
     body = {
         "model": model,
-        "max_tokens": 1024,
+        # full_text (tam metin dökümü) + yapısal alanlar + tahrifat analizi tek yanıtta döner;
+        # 1024 yetersizdi (yoğun dekontta yanıt kesilip JSON bozuluyor, vision None düşüyordu).
+        "max_tokens": 4096,
         "messages": [{
             "role": "user",
             "content": [
