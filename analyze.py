@@ -710,6 +710,14 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             # Deterministik IBAN/banka-tutarlılığı (mod-97, ihracçı-taraf, alıcı-bankası)
             for _d in _auth.deterministic_checks(_bkey, ex.sender.iban, ex.receiver.iban,
                                                  ex.receiver.bank, ex.all_ibans):
+                # SAF TESSERACT OCR (vision değil/başarısız): IBAN'a-dayalı sert kontroller
+                # GÜVENİLMEZDİR — OCR rakamları bozar (bulanık ekran-fotoğrafı). Gerçek dekontta
+                # IBAN her zaman geçerlidir; OCR'da geçersiz çıkması bir OCR HATASIDIR, tahrifat
+                # kanıtı DEĞİL. Bu yüzden foto+ocr'da IBAN_INVALID/ISSUER/RECEIVER_BANK bastırılır
+                # (dijital PDF ve vision okumalarında normal çalışır).
+                if extraction.text_source == "ocr" and _d["code"] in (
+                        "IBAN_INVALID", "ISSUER_IBAN_MISMATCH", "RECEIVER_BANK_MISMATCH"):
+                    continue
                 findings.append(Finding(_d["code"], _d["severity"], "content", _d["weight"],
                                         tr=_d["tr"], en=_d["en"], detail=_d.get("detail", "")))
             # Alan-bazlı font tutarlılığı: TUTAR yabancı/ana-dışı bir fontta mı (yapıştırılmış)?
