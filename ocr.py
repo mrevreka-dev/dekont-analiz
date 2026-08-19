@@ -136,7 +136,10 @@ def _variants(gray, fast: bool = False):
     ve daha düşük çözünürlük → tesseract süresi ~yarıya iner; doğru okumayı zaten Vision yapar."""
     import cv2, numpy as np
     h, w = gray.shape
-    _target = 1200.0 if fast else 1600.0        # fast'ta daha küçük → daha hızlı
+    # KALİTE: fast modda da TAM çözünürlük (1600px). Çözünürlük düşürmek yoğun rakamları
+    # (özellikle IBAN'ları) bozuyordu → 56'yı 58 okumak gibi. Hız kazancı yalnızca TEK
+    # varyant + tek PSM'den gelir; çözünürlükten DEĞİL.
+    _target = 1600.0
     scale = max(1.0, _target / max(h, w))
     if scale > 1.01:
         gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
@@ -145,14 +148,11 @@ def _variants(gray, fast: bool = False):
     g = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(g)
     blur = cv2.GaussianBlur(g, (0, 0), 3)
     sharp = cv2.addWeighted(g, 2.2, blur, -1.2, 0)
-    if fast:
-        # Tek varyant: Otsu ikili (tesseract için genelde en iyi) — tek geçiş
-        _, otsu = cv2.threshold(sharp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        return [otsu]
-    out = [sharp]
     _, otsu = cv2.threshold(sharp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    out.append(otsu)
-    return out
+    if fast:
+        # HIZ: tek varyant (Otsu — yoğun rakamlarda genelde en iyi), ama TAM çözünürlük korunur.
+        return [otsu]
+    return [sharp, otsu]
 
 
 def ocr_image_candidates(img: Image.Image, lang: str | None = None, fast: bool = False) -> list[str]:
@@ -202,7 +202,9 @@ def ocr_pdf_candidates(pdf_bytes: bytes, page_index: int = 0, fast: bool = False
     fast=True: düşük render ölçeği + tek OCR varyantı (fotoğraf + Vision açıkken hız için)."""
     cands = []
     try:
-        img = render_page_to_image(pdf_bytes, page_index, scale=(1.5 if fast else 2.0))
+        # KALİTE: render ölçeği her zaman 2.0 (1.5 küçük rakamları bozuyordu). Hız yalnızca
+        # tek OCR varyantından gelir.
+        img = render_page_to_image(pdf_bytes, page_index, scale=2.0)
         cands += ocr_image_candidates(img, fast=fast)
     except Exception:
         pass

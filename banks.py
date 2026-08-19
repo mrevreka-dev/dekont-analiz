@@ -131,6 +131,37 @@ def iban_valid(iban: str) -> bool | None:
         return None
 
 
+# OCR'da sıkça karışan rakam çiftleri (görsel benzerlik). Tek yönlü değil — çift yönlü.
+_OCR_CONFUSABLE = {
+    "0": ["8", "6"], "8": ["0", "6", "3"], "6": ["8", "5", "0"], "5": ["6", "8"],
+    "1": ["7"], "7": ["1"], "3": ["8", "9"], "9": ["4"], "2": ["7"], "4": ["9"],
+}
+
+
+def repair_iban_ocr(iban: str) -> str:
+    """OCR'ın YANLIŞ OKUDUĞU bir IBAN'ı (mod-97 tutmuyorsa) görsel-karışan rakamları tek tek
+    deneyerek onarır. YALNIZCA sonuç BENZERSİZSE (tam olarak 1 geçerli aday) uygular — birden
+    çok ya da hiç geçerli aday varsa TAHMİN YÜRÜTMEZ, orijinali döndürür. Böylece 'TR..218058'
+    gibi tek-basamak hatası güvenle 'TR..218056'ya düzelir; sahte IBAN üretme riski olmaz.
+    Döner: onarılmış IBAN (benzersizse) ya da girdinin normalize hâli."""
+    s = normalize_iban(iban)
+    if not re.fullmatch(r"TR\d{24}", s) or iban_valid(s) is True:
+        return s                                   # kalıp yok ya da zaten geçerli
+    body = list(s)
+    found = set()
+    # Onarılabilir pozisyonlar: kontrol basamakları (2-3) + HESAP GÖVDESİ (9+).
+    # BANKA KODU (4-8) KORUNUR — onu değiştirmek alıcının BANKASINI değiştirir; asla tahmin etme.
+    _positions = [2, 3] + list(range(9, len(body)))
+    for i in _positions:
+        d = body[i]
+        for alt in _OCR_CONFUSABLE.get(d, ()):
+            cand = body[:]; cand[i] = alt
+            cs = "".join(cand)
+            if iban_valid(cs) is True:
+                found.add(cs)
+    return next(iter(found)) if len(found) == 1 else s
+
+
 def bank_from_iban(iban: str) -> str:
     """IBAN banka kodundan banka adını döndürür; bilinmiyorsa boş."""
     code = iban_bank_code(iban)

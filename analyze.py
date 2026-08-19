@@ -271,6 +271,28 @@ def _apply_vision(ex, v: dict, bank_ex=None) -> None:
             ex.all_ibans.append(ib)
 
 
+def _repair_party_ibans(ex, input_kind: str) -> list:
+    """Fotoğraf/OCR/vision okumasında tek bir rakam yanlış okunmuş olabilir
+    (ör. '...218058' ↔ gerçek '...218056'). mod-97 tutmayan taraf IBAN'ını, görsel-karışan
+    rakamları deneyerek BENZERSİZ geçerli adaya onar. Benzersiz değilse dokunma (tahmin yok).
+    Temiz dijital PDF'de ÇALIŞMAZ — orada geçersiz IBAN gerçek bir tahrifat işaretidir.
+    Döner: yapılan onarımların listesi."""
+    fixes = []
+    if not (input_kind == "image" or ex.text_source in ("ocr", "vision")):
+        return fixes
+    import banks as _bkr
+    for _who, _obj in (("gönderici", ex.sender), ("alıcı", ex.receiver)):
+        _cur = _obj.iban
+        if _cur and _bkr.iban_valid(_cur) is False:
+            _fx = _bkr.repair_iban_ocr(_cur)
+            if _fx and _fx != _cur and _bkr.iban_valid(_fx) is True:
+                _obj.iban = _fx
+                fixes.append({"taraf": _who, "onceki": _cur, "sonraki": _fx})
+                if _fx not in ex.all_ibans:
+                    ex.all_ibans.append(_fx)
+    return fixes
+
+
 def prepare_input(data: bytes, filename: str = "") -> tuple[bytes, str]:
     """
     Yüklenen veriyi analiz için hazırlar. PDF ise dokunmaz. Görsel (JPG/PNG/...) ise
@@ -364,6 +386,11 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             ocr_recover(extraction, c)
     extraction.text_source = text_source
 
+    # IBAN OCR-ONARIMI (1. geçiş — Vision'DAN ÖNCE): tek-rakam OCR hatasını (ör. 56↔58) BENZERSİZ
+    # geçerli adaya onar. Böylece geçerli hâle gelen IBAN gereksiz yere pahalı Vision çağrısını
+    # TETİKLEMEZ → hem doğru hem hızlı. Onaramazsa aşağıdaki _iban_bad Vision'a yükseltir.
+    _iban_fixes = _repair_party_ibans(extraction, input_kind)
+
     # 5.5) VISION AI: ÖNCE ücretsiz tesseract çalışır; yalnızca ZORUNLU 4 kritik alandan
     # (alıcı adı, alıcı IBAN, tutar, işlem tarihi) EN AZ BİRİ okunamazsa ücretli Vision'a git.
     # Dördü de okunduysa (kaliteli foto) ücretli servise hiç gidilmez → maliyet tasarrufu.
@@ -425,6 +452,9 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 apply_learned_field_hints(extraction, _hints, text_layout)
         except Exception:
             pass
+
+    # IBAN OCR-ONARIMI (2. geçiş): Vision de tek rakam yanlış okuduysa onar.
+    _iban_fixes += _repair_party_ibans(extraction, input_kind)
 
     # Sıra/işlem numarası (banka bazlı) — sıra analizi için
     from extract import derive_sequence_number
@@ -1179,6 +1209,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             "js_present": struct.js_present,
         },
         "extracted": extraction.as_dict(),
+        "iban_ocr_onarim": _iban_fixes,   # EK: OCR tek-rakam IBAN onarımları (şeffaflık)
         "image_forensics": _img_forensics_dict(img_forensics),
         "cross_db": {
             "checked": bool(use_store and is_receipt),
