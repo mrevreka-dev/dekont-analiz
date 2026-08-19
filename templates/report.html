@@ -111,14 +111,14 @@
     {% endif %}
 
     {% if ai.finding_reviews %}
-    <div style="margin:8px 0">
-      <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">Bulgu değerlendirmesi</div>
+    <details style="margin:6px 0">
+      <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">Bulgu değerlendirmesi ({{ ai.finding_reviews|length }})</summary>
       <ul style="margin:6px 0 0;padding-left:18px;line-height:1.6">
         {% for fr in ai.finding_reviews %}
         <li><code>{{ fr.code }}</code> — {% if fr.gercek_mi %}<span style="color:var(--critical);font-weight:700">gerçek bulgu</span>{% else %}<span style="color:var(--good);font-weight:700">kural/okuma hatası</span>{% endif %}{% if fr.aciklama %}: {{ fr.aciklama }}{% endif %}</li>
         {% endfor %}
       </ul>
-    </div>
+    </details>
     {% endif %}
 
     {% if ai.verify_suggestion %}
