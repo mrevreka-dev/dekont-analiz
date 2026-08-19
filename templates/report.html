@@ -86,6 +86,65 @@
     </div>
   </div>
 
+  <!-- YAPAY ZEKA DEĞERLENDİRİCİ (opsiyonel; kural bulgusu/boş alan olduğunda görüntüyü yeniden inceler) -->
+  {% set ai = r.yapay_zeka_degerlendirmesi %}
+  {% if ai %}
+  {% set aicolor = {'gerçek':'var(--good)','gercek':'var(--good)','şüpheli':'var(--warning)','supheli':'var(--warning)','sahte':'var(--critical)','belirsiz':'var(--text-muted)'} %}
+  {% set aic = aicolor.get(ai.verdict, 'var(--accent)') %}
+  <div class="card" style="border-left:5px solid {{ aic }}">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="{{ aic }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a5 5 0 0 0-5 5v1a5 5 0 0 0 0 8v1a5 5 0 0 0 10 0v-1a5 5 0 0 0 0-8V7a5 5 0 0 0-5-5z"/><path d="M12 8v8"/></svg>
+      <strong style="font-size:16px">Yapay Zeka Değerlendirmesi</strong>
+      <span class="badge-soft" style="background:{{ aic }};color:#fff">{{ ai.verdict|upper }}</span>
+      <span class="badge-soft">güven %{{ ai.confidence }}</span>
+      <span class="badge-soft" style="opacity:.7">kural motorundan AYRI · görüntü yeniden incelendi</span>
+    </div>
+    {% if ai.reasoning_tr %}<p class="verdict" style="margin:6px 0 10px;line-height:1.6">{{ ai.reasoning_tr }}</p>{% endif %}
+
+    {% if ai.corrected_fields %}
+    <div style="margin:8px 0">
+      <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">Yeniden okunan / düzeltilen alanlar</div>
+      <ul style="margin:6px 0 0;padding-left:18px;line-height:1.6">
+        {% for k, v in ai.corrected_fields.items() %}<li><code>{{ k }}</code> → <strong>{{ v }}</strong></li>{% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    {% if ai.finding_reviews %}
+    <div style="margin:8px 0">
+      <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">Bulgu değerlendirmesi</div>
+      <ul style="margin:6px 0 0;padding-left:18px;line-height:1.6">
+        {% for fr in ai.finding_reviews %}
+        <li><code>{{ fr.code }}</code> — {% if fr.gercek_mi %}<span style="color:var(--critical);font-weight:700">gerçek bulgu</span>{% else %}<span style="color:var(--good);font-weight:700">kural/okuma hatası</span>{% endif %}{% if fr.aciklama %}: {{ fr.aciklama }}{% endif %}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    {% if ai.verify_suggestion %}
+    <div style="margin:8px 0;padding:8px 12px;background:rgba(0,0,0,.03);border-radius:8px;font-size:14px">
+      <strong>Teyit önerisi:</strong> {{ ai.verify_suggestion }}
+    </div>
+    {% endif %}
+
+    {% if ai.ogrenilen_ipuclari %}
+    <div style="margin:8px 0;font-size:13px;color:var(--good)">
+      ✓ Sistem öğrendi: {% for h in ai.ogrenilen_ipuclari %}<code>{{ h.field }}</code>←“{{ h.label }}”{% if not loop.last %}, {% endif %}{% endfor %} (sonraki dekontlarda otomatik uygulanacak)
+    </div>
+    {% endif %}
+
+    {% if ai.improvement_notes %}
+    <details style="margin-top:6px">
+      <summary style="cursor:pointer;font-size:13px;color:var(--text-muted)">Banka-bazlı iyileştirme teşhisi ({{ ai.improvement_notes|length }})</summary>
+      <ul style="margin:6px 0 0;padding-left:18px;line-height:1.6;font-size:13px">
+        {% for n in ai.improvement_notes %}<li><strong>{{ n.bank }}</strong> · <code>{{ n.field }}</code>: {{ n.problem }} → {{ n.suggestion }}</li>{% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+    <p style="font-size:11px;color:var(--text-muted);margin-top:8px">Yapay zeka değerlendirmesi olasılıksaldır; matematiksel kesin bulguları (aynı-banka çelişkisi, revizyon-tahrifatı, kimlik çelişkisi) ezmez, onların üstüne akıl yürütür.</p>
+  </div>
+  {% endif %}
+
   <!-- KESİN CEVAPLAR (true/false/nötr) -->
   {% set vd = r.verdicts %}
   {% set vstate = {'true':'var(--good)','false':'var(--critical)','neutral':'var(--text-muted)'} %}
