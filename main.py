@@ -261,10 +261,11 @@ def _check_api_key(x_api_key: str | None):
 
 @app.get("/api/v1/health")
 async def health():
-    import ocr, vision_ocr, store
+    import ocr, vision_ocr, store, ai_adjudicator
     return {"status": "ok", "engine_version": ENGINE_VERSION,
             "ocr_available": ocr.ocr_available(), "ocr_lang": ocr.best_lang(),
             "vision_configured": vision_ocr.is_configured(),
+            "ai_adjudicator_enabled": ai_adjudicator.is_enabled(),
             "store_enabled": store.enabled(),
             "store_count": store.stats().get("count", 0),
             "api_key_required": bool(API_KEYS)}
