@@ -344,7 +344,7 @@ ul{{color:#8b949e;font-size:14px}} a{{color:#58a6ff}}
 </style></head><body><div class="wrap">
 <h1>Geliştirme Günlüğü &amp; Öz-Denetim</h1>
 <div class="sub">Bulunan Hata → Yapılan Değişiklik · her iyileştirme bir değişmez testiyle korunuyor</div>
-<div class="banner"><span>{banner_tx}</span><span class="cnt">{r['passed']}/{r['total']} test</span></div>
+<div class="banner"><span>{banner_tx}</span><span class="cnt">{r['passed']}/{r['total']} test · en son kontrol: {_h.escape(str(r.get('generated_at','')))} (TR)</span></div>
 <div class="sec">Canlı Öz-Denetim (invariant testleri)</div>
 {checks_html}
 <div class="sec">Değişiklik Kayıt Defteri</div>

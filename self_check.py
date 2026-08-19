@@ -15,28 +15,40 @@ bellek-içi boş PDF + kontrollü OCR metni kullanılır.
 """
 from __future__ import annotations
 import io
+import datetime
 import traceback
+
+
+def _now_tr() -> str:
+    """Şu anki Türkiye saati (Europe/Istanbul) — 'YYYY-MM-DD HH:MM' biçiminde."""
+    utc = datetime.datetime.now(datetime.timezone.utc)
+    try:
+        import zoneinfo
+        tr = utc.astimezone(zoneinfo.ZoneInfo("Europe/Istanbul"))
+    except Exception:
+        tr = utc + datetime.timedelta(hours=3)      # yedek: sabit UTC+3
+    return tr.strftime("%Y-%m-%d %H:%M")
 
 # ------------------------------------------------------------------
 # 1) GELİŞTİRME GÜNLÜĞÜ — "Bulunan Hata → Yapılan Değişiklik"
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
-    {"id": "A", "date": "2026-08-19", "area": "Vision / tahrifat denetimi", "test": 1,
+    {"id": "A", "date": "2026-08-20 02:23", "area": "Vision / tahrifat denetimi", "test": 1,
      "bug": "Daha önce yakalanan tahrifatlı dekont tekrar tarandığında 'doğru' göründü. IBAN "
             "onarımı Vision kararından ÖNCE çalışıyordu; geçersiz (en şüpheli) IBAN 'onarılınca' "
             "Vision hiç çağrılmıyor, VISION_TEXT_TAMPER ve Vision metnini kullanan tüm denetimler kayboluyordu.",
      "fix": "Vision kararı DAİMA ham OCR okumasına dayanır. IBAN onarımı yalnızca Vision hiç "
             "çalışamadığında devreye giren şeffaf yedektir; incelemeyi asla azaltmaz."},
-    {"id": "B", "date": "2026-08-19", "area": "OCR çözünürlük", "test": 2,
+    {"id": "B", "date": "2026-08-20 02:05", "area": "OCR çözünürlük", "test": 2,
      "bug": "IBAN yanlış okundu (…218056 → …218058), süre 15-20 sn. 'Hızlı OCR' çözünürlüğü "
             "1600→1200px, render 2.0→1.5 düşürüyordu; yoğun rakamlar bozuluyordu.",
      "fix": "Fast modda da tam 1600px + render 2.0. Hız yalnızca tek OCR varyantından gelir."},
-    {"id": "C", "date": "2026-08-19", "area": "IBAN onarımı", "test": 3,
+    {"id": "C", "date": "2026-08-20 02:05", "area": "IBAN onarımı", "test": 3,
      "bug": "Tek-rakam OCR hatası IBAN'ı geçersiz kılıp yanlış sonuç/gereksiz Vision çağrısı üretiyordu.",
      "fix": "Görsel-karışan rakamları deneyip BENZERSİZ geçerli adaya onarır. Banka kodunu asla "
             "değiştirmez; dijital PDF'de çalışmaz; iban_ocr_onarim ile şeffaf."},
-    {"id": "D", "date": "2026-08-19", "area": "Görünürlük", "test": None,
+    {"id": "D", "date": "2026-08-20 01:58", "area": "Görünürlük", "test": None,
      "bug": "YZ denetleyicinin açık/kapalı olduğu dışarıdan görülemiyordu.",
      "fix": "/api/v1/health artık ai_adjudicator_enabled döndürür."},
     {"id": "E", "date": "önceki", "area": "Fotoğraf AI-imza FP", "test": 7,
@@ -199,6 +211,8 @@ def run() -> dict:
         "all_ok": passed == len(_CHECKS),
         "passed": passed,
         "total": len(_CHECKS),
+        "generated_at": _now_tr(),          # en son denetim tarih+saati (Türkiye)
+        "generated_tz": "Europe/Istanbul",
         "checks": checks,
         "improvements": IMPROVEMENTS,
         "invariant_rules": INVARIANT_RULES,
