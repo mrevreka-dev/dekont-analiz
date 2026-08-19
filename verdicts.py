@@ -223,11 +223,22 @@ def compute_verdicts(*, doc_type: str, input_kind: str, codes: set, cons: dict,
         add("data_consistency", "Tutar/veri hesapları tutarlı mı?", "Do the amount/data figures reconcile?",
             NEUTRAL, "Karşılaştırılacak tutar bilgisi (toplam/masraf) okunamadı.",
             "No amount figures (total/fee) were available to reconcile.")
-    elif cons.get("fail_count", 0) > 0:
+    elif cons.get("fail_count", 0) > 0 and mode == "digital":
         add("data_consistency", "Tutar/veri hesapları tutarlı mı?", "Do the amount/data figures reconcile?",
             FALSE, "Tutar tutarlılığı SAĞLANMIYOR (Toplam ≠ Tutar + Masraf vb.) — alanlardan biri "
             "elle değiştirilmiş olabilir.",
             "Amounts DO NOT reconcile (Total ≠ Amount + Fee, etc.) — a field may have been altered.")
+    elif cons.get("fail_count", 0) > 0:
+        # FOTOĞRAF/TARAMA: tutarlar OCR/vision ile pikselden okunur; tek bir rakamın yanlış
+        # okunması (ör. 1.234,56 → 1.284,56) 'Toplam ≠ Tutar + Masraf' verir. Bu bir OKUMA
+        # HATASI da olabilir, tahrifat da — fotoğrafta kesin AYIRT EDİLEMEZ. Bu yüzden KESİN
+        # 'GÜVENİLİR DEĞİL' kararı VERMEZ (nötr kalır, puanı 40'a çakmaz); yalnızca uyarı verilir.
+        add("data_consistency", "Tutar/veri hesapları tutarlı mı?", "Do the amount/data figures reconcile?",
+            NEUTRAL, "Tutar hesapları okunan alanlarla tam uyuşmadı (Toplam ≠ Tutar + Masraf). Ancak "
+            "tutarlar fotoğraftan/taramadan OCR ile okunduğundan bu bir OKUMA HATASI da olabilir; "
+            "tek başına tahrifat kanıtı sayılmaz. Kesinlik için orijinal dijital PDF isteyin.",
+            "Amount figures did not fully reconcile (Total ≠ Amount + Fee), but they were OCR-read from a "
+            "photo/scan so this may be a misread, not tampering — not conclusive. Request the original digital PDF.")
     else:
         add("data_consistency", "Tutar/veri hesapları tutarlı mı?", "Do the amount/data figures reconcile?",
             TRUE, "Tutar hesapları tutarlı (Toplam = Tutar + Masraf).",

@@ -22,9 +22,14 @@ import numpy as np
 from PIL import Image, ImageChops, ExifTags
 
 # AI görsel üretim / düzenleme araç imzaları
+# NOT: Bu imzalar YALNIZCA gerçek metadata bölgelerinde (EXIF Software/Description,
+# XMP paketi) ve KELİME SINIRIYLA aranır — tüm ham JPEG baytlarında değil. Aksi halde
+# kısa token'lar (ör. eski "gan") sıkıştırılmış görüntü verisindeki rastgele baytlara
+# denk gelip YANLIŞ 'AI üretimi' bulgusu üretiyordu (gerçek foto ai=70/100 çıkıyordu).
+# Kısa/çok-yaygın "gan" kaldırıldı; yerine belirgin GAN model adları kondu.
 AI_SIGNATURES = [
     "stable diffusion", "stablediffusion", "dall-e", "dalle", "midjourney",
-    "firefly", "adobe firefly", "generative", "gan", "diffusion",
+    "firefly", "adobe firefly", "generative", "stylegan", "biggan", "diffusion",
     "openai", "leonardo.ai", "playground", "flux", "imagen", "ideogram",
     "gpt-4o", "gemini", "nightcafe", "artbreeder", "runway",
 ]
@@ -33,6 +38,57 @@ EDIT_SIGNATURES = [
     "paint.net", "canva", "figma", "illustrator", "snapseed", "picsart",
 ]
 C2PA_MARKERS = ["c2pa", "contentcredentials", "content credentials", "jumbf", "cai\x00"]
+
+import re as _re_sig
+
+# XMP paketi / metadata metin bölgelerini ham bayt-metninden ayıklar. Gerçek AI/düzenleyici
+# imzaları burada (XMP) ve EXIF Software alanında bulunur; sıkıştırılmış görüntü verisinde DEĞİL.
+_XMP_PATTERNS = [
+    _re_sig.compile(r"<\?xpacket begin.*?<\?xpacket end[^>]*\?>", _re_sig.S),
+    _re_sig.compile(r"<x:xmpmeta.*?</x:xmpmeta>", _re_sig.S),
+    _re_sig.compile(r"<rdf:RDF.*?</rdf:RDF>", _re_sig.S),
+]
+
+
+def _extract_meta_text(text_blob: str, r) -> str:
+    """Yalnızca metadata metin bölgelerini döndürür (küçük harf): EXIF Software +
+    XMP paketleri. Böylece imza araması ham JPEG tarama verisine BULAŞMAZ."""
+    parts = []
+    sw = (getattr(r, "exif_software", "") or "")
+    if sw:
+        parts.append(sw)
+    if text_blob:
+        for pat in _XMP_PATTERNS:
+            for m in pat.finditer(text_blob):
+                parts.append(m.group(0))
+    return " ".join(parts).lower()
+
+
+def _sig_in(sig: str, text: str) -> bool:
+    """İmzayı KELİME SINIRIYLA arar: token, alfasayısal bir dizinin parçası olamaz.
+    'gan' gibi kısa token'ların 'organ/doğan' içinde eşleşmesini önler."""
+    if not text or not sig:
+        return False
+    return _re_sig.search(r"(?<![a-z0-9])" + _re_sig.escape(sig) + r"(?![a-z0-9])", text) is not None
+
+
+def _detect_c2pa(blob: bytes, text_blob: str, meta_text: str) -> bool:
+    """C2PA / İçerik Kimlik Bilgisi'ni GÜVENİLİR biçimde tespit eder (kısa-token
+    yanlış-pozitifi olmadan). Üç yol: (1) uzun/belirgin token'lar, (2) gerçek
+    JUMBF/APP11 kutu yapısı, (3) XMP metadata bölgesinde c2pa/jumbf geçmesi."""
+    tb = text_blob or ""
+    # (1) Uzun, çakışma olasılığı ~sıfır token'lar — ham baytlarda dahi güvenli
+    for m in ("contentcredentials", "content credentials", "c2pa.org",
+              "urn:c2pa", "com.adobe.c2pa", "cai/c2pa"):
+        if m in tb:
+            return True
+    # (2) Gerçek C2PA kabı: JPEG'de APP11 (0xFFEB) segmenti + JUMBF ('jumb'/'jumd') kutusu
+    if b"\xff\xeb" in (blob or b"") and (b"jumb" in blob or b"jumd" in blob):
+        return True
+    # (3) Yalnızca XMP metadata bölgesinde (ham tarama verisinde değil)
+    if "c2pa" in (meta_text or "") or "jumbf" in (meta_text or ""):
+        return True
+    return False
 
 
 @dataclass
@@ -214,24 +270,29 @@ def analyze_image(img: Image.Image, raw: bytes | None = None) -> ImageForensics:
     except Exception:
         pass
 
-    # Ham baytlarda imza taraması (EXIF/XMP/JUMBF/C2PA)
+    # İmza taraması (EXIF/XMP/JUMBF/C2PA).
+    # ÖNEMLİ: AI/düzenleyici imzaları YALNIZCA gerçek METADATA metin bölgelerinde aranır
+    # (EXIF Software/Description/UserComment + XMP paketleri), tüm ham baytlarda DEĞİL.
+    # Sıkıştırılmış JPEG tarama verisinde kısa token'lar (ör. "gan") rastgele baytlara
+    # denk gelip yanlış-pozitif üretiyordu. Ayrıca eşleşme KELİME SINIRIYLA yapılır.
     blob = (raw or b"")
     text_blob = ""
     try:
         text_blob = blob.decode("latin-1", "ignore").lower()
     except Exception:
         text_blob = ""
-    meta_all = (r.exif_software + " " + text_blob).lower()
+    # Yalnızca metadata bölgelerini (XMP paketleri) + yapısal EXIF alanlarını topla
+    meta_text = _extract_meta_text(text_blob, r)
     for sig in AI_SIGNATURES:
-        if sig in meta_all:
+        if _sig_in(sig, meta_text):
             r.ai_signature_hits.append(sig)
     for sig in EDIT_SIGNATURES:
-        if sig in meta_all:
+        if _sig_in(sig, meta_text):
             r.edit_signature_hits.append(sig)
-    for m in C2PA_MARKERS:
-        if m in text_blob:
-            r.c2pa_present = True
-            break
+    # C2PA/İçerik Kimlik Bilgisi: kısa token'ları ("c2pa","jumbf") tüm ham baytlarda
+    # aramak YANLIŞ-POZİTİF üretir (sıkıştırılmış veride rastgele denk gelir). Bunun yerine
+    # ya UZUN/belirgin token, ya GERÇEK JUMBF/APP11 kutu yapısı, ya da XMP bölgesi aranır.
+    r.c2pa_present = _detect_c2pa(blob, text_blob, meta_text)
 
     # --- ELA ---
     try:

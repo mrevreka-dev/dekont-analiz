@@ -547,12 +547,25 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     cons = _cons.check_consistency(
         ex.amount.value, ex.amount.fee, ex.amount.total,
         _rev._find_bsmv(text_layout or ""), _rev._find_amount_words(text_layout or ""))
+    # FOTOĞRAF/OCR/vision'da tutarlar pikselden okunur; tek rakam yanlış okuması aritmetiği
+    # bozar. Bu yüzden tutarlılık hatası fotoğrafta KESİN bulgu değil, BİLGİ notudur (puanı
+    # düşürmez); yalnız dijital-metin PDF'te medium ceza olarak sayılır (gerçek tahrifat).
+    _cons_pixel = (input_kind == "image" or extraction.text_source in ("ocr", "vision"))
     for c in cons["checks"]:
         if not c["ok"]:
-            findings.append(Finding(
-                "CONSISTENCY_FAIL", "medium", "content", 15,
-                tr=f"Veri tutarlılığı hatası — {c['name']}: {c['detail']}. Alanlardan biri elle değiştirilmiş olabilir.",
-                en=f"Data consistency failure — {c['name']}: {c['detail']}.", detail=""))
+            if _cons_pixel:
+                findings.append(Finding(
+                    "CONSISTENCY_FAIL", "info", "content", 0,
+                    tr=f"Tutar tutarlılığı notu — {c['name']}: {c['detail']}. Tutarlar fotoğraftan/taramadan "
+                       f"OCR ile okunduğundan bu bir OKUMA HATASI da olabilir; tek başına tahrifat kanıtı "
+                       f"değildir. Kesinlik için orijinal dijital PDF isteyin.",
+                    en=f"Amount-consistency note — {c['name']}: {c['detail']}. Amounts were OCR-read from a "
+                       f"photo/scan, so this may be a misread rather than tampering; not conclusive.", detail=""))
+            else:
+                findings.append(Finding(
+                    "CONSISTENCY_FAIL", "medium", "content", 15,
+                    tr=f"Veri tutarlılığı hatası — {c['name']}: {c['detail']}. Alanlardan biri elle değiştirilmiş olabilir.",
+                    en=f"Data consistency failure — {c['name']}: {c['detail']}.", detail=""))
 
     # --- İŞLEM TUTARI çapraz-kaynak kontrolü (aynı tutar her yerde aynı olmalı) ---
     # Yalnızca İŞLEM/TRANSFER tutarının farklı yazımlarını karşılaştırır; ücret, komisyon,
@@ -676,12 +689,17 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _pf:
                 findings.append(Finding(_pf["code"], _pf["severity"], "metadata", _pf["weight"],
                                         tr=_pf["tr"], en=_pf["en"], detail=_pf.get("detail", "")))
-            _rn = _auth.check_receipt_number_date(
-                _bkey, ex.transaction.document_no, ex.transaction.ref_no,
-                ex.transaction.sequence_number, _txn_dt)
-            if _rn:
-                findings.append(Finding(_rn["code"], _rn["severity"], "content", _rn["weight"],
-                                        tr=_rn["tr"], en=_rn["en"], detail=_rn.get("detail", "")))
+            # Fiş/belge numarasındaki gömülü tarih ↔ işlem tarihi (Enpara/QNB): numara
+            # DIGIT-ÖZEL bir kontroldür. Fotoğraf/OCR/vision okumasında YYYYAAGG önekinin
+            # tek bir hanesi yanlış okunursa tarih kayar → yanlış 'BELGE TARİHİ ÇELİŞKİSİ'.
+            # Pikselden okumada güvenilmez → IBAN kontrolleriyle aynı mantıkla yalnız dijital-metin PDF.
+            if not (input_kind == "image" or extraction.text_source in ("ocr", "vision")):
+                _rn = _auth.check_receipt_number_date(
+                    _bkey, ex.transaction.document_no, ex.transaction.ref_no,
+                    ex.transaction.sequence_number, _txn_dt)
+                if _rn:
+                    findings.append(Finding(_rn["code"], _rn["severity"], "content", _rn["weight"],
+                                            tr=_rn["tr"], en=_rn["en"], detail=_rn.get("detail", "")))
             _pr = _auth.check_producer(_bkey, struct.producer)
             if _pr:
                 findings.append(Finding(_pr["code"], _pr["severity"], "metadata", _pr["weight"],
@@ -699,14 +717,23 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _ft:
                 findings.append(Finding(_ft["code"], _ft["severity"], "fonts", _ft["weight"],
                                         tr=_ft["tr"], en=_ft["en"], detail=_ft.get("detail", "")))
-            # Belge içi + XMP çapraz-tarih tutarlılığı
-            _unrel_meta = bool(classify_producer(struct.producer, struct.creator)["generator_hits"])
-            _idt = _auth.check_internal_dates(text_layout, pdf_bytes, _txn_dt,
-                                              ex.transaction.value_date or "",
-                                              use_meta=not _unrel_meta)
-            if _idt:
-                findings.append(Finding(_idt["code"], _idt["severity"], "content", _idt["weight"],
-                                        tr=_idt["tr"], en=_idt["en"], detail=_idt.get("detail", "")))
+            # Belge içi + XMP çapraz-tarih tutarlılığı.
+            # FOTOĞRAF/OCR/vision'da BASKILANIR: bu kontrol metindeki HERHANGİ bir tarihi
+            # işlem tarihiyle >3 gün fark için tarar. Bir dekont FOTOĞRAFINDA telefonun
+            # DURUM ÇUBUĞU tarihi/saati kadraja girer ve OCR bunu okur → her zaman ~BUGÜN
+            # çıkar; eski (birkaç hafta önceki) gerçek bir dekont fotoğrafı bu yüzden DAİMA
+            # 'tarih çelişkisi' verir (kanıtlandı: iki gerçek dekont other=BUGÜN ile FP verdi).
+            # Serbest-tarih taraması pikselden okumada güvenilmez → yalnız dijital-metin PDF.
+            # Anlamlı tarih mantığı (gelecek tarih / dekont<işlem) zaten check_date_chain'de,
+            # etikete-bağlı ve toleranslı biçimde ele alınır.
+            if not (input_kind == "image" or extraction.text_source in ("ocr", "vision")):
+                _unrel_meta = bool(classify_producer(struct.producer, struct.creator)["generator_hits"])
+                _idt = _auth.check_internal_dates(text_layout, pdf_bytes, _txn_dt,
+                                                  ex.transaction.value_date or "",
+                                                  use_meta=not _unrel_meta)
+                if _idt:
+                    findings.append(Finding(_idt["code"], _idt["severity"], "content", _idt["weight"],
+                                            tr=_idt["tr"], en=_idt["en"], detail=_idt.get("detail", "")))
             # Deterministik IBAN/banka-tutarlılığı (mod-97, ihracçı-taraf, alıcı-bankası)
             for _d in _auth.deterministic_checks(_bkey, ex.sender.iban, ex.receiver.iban,
                                                  ex.receiver.bank, ex.all_ibans):
@@ -834,10 +861,15 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             # Kimlik (TCKN/VKN) sağlaması — maskeli değilse kontrol basamağı tutmalı.
             # (Banka-özel temizlikler extract.py'deki ilgili banka dalında yapılır; ör. Ziraat'ta
             #  boş 'VERGİ KİMLİK NO' alanına adres rakamlarının sızması orada engellenir.)
-            _id = _auth.check_identity(ex.sender.tckn, "gönderen")
-            if _id:
-                findings.append(Finding(_id["code"], _id["severity"], "content", _id["weight"],
-                                        tr=_id["tr"], en=_id["en"], detail=_id.get("detail", "")))
+            # KİMLİK SAĞLAMASI (TCKN/VKN): kontrol basamağı DIGIT-ÖZEL bir sağlamadır.
+            # Fotoğraf/OCR/vision'da tek bir rakamın yanlış okunması sağlamayı bozar →
+            # yanlış 'GEÇERSİZ KİMLİK'. Gerçek dekontta kimlik her zaman geçerlidir; pikselden
+            # okumada geçersizlik bir OKUMA HATASIDIR, tahrifat değil → yalnız dijital-metin PDF.
+            if not (input_kind == "image" or extraction.text_source in ("ocr", "vision")):
+                _id = _auth.check_identity(ex.sender.tckn, "gönderen")
+                if _id:
+                    findings.append(Finding(_id["code"], _id["severity"], "content", _id["weight"],
+                                            tr=_id["tr"], en=_id["en"], detail=_id.get("detail", "")))
             # Kendine transfer (gönderici IBAN = alıcı IBAN) — yalnızca güvenilir çıkarımda (PDF)
             if input_kind != "image" and extraction.text_source not in ("ocr", "vision"):
                 _st = _auth.check_self_transfer(ex.sender.iban, ex.receiver.iban)
