@@ -305,6 +305,18 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     # 1) Yapı / metadata
     struct = analyze_structure_bytes(pdf_bytes)
 
+    # 1.5) HIZ ÖNBELLEĞİ: aynı dosya (sha256) + aynı motor sürümü daha önce analiz edildiyse,
+    # tüm işlem hattını (OCR + Vision + YZ) ATLA ve saklanan raporu ANINDA döndür.
+    if use_store:
+        try:
+            import store as _store_cache
+            _cached = _store_cache.cache_get(struct.sha256, ENGINE_VERSION)
+            if _cached is not None:
+                _cached["elapsed_ms"] = int((time.time() - t0) * 1000)
+                return _cached
+        except Exception:
+            pass
+
     # 2) Metin (dijital), yetersizse OCR
     text_layout = extract_text_digital(pdf_bytes, layout=True)
     text_read = extract_text_digital(pdf_bytes, layout=False)
@@ -1213,6 +1225,13 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             report["cross_db"]["recorded"] = _store.record(report)
             # AUDIT LOG: her analiz (sahte dahil) — 'kaç yüklendi' + kara-liste temeli
             _store.log_analysis(report)
+        except Exception:
+            pass
+    # HIZ ÖNBELLEĞİNE YAZ: aynı dosya ikinci kez gelirse tüm hattı atlayıp bunu döndürürüz.
+    if use_store:
+        try:
+            import store as _store_cput
+            _store_cput.cache_put(struct.sha256, ENGINE_VERSION, report)
         except Exception:
             pass
     return report

@@ -81,6 +81,11 @@ def _connect():
         bank TEXT, field TEXT, label TEXT,
         hits INTEGER DEFAULT 1, last_at TEXT,
         PRIMARY KEY (bank, field, label) )""")
+    # HIZ: SONUÇ ÖNBELLEĞİ — aynı dosya (sha256) + aynı motor sürümü ikinci kez yüklenirse tüm
+    # işlem hattını (OCR + vision + YZ) atlayıp saklanan raporu ANINDA döndürürüz.
+    con.execute("""CREATE TABLE IF NOT EXISTS report_cache (
+        sha256 TEXT, engine_version TEXT, report_json TEXT, created_at TEXT,
+        PRIMARY KEY (sha256, engine_version) )""")
     con.commit()
     _maybe_unblock(con)
     return con
@@ -137,6 +142,61 @@ def _fields(report: dict) -> dict:
         "rail": tx.get("rail") or "",
         "qr_found": 1 if (report.get("qr", {}) or {}).get("found") else 0,
     }
+
+
+def cache_enabled() -> bool:
+    return enabled() and os.environ.get("DEKONT_CACHE", "1") != "0"
+
+
+def _cache_key_ver(engine_version: str) -> str:
+    """Önbellek sürüm anahtarı = motor sürümü + DEKONT_CACHE_SALT. Kod düzeltilip aynı dekont
+    tekrar yüklendiğinde ESKİ sonucun dönmemesi için: DEKONT_CACHE_SALT'ı değiştirmek (ya da
+    ENGINE_VERSION'ı artırmak) tüm önbelleği anında geçersizler."""
+    return f"{engine_version or ''}|{os.environ.get('DEKONT_CACHE_SALT', '')}"
+
+
+def cache_get(sha256: str, engine_version: str) -> dict | None:
+    """Aynı dosya+motor sürümü için saklanan raporu döndürür (yoksa None). 'Öğren' değil, HIZ önbelleği."""
+    if not sha256 or not cache_enabled():
+        return None
+    try:
+        con = _connect()
+        try:
+            row = con.execute("SELECT report_json FROM report_cache WHERE sha256=? AND engine_version=?",
+                              (sha256, _cache_key_ver(engine_version))).fetchone()
+        finally:
+            con.close()
+        if row and row[0]:
+            import json as _j
+            r = _j.loads(row[0])
+            if isinstance(r, dict):
+                r["_from_cache"] = True
+                return r
+    except Exception:
+        return None
+    return None
+
+
+def cache_put(sha256: str, engine_version: str, report: dict) -> bool:
+    """Raporu önbelleğe yazar (sha256+motor sürümü anahtarıyla). En fazla ~5000 kayıt tutulur."""
+    if not sha256 or not report or not cache_enabled():
+        return False
+    try:
+        import json as _j
+        payload = _j.dumps(report, ensure_ascii=False)[:400000]   # aşırı büyük raporları sınırla
+        con = _connect()
+        try:
+            con.execute("INSERT OR REPLACE INTO report_cache (sha256, engine_version, report_json, created_at) "
+                        "VALUES (?,?,?,?)", (sha256, _cache_key_ver(engine_version), payload, _dt.datetime.utcnow().isoformat()))
+            # basit budama: 5000'i aşarsa en eskileri sil
+            con.execute("DELETE FROM report_cache WHERE rowid IN "
+                        "(SELECT rowid FROM report_cache ORDER BY created_at DESC LIMIT -1 OFFSET 5000)")
+            con.commit()
+        finally:
+            con.close()
+        return True
+    except Exception:
+        return False
 
 
 def record_field_hint(bank: str, field: str, label: str) -> bool:
