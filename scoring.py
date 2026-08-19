@@ -127,6 +127,10 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 8)
     if "RAIL_SAMEBANK_MISMATCH" in codes:    # FAST/EFT ama gönderici=alıcı banka (aynı banka = havale)
         score = min(score, 6)
+    if "SAMEBANK_RAIL_CONTRADICTION" in codes:  # aynı banka ama başlık 'bankalararası/EFT/FAST'
+        score = min(score, 6)
+    if "ID_FIELD_MISMATCH" in codes:         # VKN alanı ≠ İşlemi Yapan TCKN (kimlik uydurma)
+        score = min(score, 10)
     if "DATE_IN_FUTURE" in codes:            # işlem/dekont tarihi gelecekte
         score = min(score, 8)
     if "RECEIPT_BEFORE_TXN" in codes:        # dekont, işlemden önce üretilmiş (imkânsız)

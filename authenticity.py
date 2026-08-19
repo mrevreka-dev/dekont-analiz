@@ -818,6 +818,121 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
             "notice_tr": notice_tr, "notice_en": notice_en}
 
 
+def check_samebank_rail_contradiction(text: str, sender_iban: str, receiver_iban: str) -> dict | None:
+    """AYNI-BANKA ↔ 'BANKALARARASI/EFT/FAST' BAŞLIK ÇELİŞKİSİ (sahtecilik).
+    Gönderici ve alıcı IBAN AYNI bankaya aitse işlem banka-içidir; ama dekont başlığı/
+    türü 'bankalar arası' / EFT / FAST diyorsa bu İMKÂNSIZDIR — işlem türü uydurulmuş.
+    (Gerçek banka-içi Akbank transferi 'ÖDEME EMİRLERİ GİRİŞİ' başlığı taşır, 'EFT
+    BANKALAR ARASI' değil.) IBAN'a dayalı olduğundan iki IBAN da mod-97 GEÇERLİ ve FARKLI
+    olmalı — böylece fotoğraf/OCR okuma hatası yanlış-pozitif üretmez."""
+    if not text:
+        return None
+    import banks as _b
+    s = _b.normalize_iban(sender_iban or "")
+    r = _b.normalize_iban(receiver_iban or "")
+    if not s or not r or s == r:
+        return None
+    if _b.iban_valid(s) is False or _b.iban_valid(r) is False:
+        return None                     # geçersiz IBAN = okuma hatası; burada karışma
+    sc, rc = _b.iban_bank_code(s), _b.iban_bank_code(r)
+    if not sc or not rc or sc != rc:
+        return None                     # farklı banka → çelişki yok (gerçek bankalararası)
+    ns = _tr_low(text).replace(" ", "")
+    asserts_interbank = ("bankalararasi" in ns or "eftbankalar" in ns or "dekont/eft" in ns
+                         or "eftucreti" in ns or "geceft" in ns
+                         or bool(re.search(r"(?<![a-z])fast(?![a-z])", _tr_low(text))))
+    if not asserts_interbank:
+        return None                     # banka-içi başlık (ör. ÖDEME EMİRLERİ) → sorun yok
+    bank_lbl = _b.bank_label_from_iban(s) or f"kod {sc}"
+    return {
+        "code": "SAMEBANK_RAIL_CONTRADICTION", "severity": "critical", "weight": 46,
+        "tr": f"İŞLEM TÜRÜ ÇELİŞKİSİ (SAHTECİLİK): Gönderici ve alıcı IBAN AYNI bankaya ait "
+              f"({bank_lbl}, banka kodu {sc}); yani bu banka-içi bir transferdir. Ancak dekont "
+              f"kendini 'BANKALAR ARASI / EFT / FAST' olarak gösteriyor — aynı bankadaki iki hesap "
+              f"arasında bankalararası (EFT/FAST) işlem YAPILAMAZ. İşlem türü/başlık uydurulmuş; "
+              f"güçlü sahtecilik işareti. (Gerçek banka-içi transfer farklı bir başlık taşır.)",
+        "en": f"RAIL CONTRADICTION (FORGERY): sender and receiver IBANs are at the SAME bank "
+              f"({bank_lbl}, code {sc}) — an intra-bank transfer — yet the receipt labels itself "
+              f"'INTERBANK / EFT / FAST'. A same-bank transfer cannot be EFT/FAST; the type was "
+              f"fabricated. Strong forgery signal.",
+        "detail": f"sender_code={sc} receiver_code={rc}"}
+
+
+# Kimlik (TCKN) alan etiketleri — BANKA-GENEL. Gönderen/işlemi-yapan tarafındaki 11 haneli
+# kimlik numarasını taşıyan alan adları (bankadan bankaya değişir).
+_ID_LABELS = [
+    r"islemi\s*yapan\s*tckn", r"islemi\s*yapan\s*(?:tc\s*)?kimlik(?:\s*no)?",
+    r"gonderen\s*tckn", r"gonderen\s*(?:tc\s*)?kimlik(?:\s*no)?",
+    r"tckn", r"tc\s*kimlik\s*(?:no)?", r"t\.?c\.?\s*kimlik\s*(?:no)?",
+    r"kimlik\s*no", r"vkn\s*/?\s*vergi\s*(?:kimlik\s*)?(?:dair[a-z]*|no)?",
+    r"vergi\s*kimlik\s*no",
+]
+
+
+def _party_identity_ids(text: str) -> set:
+    """Dekonttan GÖNDEREN/İŞLEMİ-YAPAN (aynı kişi) tarafına ait 11 haneli kimlik
+    numaralarını toplar. Alıcı bloğundaki kimlikler (farklı kişi olabilir) HARİÇ tutulur;
+    'İşlemi Yapan' yalnızca KENDİSİ ise aktörün kimliği de gönderenle aynı sayılır.
+    Banka-geneldir: Akbank ('VKN/Vergi' + 'İşlemi Yapan TCKN'), Ziraat/Garanti/İş/YKB vb.
+    'TC Kimlik No', 'TCKN', 'Kimlik No' etiketlerini de tanır."""
+    low = _tr_low(text)
+    # Alıcı bloğunu ayır: alıcı kimlikleri (varsa) farklı kişiye ait olabilir → dışla
+    cut = re.search(r"(alici\s*bilgileri|alacakli|alici\b)", low)
+    sender_region = low[:cut.start()] if cut else low
+    # 'İşlemi Yapan' alanı KENDİSİ mi? (aktör = gönderen)
+    actor_self = bool(re.search(r"islemi\s*yapan\s*[:：]?\s*kendis", low))
+    ids = set()
+    # Gönderen bölgesindeki tüm kimlik-etiketli 11 haneli numaralar
+    for lab in _ID_LABELS:
+        for m in re.finditer(lab + r"\s*[:：]?\s*([0-9]{10,11})", sender_region):
+            v = m.group(1)
+            if len(v) == 11:
+                ids.add(v)
+    # 'İşlemi Yapan TCKN/Kimlik' (belge sonunda) — yalnız aktör KENDİSİ ise gönderenle aynı say
+    if actor_self:
+        for m in re.finditer(r"islemi\s*yapan\s*(?:tckn|(?:tc\s*)?kimlik[a-z ]*)\s*[:：]?\s*([0-9]{11})", low):
+            ids.add(m.group(1))
+    return ids
+
+
+def check_id_field_consistency(text: str, input_kind: str = "pdf",
+                               text_source: str = "digital") -> dict | None:
+    """KİMLİK ALAN TUTARLILIĞI (sahtecilik) — BANKA-GENEL. Bir dekontta gönderen/işlemi-yapan
+    (aynı kişi) için birden çok kimlik alanı varsa hepsi AYNI TCKN'yi taşımalıdır. Farklı
+    numaralar görünüyorsa ya da biri kontrol basamağı sağlamasını geçemiyorsa alan uydurulmuş/
+    değiştirilmiştir. İki alan metinde aynı yazıldığından fotoğrafta bile OCR ikisini AYNI okur →
+    mismatch güvenilir. FP koruması: fotoğraf/OCR'da salt-mismatch YETMEZ, biri sağlamasız olmalı;
+    alıcı kimlikleri (farklı kişi) hariç tutulur; aktör KENDİSİ değilse karşılaştırılmaz."""
+    if not text:
+        return None
+    import banks as _b
+    ids = _party_identity_ids(text)
+    if len(ids) < 2:
+        return None                                   # tek (ya da sıfır) kimlik → mismatch yok
+    ids = sorted(ids)
+    validity = {v: _b.id_valid(v) for v in ids}
+    invalid_present = any(x is False for x in validity.values())
+    pixel = (input_kind == "image" or text_source in ("ocr", "vision"))
+    if pixel and not invalid_present:
+        # Fotoğrafta salt-mismatch OCR hatası olabilir; sağlama-desteği yoksa bastır (FP koruması)
+        return None
+    sev, w = ("critical", 45) if invalid_present else ("high", 30)
+    _bad = [v for v, ok in validity.items() if ok is False]
+    _badtxt = (" Ayrıca " + ", ".join(f"'{v}'" for v in _bad) +
+               " resmî kontrol basamağı sağlamasını GEÇEMİYOR.") if _bad else ""
+    return {
+        "code": "ID_FIELD_MISMATCH", "severity": sev, "weight": w,
+        "tr": f"KİMLİK ALAN ÇELİŞKİSİ (SAHTECİLİK): Aynı kişi (gönderen/işlemi yapan) için dekontta "
+              f"FARKLI kimlik numaraları görünüyor: {', '.join(ids)}. Gerçek bir dekontta bu alanların "
+              f"hepsi aynı kişinin TCKN'sini birebir taşır.{_badtxt} Alanlardan biri uydurulmuş/"
+              f"değiştirilmiş — güçlü sahtecilik işareti.",
+        "en": f"IDENTITY FIELD CONFLICT (FORGERY): different national-ID numbers appear for the same "
+              f"party (sender/transacting person): {', '.join(ids)}. On a genuine receipt these fields "
+              f"carry the same TCKN.{(' One fails the official checksum.') if _bad else ''} A field was "
+              f"fabricated/altered.",
+        "detail": f"ids={ids} validity={validity}"}
+
+
 def check_fast_limit(text: str, amount, learned_max=None) -> dict | None:
     """FAST işlem-başına üst limiti. SABİT sayı yerine VERİ-ODAKLI çalışır:
       etkin_limit = max(regülasyon tabanı, elimizdeki GERÇEK FAST dekontlarının en yüksek tutarı)

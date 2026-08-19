@@ -788,6 +788,18 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                     _rlcode, "info", "content", 0,
                     tr=_rl["notice_tr"], en=_rl["notice_en"],
                     detail=f"rail={_rl['rail']} conf={_rl['confidence']} evidence={' | '.join(_rl.get('evidence', []))}"))
+            # AYNI-BANKA ↔ 'BANKALARARASI/EFT/FAST' başlık çelişkisi (sahtecilik). IBAN'lar mod-97
+            # geçerli+aynı banka olduğundan fotoğrafta da güvenilir; okuma hatası bastırılır.
+            _sbc = _auth.check_samebank_rail_contradiction(text_layout, ex.sender.iban, ex.receiver.iban)
+            if _sbc:
+                findings.append(Finding(_sbc["code"], _sbc["severity"], "content", _sbc["weight"],
+                                        tr=_sbc["tr"], en=_sbc["en"], detail=_sbc.get("detail", "")))
+            # KİMLİK ALAN TUTARLILIĞI: 'VKN/Vergi' alanı ↔ 'İşlemi Yapan TCKN' aynı kişide birebir
+            # olmalı; farklıysa/biri sağlamayı geçemiyorsa sahtecilik (foto'da sağlama-destekli).
+            _idc = _auth.check_id_field_consistency(text_layout, input_kind, extraction.text_source)
+            if _idc:
+                findings.append(Finding(_idc["code"], _idc["severity"], "content", _idc["weight"],
+                                        tr=_idc["tr"], en=_idc["en"], detail=_idc.get("detail", "")))
             # Beklenen QR eksik: bu bankanın gerçek dekontlarında hep QR varken bu belgede yoksa
             # (veri-öğrenmeli, sıfır-FP: yalnızca >=5 gerçek dekontta %100 QR varsa tetiklenir)
             try:
