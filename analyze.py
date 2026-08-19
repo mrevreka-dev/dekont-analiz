@@ -386,10 +386,11 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             ocr_recover(extraction, c)
     extraction.text_source = text_source
 
-    # IBAN OCR-ONARIMI (1. geçiş — Vision'DAN ÖNCE): tek-rakam OCR hatasını (ör. 56↔58) BENZERSİZ
-    # geçerli adaya onar. Böylece geçerli hâle gelen IBAN gereksiz yere pahalı Vision çağrısını
-    # TETİKLEMEZ → hem doğru hem hızlı. Onaramazsa aşağıdaki _iban_bad Vision'a yükseltir.
-    _iban_fixes = _repair_party_ibans(extraction, input_kind)
+    # ADLİ İLKE: IBAN OCR-onarımını Vision KARARINDAN ÖNCE ÇALIŞTIRMA. Aksi hâlde geçersiz (checksum
+    # tutmayan → en şüpheli) bir IBAN "onarılıp" _iban_bad False olur ve dekont Vision denetiminden
+    # (görsel tahrifat sezgisi + güvenilir metin dökümü) KAÇAR. Vision kararı DAİMA ham OCR okumasına
+    # dayanmalı. Onarım yalnızca Vision hiç çalışamadığında (kapalı/hata) şeffaf YEDEK olarak uygulanır.
+    _iban_fixes = []
 
     # 5.5) VISION AI: ÖNCE ücretsiz tesseract çalışır; yalnızca ZORUNLU 4 kritik alandan
     # (alıcı adı, alıcı IBAN, tutar, işlem tarihi) EN AZ BİRİ okunamazsa ücretli Vision'a git.
@@ -453,8 +454,12 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         except Exception:
             pass
 
-    # IBAN OCR-ONARIMI (2. geçiş): Vision de tek rakam yanlış okuduysa onar.
-    _iban_fixes += _repair_party_ibans(extraction, input_kind)
+    # IBAN OCR-ONARIMI (YEDEK — yalnızca Vision HİÇ ÇALIŞMADIYSA): Vision kapalı/hatalıysa ve OCR
+    # tek rakam yanlış okuduysa, BENZERSİZ geçerli adaya onar (banka kodu korunur, dijital PDF'de
+    # çalışmaz, iban_ocr_onarim ile şeffaf). Vision çalıştıysa DOKUNMA — onun okuması esastır ve
+    # denetimi zayıflatacak sessiz düzeltme yapılmaz.
+    if vision_result is None:
+        _iban_fixes += _repair_party_ibans(extraction, input_kind)
 
     # Sıra/işlem numarası (banka bazlı) — sıra analizi için
     from extract import derive_sequence_number
