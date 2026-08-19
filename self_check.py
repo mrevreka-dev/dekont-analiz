@@ -197,6 +197,8 @@ _CHECKS = [
 
 def run() -> dict:
     """Tüm değişmez testlerini çalıştırır. Döner: özet + her testin sonucu + geliştirme günlüğü."""
+    # Her testi, onu doğuran geliştirme kaydıyla eşleştir → o iyileştirmenin tarih+saati
+    _date_by_test = {it["test"]: it["date"] for it in IMPROVEMENTS if it.get("test")}
     checks = []
     passed = 0
     for cid, name, fn in _CHECKS:
@@ -206,7 +208,8 @@ def run() -> dict:
             ok, detail = False, f"İSTİSNA: {e} | {traceback.format_exc(limit=1)}"
         if ok:
             passed += 1
-        checks.append({"id": cid, "name": name, "ok": bool(ok), "detail": detail})
+        checks.append({"id": cid, "name": name, "ok": bool(ok), "detail": detail,
+                       "date": _date_by_test.get(cid, "")})
     return {
         "all_ok": passed == len(_CHECKS),
         "passed": passed,

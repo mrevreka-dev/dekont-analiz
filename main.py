@@ -299,9 +299,11 @@ def _render_gunluk(r: dict) -> str:
         badge = "#198754" if c["ok"] else "#dc3545"
         mark = "GEÇTİ" if c["ok"] else "EZİLMİŞ"
         detail = f'<div class="det">{_h.escape(str(c["detail"]))}</div>' if not c["ok"] else ""
+        cdate = _h.escape(str(c.get("date") or "önceki"))
         checks_html += (
             f'<div class="chk"><span class="dot" style="background:{badge}"></span>'
             f'<span class="cid">#{c["id"]}</span><span class="cn">{_h.escape(c["name"])}</span>'
+            f'<span class="cdate">{cdate}</span>'
             f'<span class="cm" style="color:{badge}">{mark}</span>{detail}</div>')
     # Geliştirme günlüğü kartları
     imp_html = ""
@@ -331,7 +333,8 @@ display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
 border-radius:8px;margin:6px 0;flex-wrap:wrap;background:#161b22}}
 .dot{{width:10px;height:10px;border-radius:50%;display:inline-block;flex:0 0 auto}}
 .cid{{color:#8b949e;font-variant-numeric:tabular-nums;min-width:26px}}
-.cn{{flex:1;min-width:180px}}.cm{{font-weight:700;font-size:13px}}
+.cn{{flex:1;min-width:180px}}.cm{{font-weight:700;font-size:13px;min-width:64px;text-align:right}}
+.cdate{{color:#8b949e;font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}}
 .det{{flex-basis:100%;color:#f0a;font-size:13px;padding-left:20px}}
 .imp{{border:1px solid #21262d;border-radius:10px;padding:14px 16px;margin:10px 0;background:#161b22}}
 .imp-h{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}}
