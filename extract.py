@@ -415,6 +415,9 @@ BANK_REGISTRY = [
      "sig": lambda c: "denizbank.com" in c["low"] or "mobildeniz" in c["nlow"]},
     {"key": "garanti", "label": "Garanti BBVA", "iban": {"00062"},
      "sig": lambda c: "garantibbva" in c["low"] or ("HESAPTAN" in c["up"] and "GARANTİ" in c["up"])},
+    {"key": "alternatif", "label": "Alternatifbank (ABank)", "iban": {"00124"},
+     "sig": lambda c: ("alternatifbank.com" in c["low"] or "alternatif bank" in c["low"]
+                       or "alternatifbank a" in c["low"] or "0060003154500048" in c["lc_ns"])},
     {"key": "enpara", "label": "Enpara.com (QNB)", "iban": {"00157", "00111"},
      "sig": lambda c: ("enpara.com" in c["low"] or "enpara subesi" in c["nlow"]
                        or ("qnb.com" not in c["low"] and (
@@ -488,6 +491,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     is_fiba = issuer == "fiba"
     is_getir = issuer == "getir"
     is_teb = issuer == "teb"
+    is_alternatif = issuer == "alternatif"
     is_qnb = issuer == "qnb"
     is_halk = issuer == "halk"
     is_ptt = issuer == "ptt"
@@ -1109,6 +1113,67 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.transaction.channel = _find_label(rt, ["İşlem Yeri", "Islem Yeri"]) or "CEPTETEB Mobil"
         ex.sender.bank = "Türk Ekonomi Bankası (TEB)"
         # receiver.bank BOŞ bırakılır -> alıcı IBAN'ından türetilir (ör. Yapı Kredi). TEB atanmaz.
+
+    # =============================================================
+    #  ALTERNATİF BANK (ABank) — 'Dekont' (FAST/EFT/Havale)
+    #  Düzen: SAYIN/MÜŞTERİ ADI = gönderen; IBAN NUMARASI = gönderen IBAN (00124);
+    #  İŞLEM TÜRÜ (ör. 'Giden FAST Ödemesi'); alt blokta Alıcı Banka/Alıcı Adı/Alıcı IBAN;
+    #  Tutar / İşlem Ücreti; 'FAST Sorgu Numarası' = işlem sorgu no (banka teyidi için).
+    #  KRİTİK: ALTERNATİF İHRAÇÇI (=gönderen); alıcı bankası 'Alıcı Banka' alanından/alıcı
+    #  IBAN'ından gelir — Alternatif'i alıcı bankası SANMA (bankalararası FAST'te alıcı başka
+    #  bankada olabilir). Böylece yanlış RECEIVER_BANK_MISMATCH üretilmez.
+    # =============================================================
+    elif is_alternatif:
+        ex.doc_kind = "Dekont"
+        rt = rjoined or joined
+        # Gönderen ad/kimlik/IBAN
+        ex.sender.name = _clean_name(_find_label(rt, ["MÜŞTERİ ADI", "MUSTERI ADI", "Müşteri Adı"])
+                                     or _find_label(rt, ["SAYIN", "Sayın"]))
+        _sib = re.search(r"IBAN\s*NUMARASI\s*[:：]?\s*(TR[0-9 ]{20,34})", rt, re.I)
+        ex.sender.iban = banks.normalize_iban(_sib.group(1)) if _sib else ""
+        # VKN/TCKN (genelde maskeli, ör. '/3008926****') — maskeli kimlik sağlaması çalışmaz
+        _sid = _find_label(rt, ["VKN/TCKN", "VKN / TCKN", "VKN/TC KN"])
+        if _sid:
+            ex.sender.tckn = _sid.strip().lstrip("/").strip()
+        ex.sender.bank = "Alternatifbank (ABank)"
+        ex.transaction.channel = _clean_name(_find_label(rt, ["Şube", "Sube"])) or "Mobil Şube"
+        # Alıcı ad/banka/IBAN
+        ex.receiver.name = _clean_name(_after_label(rt, "Alıcı Adı",
+                                       ["Alıcı IBAN", "Alıcı Banka", "Tutar", "IBAN", "Açıklama"])
+                                       or _find_label(rt, ["Alıcı Adı", "Alici Adi"]))
+        _rbank = _clean_name(_after_label(rt, "Alıcı Banka", ["Alıcı Adı", "Alıcı IBAN", "Tutar", "IBAN"])
+                             or _find_label(rt, ["Alıcı Banka", "Alici Banka"]))
+        if _rbank:
+            ex.receiver.bank = _rbank
+        _rib = re.search(r"Al[ıi]c[ıi]\s*IBAN\s*[:：]?\s*(TR[0-9 ]{20,34})", rt, re.I)
+        ex.receiver.iban = banks.normalize_iban(_rib.group(1)) if _rib else ""
+        # Gönderen IBAN alıcıyla eşitse (tek IBAN okuması) düzelt
+        if ex.sender.iban and ex.sender.iban == ex.receiver.iban:
+            ex.sender.iban = next((ib for ib in ex.all_ibans if ib and ib != ex.receiver.iban), ex.sender.iban)
+        # Tutar + işlem ücreti (İŞLEM TÜRÜ/TARİHİ ile karışmasın diye 'Ücreti' özel yakalanır)
+        _am = re.search(r"\bTutar\s*[:：]?\s*([0-9][0-9.]*,[0-9]{2})", rt, re.I)
+        ex.amount.value = parse_amount(_am.group(1)) if _am else None
+        _fee = re.search(r"[İIıi]?[şs]lem\s*[ÜUu]creti\s*[:：]?\s*([0-9][0-9.]*,[0-9]{2})", rt, re.I)
+        ex.amount.fee = parse_amount(_fee.group(1)) if _fee else None
+        ex.amount.currency = "TL"
+        # Tarih / valör
+        _td = re.search(r"[İIıi]?[şs]lem\s*Tarih[İIıi]?\s*[:：]?\s*(\d{2}\.\d{2}\.\d{4})\s*([0-9:]{5,8})?", rt, re.I)
+        ex.transaction.date = ((_td.group(1) + ((" " + _td.group(2)) if _td.group(2) else "")) if _td else "")
+        _vd = re.search(r"Val[öo]r\s*Tarih[İIıi]?\s*[:：]?\s*(\d{2}\.\d{2}\.\d{4})", rt, re.I)
+        ex.transaction.value_date = _vd.group(1) if _vd else ""
+        # FAST Sorgu Numarası = işlem sorgu/referans no (banka teyidi için KRİTİK tanımlayıcı)
+        _fq = re.search(r"FAST\s*Sorgu\s*Numaras[ıi]\s*[:：]?\s*([0-9]{5,})", rt, re.I)
+        if _fq:
+            ex.transaction.ref_no = _fq.group(1)
+            ex.transaction.sequence_number = _fq.group(1)
+        # İşlem türü: 'Giden FAST Ödemesi' -> FAST; EFT/HAVALE benzer biçimde
+        _itype = _norm_tr(_find_label(rt, ["İŞLEM TÜRÜ", "ISLEM TURU", "İşlem Türü"]) or "")
+        if "fast" in _itype:
+            ex.transaction.type = "FAST"
+        elif "eft" in _itype:
+            ex.transaction.type = "EFT"
+        elif "havale" in _itype:
+            ex.transaction.type = "HAVALE"
 
     # =============================================================
     #  GETİRFİNANS (Fibabanka markası) E-Dekont
