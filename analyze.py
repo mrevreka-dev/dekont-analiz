@@ -389,6 +389,21 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 from extract import derive_sequence_number as _dsn
                 extraction.transaction.sequence_number = _dsn(extraction)
 
+    # ÖĞREN-UYGULA: bu bankanın store'da ÖĞRENİLMİŞ etiket ipuçlarıyla HÂLÂ BOŞ kritik alanları
+    # doldur (YZ değerlendiricisi geçmişte bu banka için hangi alanın hangi etiket yanında olduğunu
+    # öğrettiyse). Kod değişmeden, veri-odaklı iyileştirme. Yalnız blank alanlar; IBAN mod-97 doğrulanır.
+    if use_store:
+        try:
+            import store as _store_h
+            import authenticity as _auth_h
+            from extract import apply_learned_field_hints
+            _hkey = _auth_h.bank_key(extraction.bank)
+            _hints = _store_h.learned_field_hints(_hkey) if _hkey else {}
+            if _hints:
+                apply_learned_field_hints(extraction, _hints, text_layout)
+        except Exception:
+            pass
+
     # Sıra/işlem numarası (banka bazlı) — sıra analizi için
     from extract import derive_sequence_number
     extraction.transaction.sequence_number = derive_sequence_number(extraction)
@@ -977,11 +992,47 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     tamper_comparison = _build_tamper_comparison(
         {f.code for f in findings}, rev, timing, stmt if is_statement else None)
 
+    # 7.5) YZ DEĞERLENDİRİCİ (opsiyonel, additive) — kural motorunun ÜSTÜNE oturur.
+    # Bir tahrifat/uyuşmazlık bulgusu VAR ise ya da kritik alanlar BOŞ/şüpheli ise, dekont bu
+    # katmana eskale edilir: görüntüyü doğrudan inceleyip bulguları YENİDEN yargılar, yanlış
+    # okunan IBAN'ı/boş alanları YENİDEN OKUR, banka-bazlı iyileştirme teşhisi üretir.
+    # KAPALI varsayılan (DEKONT_AI_ADJUDICATOR=1 + ANTHROPIC_API_KEY gerekir) → mevcut API davranışı
+    # ve anahtarları DEĞİŞMEZ; yalnız yeni 'yapay_zeka_degerlendirmesi' alanı eklenir.
+    ai_adjudication = None
+    try:
+        import ai_adjudicator as _aj
+        if _aj.is_enabled():
+            _ex_dict = extraction.as_dict()
+            _find_dicts = [{"code": f.code, "severity": f.severity, "weight": f.weight, "tr": f.tr}
+                           for f in findings]
+            _go, _reasons = _aj.should_adjudicate(_find_dicts, _ex_dict, input_kind)
+            if _go:
+                import authenticity as _auth_aj
+                ai_adjudication = _aj.adjudicate(
+                    _ex_dict, _find_dicts, _auth_aj.bank_key(ex.bank),
+                    pil_image=locals().get("pil"), input_kind=input_kind,
+                    text_source=extraction.text_source)
+                if ai_adjudication is not None:
+                    ai_adjudication["tetik_nedenleri"] = _reasons
+                    # ÖĞREN: YZ'nin doğruladığı banka-bazlı etiket ipuçlarını kalıcı store'a yaz
+                    # → sonraki dekontlarda otomatik uygulanır (kod değişmeden 'öğren-uygula').
+                    if use_store:
+                        try:
+                            _learned = _aj.learn_from(ai_adjudication, _auth_aj.bank_key(ex.bank))
+                            if _learned:
+                                ai_adjudication["ogrenilen_ipuclari"] = [
+                                    {"field": f, "label": l} for f, l in _learned]
+                        except Exception:
+                            pass
+    except Exception as _e:
+        ai_adjudication = None
+
     # 8) Rapor derle
     lang_findings = [f.as_dict("tr") for f in findings]
     lang_findings_en = [f.as_dict("en") for f in findings]
 
     report = {
+        "yapay_zeka_degerlendirmesi": ai_adjudication,
         "engine_version": ENGINE_VERSION,
         "analyzed_at": _dt.datetime.utcnow().isoformat() + "Z",
         "elapsed_ms": int((time.time() - t0) * 1000),

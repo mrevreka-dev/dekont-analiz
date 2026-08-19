@@ -74,6 +74,13 @@ def _connect():
         amount REAL, txn_date TEXT, codes TEXT, created_at TEXT )""")
     con.execute("CREATE INDEX IF NOT EXISTS idx_an_bankseq ON analyses(bank, seq_number)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_an_fake ON analyses(is_fake)")
+    # ÖĞRENME: YZ değerlendiricisi bir alanı (ör. blank kalan alıcı adı) belgede HANGİ ETİKETİN
+    # yanında bulduğunu bildirdikçe, bunu banka-bazlı öğrenilmiş İPUCU olarak biriktiririz. Sonraki
+    # dekontlarda BLANK kritik alanlar bu ipuçlarıyla otomatik doldurulur (kod değişmeden 'öğren-uygula').
+    con.execute("""CREATE TABLE IF NOT EXISTS field_hints (
+        bank TEXT, field TEXT, label TEXT,
+        hits INTEGER DEFAULT 1, last_at TEXT,
+        PRIMARY KEY (bank, field, label) )""")
     con.commit()
     _maybe_unblock(con)
     return con
@@ -130,6 +137,55 @@ def _fields(report: dict) -> dict:
         "rail": tx.get("rail") or "",
         "qr_found": 1 if (report.get("qr", {}) or {}).get("found") else 0,
     }
+
+
+def record_field_hint(bank: str, field: str, label: str) -> bool:
+    """YZ değerlendiricisinin doğruladığı 'bu bankada <field> alanı <label> etiketinin yanındadır'
+    ipucunu kalıcı olarak biriktirir (hit sayacı artar). 'Öğren' adımı."""
+    bank = (bank or "").strip().lower()
+    field = (field or "").strip()
+    label = re.sub(r"\s+", " ", (label or "")).strip()
+    if not bank or not field or not label or len(label) > 60:
+        return False
+    if not enabled():
+        return False
+    try:
+        con = _connect()
+        try:
+            con.execute(
+                "INSERT INTO field_hints (bank, field, label, hits, last_at) VALUES (?,?,?,1,?) "
+                "ON CONFLICT(bank, field, label) DO UPDATE SET hits=hits+1, last_at=excluded.last_at",
+                (bank, field, label, _dt.datetime.utcnow().isoformat()))
+            con.commit()
+        finally:
+            con.close()
+        return True
+    except Exception:
+        return False
+
+
+def learned_field_hints(bank: str) -> dict:
+    """Bir banka için öğrenilmiş {field: [label,...]} ipuçlarını (güven=hit sırasına göre) döndürür.
+    'Uygula' adımı bu ipuçlarını BLANK kritik alanları doldurmak için kullanır."""
+    bank = (bank or "").strip().lower()
+    if not bank or not enabled():
+        return {}
+    out: dict = {}
+    try:
+        con = _connect()
+        try:
+            rows = con.execute(
+                "SELECT field, label FROM field_hints WHERE bank=? ORDER BY hits DESC, last_at DESC",
+                (bank,)).fetchall()
+        finally:
+            con.close()
+        for field, label in rows:
+            out.setdefault(field, [])
+            if label not in out[field]:
+                out[field].append(label)
+    except Exception:
+        return {}
+    return out
 
 
 def learned_rail_fees(bank_display: str) -> dict:

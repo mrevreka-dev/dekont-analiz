@@ -172,6 +172,62 @@ _RECEIPT_KEYWORDS = [
 ]
 
 
+def apply_learned_field_hints(ex: "Extraction", hints: dict, text: str = "") -> list:
+    """ÖĞREN-UYGULA (kod değişmeden): store'da bir banka için öğrenilmiş {field: [label,...]}
+    ipuçlarını kullanarak SADECE BLANK kalan kritik alanları belgeden doldurur. Güvenli:
+    yalnız boş alanlar doldurulur; IBAN yalnız mod-97 GEÇERLİYSE yazılır; isim temizlenir.
+    Döndürür: dolduran alanların listesi."""
+    text = text or ex.raw_text or ""
+    if not hints or not text:
+        return []
+    filled = []
+
+    def _read(labels, kind):
+        for lab in labels:
+            v = _find_label(text, [lab])
+            if not v:
+                m = re.search(re.escape(_norm_tr(lab)) + r"\s+([^\n]{2,60})", _norm_tr(text))
+                if m:
+                    v = text[m.start(1):m.end(1)].strip()
+                    v = re.split(r"\s{2,}", v)[0].strip()
+            if not v:
+                continue
+            if kind == "iban":
+                mi = IBAN_RE.search(v) or IBAN_RE.search(text[text.find(v):text.find(v) + 60] if v in text else "")
+                if mi:
+                    n = banks.normalize_iban(mi.group(0))
+                    if banks.iban_valid(n) is True:
+                        return n
+            elif kind == "amount":
+                mm = re.search(r"[0-9][0-9.]*,[0-9]{2}", v)
+                if mm:
+                    return parse_amount(mm.group(0))
+            else:  # name
+                nm = _clean_name(v)
+                if nm and len(nm) >= 2:
+                    return nm
+        return None
+
+    targets = {
+        "sender.name": (ex.sender, "name", "name"),
+        "receiver.name": (ex.receiver, "name", "name"),
+        "sender.iban": (ex.sender, "iban", "iban"),
+        "receiver.iban": (ex.receiver, "iban", "iban"),
+        "amount.value": (ex.amount, "value", "amount"),
+    }
+    for field, labels in hints.items():
+        t = targets.get(field)
+        if not t:
+            continue
+        obj, attr, kind = t
+        if getattr(obj, attr, None) in (None, "", 0):
+            val = _read(labels, kind)
+            if val not in (None, ""):
+                setattr(obj, attr, val)
+                filled.append(field)
+    return filled
+
+
 def ocr_recover(ex: "Extraction", text: str) -> None:
     """OCR ile bozulmuş metinden ek bilgi kurtarır (banka kodu, IBAN, sıra no).
     Bulanık fotoğraflarda etiketler bozulsa bile banka kodu/rakam dizileri okunabilir."""
