@@ -271,6 +271,90 @@ async def health():
             "api_key_required": bool(API_KEYS)}
 
 
+@app.get("/api/v1/self_check")
+async def self_check_api():
+    """Motorun ÖZ-DENETİMİ: canlı koda karşı tüm değişmez (invariant) testlerini çalıştırır.
+    all_ok=false ise bir iyileştirme ezilmiş demektir. Zamanlanmış görev bunu periyodik yoklar."""
+    import self_check
+    return self_check.run()
+
+
+@app.get("/gunluk", response_class=HTMLResponse)
+async def gunluk_page():
+    """Geliştirme günlüğü + canlı öz-denetim durumu (web'de görülebilir kayıt defteri)."""
+    import self_check
+    r = self_check.run()
+    return HTMLResponse(_render_gunluk(r))
+
+
+def _render_gunluk(r: dict) -> str:
+    import html as _h
+    ok_all = r["all_ok"]
+    banner_bg = "#0f5132" if ok_all else "#842029"
+    banner_tx = ("TÜM İYİLEŞTİRMELER KORUNUYOR" if ok_all
+                 else "DİKKAT — BİR İYİLEŞTİRME EZİLMİŞ")
+    # Öz-denetim kartları
+    checks_html = ""
+    for c in r["checks"]:
+        badge = "#198754" if c["ok"] else "#dc3545"
+        mark = "GEÇTİ" if c["ok"] else "EZİLMİŞ"
+        detail = f'<div class="det">{_h.escape(str(c["detail"]))}</div>' if not c["ok"] else ""
+        checks_html += (
+            f'<div class="chk"><span class="dot" style="background:{badge}"></span>'
+            f'<span class="cid">#{c["id"]}</span><span class="cn">{_h.escape(c["name"])}</span>'
+            f'<span class="cm" style="color:{badge}">{mark}</span>{detail}</div>')
+    # Geliştirme günlüğü kartları
+    imp_html = ""
+    for it in r["improvements"]:
+        tno = f'#{it["test"]}' if it.get("test") else "—"
+        imp_html += (
+            f'<div class="imp"><div class="imp-h"><span class="tag">{_h.escape(it["id"])}</span>'
+            f'<span class="area">{_h.escape(it["area"])}</span>'
+            f'<span class="date">{_h.escape(it["date"])}</span>'
+            f'<span class="tno">test {tno}</span></div>'
+            f'<div class="row"><b>Bulunan Hata</b><p>{_h.escape(it["bug"])}</p></div>'
+            f'<div class="row"><b>Yapılan Değişiklik</b><p>{_h.escape(it["fix"])}</p></div></div>')
+    rules_html = "".join(f"<li>{_h.escape(x)}</li>" for x in r["invariant_rules"])
+    return f"""<!doctype html><html lang="tr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Geliştirme Günlüğü — dekont-analiz</title>
+<style>
+*{{box-sizing:border-box}}body{{margin:0;background:#0d1117;color:#e6edf3;
+font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5}}
+.wrap{{max-width:960px;margin:0 auto;padding:24px}}
+h1{{font-size:22px;margin:0 0 4px}}.sub{{color:#8b949e;font-size:14px;margin-bottom:20px}}
+.banner{{background:{banner_bg};padding:14px 18px;border-radius:10px;font-weight:700;
+display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}}
+.banner .cnt{{font-weight:400;opacity:.85;font-size:14px}}
+.sec{{margin-top:26px;font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:#8b949e}}
+.chk{{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid #21262d;
+border-radius:8px;margin:6px 0;flex-wrap:wrap;background:#161b22}}
+.dot{{width:10px;height:10px;border-radius:50%;display:inline-block;flex:0 0 auto}}
+.cid{{color:#8b949e;font-variant-numeric:tabular-nums;min-width:26px}}
+.cn{{flex:1;min-width:180px}}.cm{{font-weight:700;font-size:13px}}
+.det{{flex-basis:100%;color:#f0a;font-size:13px;padding-left:20px}}
+.imp{{border:1px solid #21262d;border-radius:10px;padding:14px 16px;margin:10px 0;background:#161b22}}
+.imp-h{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}}
+.tag{{background:#1f6feb;color:#fff;border-radius:6px;padding:1px 9px;font-weight:700;font-size:13px}}
+.area{{font-weight:600}}.date,.tno{{color:#8b949e;font-size:13px}}.tno{{margin-left:auto}}
+.row{{margin:6px 0}}.row b{{display:block;color:#8b949e;font-size:12px;text-transform:uppercase;letter-spacing:.4px}}
+.row p{{margin:2px 0 0}}
+ul{{color:#8b949e;font-size:14px}} a{{color:#58a6ff}}
+.foot{{margin-top:28px;color:#8b949e;font-size:13px}}
+</style></head><body><div class="wrap">
+<h1>Geliştirme Günlüğü &amp; Öz-Denetim</h1>
+<div class="sub">Bulunan Hata → Yapılan Değişiklik · her iyileştirme bir değişmez testiyle korunuyor</div>
+<div class="banner"><span>{banner_tx}</span><span class="cnt">{r['passed']}/{r['total']} test</span></div>
+<div class="sec">Canlı Öz-Denetim (invariant testleri)</div>
+{checks_html}
+<div class="sec">Değişiklik Kayıt Defteri</div>
+{imp_html}
+<div class="sec">Değişmez Kurallar</div>
+<ul>{rules_html}</ul>
+<div class="foot">JSON: <a href="/api/v1/self_check">/api/v1/self_check</a> · Sağlık: <a href="/api/v1/health">/api/v1/health</a></div>
+</div></body></html>"""
+
+
 @app.get("/api/v1/store/stats")
 async def store_stats(x_api_key: str | None = Header(default=None)):
     _check_api_key(x_api_key)
