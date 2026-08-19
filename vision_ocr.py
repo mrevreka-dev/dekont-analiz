@@ -95,7 +95,7 @@ def _img_to_b64_jpeg(pil_img, max_dim: int = 1600) -> tuple[str, str]:
     return base64.b64encode(buf.getvalue()).decode("ascii"), "image/jpeg"
 
 
-def extract_from_image(pil_img, timeout: float = 45.0) -> dict | None:
+def extract_from_image(pil_img, timeout: float = 30.0) -> dict | None:
     """
     Görselden dekont alanlarını vision modeli ile çıkarır.
     Başarılıysa dict, aksi halde None (yapılandırma yok / hata) döndürür.

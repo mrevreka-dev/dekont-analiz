@@ -313,7 +313,17 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     text_source = "digital"
     ocr_candidates = []
     if digital_text_len < 40:
-        ocr_candidates = ocr.ocr_pdf_candidates(pdf_bytes) if ocr.ocr_available() else []
+        # HIZ: doğrudan FOTOĞRAF yüklemesinde ve Vision açıkken tesseract'ı TEK-HIZLI geçişe indir
+        # (doğru okumayı zaten Vision yapar → çok-varyantlı ~9s tesseract boşa gitmesin). Taranmış
+        # PDF'lerde ya da Vision kapalıyken tam (çok-varyantlı) OCR korunur (kalite düşmez).
+        _fast_ocr = (input_kind == "image")
+        if _fast_ocr:
+            try:
+                import vision_ocr as _vo_fast
+                _fast_ocr = _vo_fast.is_configured()
+            except Exception:
+                _fast_ocr = False
+        ocr_candidates = ocr.ocr_pdf_candidates(pdf_bytes, fast=_fast_ocr) if ocr.ocr_available() else []
         if ocr_candidates:
             text_layout = text_read = max(ocr_candidates, key=len)
             text_source = "ocr"

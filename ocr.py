@@ -131,30 +131,33 @@ def _trim_to_ink(gray):
     return gray[y0:y1, x0:x1]
 
 
-def _variants(gray):
-    """OCR için ön-işlenmiş varyant(lar) üretir. HIZ için sadeleştirildi: en yavaş adım olan
-    fastNlMeansDenoising kaldırıldı; 2 varyant (keskin + Otsu) yeterli, bulanık fotoğrafların
-    zaten Vision'a yükseldiği için Tesseract'ın hızlı olması önceliklidir."""
+def _variants(gray, fast: bool = False):
+    """OCR için ön-işlenmiş varyant(lar) üretir. fast=True (fotoğraf + Vision açık): TEK varyant
+    ve daha düşük çözünürlük → tesseract süresi ~yarıya iner; doğru okumayı zaten Vision yapar."""
     import cv2, numpy as np
     h, w = gray.shape
-    scale = max(1.0, 1600.0 / max(h, w))       # 2000 yerine 1600 (daha hızlı, yeterli çözünürlük)
+    _target = 1200.0 if fast else 1600.0        # fast'ta daha küçük → daha hızlı
+    scale = max(1.0, _target / max(h, w))
     if scale > 1.01:
         gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-    out = []
-    # A: bilateral + CLAHE(3.0) + GÜÇLÜ unsharp — bulanık telefon fotoları için
+    # A: bilateral + CLAHE + unsharp
     g = cv2.bilateralFilter(gray, 9, 40, 40)
     g = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(g)
     blur = cv2.GaussianBlur(g, (0, 0), 3)
     sharp = cv2.addWeighted(g, 2.2, blur, -1.2, 0)
-    out.append(sharp)
-    # B: Otsu ikili (keskin varyanttan) — net belgeler için
+    if fast:
+        # Tek varyant: Otsu ikili (tesseract için genelde en iyi) — tek geçiş
+        _, otsu = cv2.threshold(sharp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return [otsu]
+    out = [sharp]
     _, otsu = cv2.threshold(sharp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     out.append(otsu)
     return out
 
 
-def ocr_image_candidates(img: Image.Image, lang: str | None = None) -> list[str]:
-    """Bir görselden birden çok ön-işleme varyantı ile OCR metinleri (aday liste)."""
+def ocr_image_candidates(img: Image.Image, lang: str | None = None, fast: bool = False) -> list[str]:
+    """Bir görselden ön-işleme varyant(lar)ı ile OCR metinleri (aday liste).
+    fast=True: tek varyant/düşük çözünürlük (fotoğraf + Vision açıkken hız için)."""
     if not _HAS_TESS:
         return []
     import pytesseract
@@ -166,7 +169,7 @@ def ocr_image_candidates(img: Image.Image, lang: str | None = None) -> list[str]
             x, y, w, h = region
             gray = gray[y:y+h, x:x+w]
         gray = _trim_to_ink(gray)      # beyaz kenarları at, metne odakla
-        variants = _variants(gray)
+        variants = _variants(gray, fast=fast)
     except Exception:
         # CV başarısızsa basit yol
         w, h = img.size
@@ -194,12 +197,13 @@ def ocr_image(img: Image.Image, lang: str | None = None) -> str:
     return max(cands, key=len) if cands else ""
 
 
-def ocr_pdf_candidates(pdf_bytes: bytes, page_index: int = 0) -> list[str]:
-    """Sayfayı ve gömülü görselleri OCR'layıp tüm aday metinleri döndürür."""
+def ocr_pdf_candidates(pdf_bytes: bytes, page_index: int = 0, fast: bool = False) -> list[str]:
+    """Sayfayı ve gömülü görselleri OCR'layıp tüm aday metinleri döndürür.
+    fast=True: düşük render ölçeği + tek OCR varyantı (fotoğraf + Vision açıkken hız için)."""
     cands = []
     try:
-        img = render_page_to_image(pdf_bytes, page_index, scale=2.0)   # HIZ: 3.0 yerine 2.0
-        cands += ocr_image_candidates(img)
+        img = render_page_to_image(pdf_bytes, page_index, scale=(1.5 if fast else 2.0))
+        cands += ocr_image_candidates(img, fast=fast)
     except Exception:
         pass
     # HIZ: gömülü görsel OCR'ı yalnızca sayfa render'ı hiç metin vermediyse dene (nadir durum);
