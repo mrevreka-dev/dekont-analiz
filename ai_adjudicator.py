@@ -81,8 +81,9 @@ def should_adjudicate(findings: list, extraction: dict, input_kind: str = "pdf")
     sev = {(f.get("code")): f.get("severity") for f in (findings or [])}
     if any(s in ("high", "critical") for s in sev.values()):
         reasons.append("Yüksek/kritik önem taşıyan bir bulgu var.")
-    # Yalnız EN KRİTİK alanlar boşsa (alıcı adı/IBAN, tutar) — düşük öncelikli boşluklar tetiklemez.
-    _core = [f for f in ("receiver.name", "receiver.iban", "amount.value")
+    # Yalnız EN KRİTİK alanlar boşsa (gönderen/alıcı adı, alıcı IBAN, tutar) — düşük öncelikli
+    # boşluklar tetiklemez. Gönderen adı boşsa YZ görüntüden okuyup doldurur.
+    _core = [f for f in ("sender.name", "receiver.name", "receiver.iban", "amount.value")
              if not _get(extraction or {}, f)]
     if _core:
         reasons.append("Kritik alan boş: " + ", ".join(_core))

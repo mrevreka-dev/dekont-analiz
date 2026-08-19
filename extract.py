@@ -1804,28 +1804,55 @@ def _vk_strip(s: str) -> str:
     return " ".join(s.split())
 
 
+# VakıfBank isim alanına yanlışlıkla sızabilecek etiket/durak kelimeler.
+_VK_NAME_STOP = {"FİŞ NO", "FIS NO", "İŞLEM NO", "ISLEM NO", "IBAN", "HESAP NO", "SORGU NO",
+                 "TUTAR", "MASRAF", "MASRAF TUTARI", "İŞLEM TUTARI", "BANKA", "ALICI BANKA",
+                 "ŞUBE", "SUBE", "VKN", "TCKN", "UNVAN", "AD SOYAD", "İŞLEM AÇIKLAMASI"}
+
+
+def _vk_valid_name(c: str) -> bool:
+    """Aday bir kişi/kurum adı olarak geçerli mi (etiket/durak-kelime değil)."""
+    if not c:
+        return False
+    cu = c.strip().upper()
+    if cu in _VK_NAME_STOP or len(cu) < 3 or len(cu) > 60:
+        return False
+    if any(cu == s or cu.startswith(s + " ") for s in _VK_NAME_STOP):
+        return False
+    # en az iki harften oluşan bir sözcük içermeli, rakamla başlamamalı
+    letters = re.findall(r"[A-ZÇĞİÖŞÜ]{2,}", cu)
+    return bool(letters) and not cu[0].isdigit()
+
+
 def _vakif_names(text: str):
-    """VakıfBank çok sütunlu düzeninden (gönderici, alıcı) isimlerini çıkarır."""
+    """VakıfBank çok sütunlu düzeninden (gönderici, alıcı) isimlerini çıkarır.
+    KRİTİK: 'GÖNDEREN AD SOYAD/UNVAN  MEHMET ERGİN  ALICI AD SOYAD/UNVAN  OGÜN YAŞAR' gibi
+    AYNI SATIRDA iki sütun olur. Gönderen adı, GÖNDEREN etiketiyle ALICI etiketi ARASINDAKİ
+    metindir. Eski yöntem gerçek ismi atlayıp sonraki satırdaki 'FİŞ NO'yu isim sanıyordu."""
     sender = receiver = ""
-    # 1) Aynı satırda 'X ALICI AD SOYAD/UNVAN Y' kalıbı
-    m = re.search(r"(.*?)ALICI AD SOYAD/UNVAN(.*)", text)
-    if m:
-        left = _vk_strip(m.group(1).splitlines()[-1] if m.group(1) else "")
-        right = _vk_strip(m.group(2).splitlines()[0] if m.group(2) else "")
-        if _NAME_RE.match(right.upper()) and len(right) >= 4:
-            receiver = right
-        if _NAME_RE.match(left.upper()) and len(left) >= 4:
-            sender = left
-    # 2) GÖNDEREN etiketinden sonra gelen isim
-    if not sender:
-        gm = re.search(r"GÖNDEREN AD SOYAD ?/?|GONDEREN AD SOYAD ?/?|GONDEREN AD|GÖNDEREN AD", text)
-        if gm:
-            tail = text[gm.end():]
-            for ln in tail.splitlines():
-                cand = _vk_strip(ln)
-                if _NAME_RE.match(cand.upper()) and len(cand) >= 5:
-                    sender = cand
-                    break
+    # Gönderen: 'GÖNDEREN AD SOYAD / UNVAN <ad>' → 2+ boşluk / 'ALICI' / satır sonuna kadar
+    ms = re.search(r"G[ÖO]NDEREN\s*AD\s*SOYAD\s*/?\s*[ÜUÜu]?NVAN\s*[:：]?\s*(.+?)"
+                   r"(?:\s{2,}|\s+ALICI\b|\n|$)", text, re.I)
+    if ms:
+        c = _clean_name(ms.group(1))
+        if _vk_valid_name(c):
+            sender = c
+    # Alıcı: 'ALICI AD SOYAD/UNVAN <ad>'
+    mr = re.search(r"ALICI\s*AD\s*SOYAD\s*/?\s*[ÜUÜu]?NVAN\s*[:：]?\s*(.+?)(?:\s{2,}|\n|$)", text, re.I)
+    if mr:
+        c = _clean_name(mr.group(1))
+        if _vk_valid_name(c):
+            receiver = c
+    # Yedek (eski satır-tabanlı yöntem) — yalnız yukarıdakiler boşsa, ve durak-kelimeleri reddet
+    if not sender or not receiver:
+        m = re.search(r"(.*?)ALICI AD SOYAD/UNVAN(.*)", text)
+        if m:
+            left = _vk_strip(m.group(1).splitlines()[-1] if m.group(1) else "")
+            right = _vk_strip(m.group(2).splitlines()[0] if m.group(2) else "")
+            if not receiver and _vk_valid_name(right) and _NAME_RE.match(right.upper()):
+                receiver = right
+            if not sender and _vk_valid_name(left) and _NAME_RE.match(left.upper()):
+                sender = left
     return sender, receiver
 
 
