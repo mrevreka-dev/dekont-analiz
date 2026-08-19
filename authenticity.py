@@ -727,6 +727,97 @@ def detect_transfer_rail(text: str) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+#  KANAL (RAIL) SINIFLANDIRMA — EFT / FAST / HAVALE'yi katmanlı kanıtla belirler
+#  KULLANICI KURALI (Akbank): Dekont başlığı "EFT BANKALAR ARASI HESABA HAVALE"
+#  hem EFT hem FAST için kullanılan GENEL bir şablondur; tek başına EFT≠FAST ayrımı
+#  YAPMAZ. Ama ÜCRET KALEMİNDE "GEÇ EFT / GECEFT / EFT KOMİSYON / EFT BSMV" ibaresi
+#  geçiyorsa işlem KESİN olarak EFT'dir (FAST DEĞİL). Bu, özgünlükten AYRI bir tespittir.
+# ---------------------------------------------------------------------------
+# EFT'yi kesinleştiren ücret-kalem/etiket işaretleri (İ-güvenli, boşluk-duyarsız):
+_EFT_FEE_MARKERS = ("geceft", "geceeft", "gecefteft", "eftkomisyon", "eftbsmv",
+                    "eftucreti", "eftmasraf", "eftvergi", "dekont/eft", "eft+vergi")
+# FAST'ı kesinleştiren işaretler:
+_FAST_FEE_MARKERS = ("fastucreti", "fastkomisyon", "fastbsmv", "gidenfast", "gelenfast",
+                     "fastislemi", "fast+vergi", "dekont/fast")
+
+
+def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
+                  bkey: str = "", amount=None, fee=None) -> dict | None:
+    """İşlem kanalını (EFT/FAST/HAVALE) KATMANLI kanıtla sınıflandırır ve
+    denetlenebilir bir kanıt nesnesi döndürür:
+       {rail, confidence(0-100), evidence[], notice_tr, notice_en}
+    Karar veremezse (belirsiz) rail='belirsiz' döner. Özgünlükten bağımsızdır —
+    yalnızca 'bu işlem hangi kanaldan gitti' sorusunu yanıtlar."""
+    if not text:
+        return None
+    import banks as _b
+    n = _tr_low(text)
+    ns = n.replace(" ", "")
+    ev = []
+
+    # Katman 2 — aynı banka mı? (IBAN banka kodları)
+    sc = _b.iban_bank_code(_b.normalize_iban(sender_iban or "")) if sender_iban else ""
+    rc = _b.iban_bank_code(_b.normalize_iban(receiver_iban or "")) if receiver_iban else ""
+    same_bank = bool(sc and rc and sc == rc)
+    interbank = bool(sc and rc and sc != rc)
+
+    # Katman 1 — doğrudan etiket (birincil, kesin)
+    eft_label = any(m in ns for m in _EFT_FEE_MARKERS)
+    fast_label = any(m in ns for m in _FAST_FEE_MARKERS) or bool(re.search(r"(?<![a-z])fast(?![a-z])", n))
+    interbank_title = ("bankalararasi" in ns and "eft" in ns)  # Akbank GENEL başlığı
+
+    rail, conf = "belirsiz", 0
+    if same_bank and not eft_label and not fast_label:
+        rail, conf = "havale", 90
+        ev.append("Gönderici ve alıcı IBAN aynı bankaya ait → banka-içi HAVALE.")
+    elif fast_label and not eft_label:
+        rail, conf = "fast", 92
+        ev.append("Dekontta açık FAST ibaresi (FAST ücreti/kalemi) geçiyor.")
+    elif eft_label and not fast_label:
+        rail, conf = "eft", 95
+        ev.append("Ücret kaleminde 'GEÇ EFT / EFT' ibaresi geçiyor → kesin EFT göstergesi.")
+        if interbank:
+            ev.append("IBAN'lar farklı bankalara ait (bankalararası) — EFT ile tutarlı.")
+    elif eft_label and fast_label:
+        rail, conf = "belirsiz", 40
+        ev.append("Hem EFT hem FAST ibaresi geçiyor — çelişki; teyit gerek.")
+    elif interbank:
+        # Bankalararası ama açık kanal etiketi yok (Akbank'ın GENEL 'EFT BANKALAR ARASI'
+        # başlığı EFT/FAST ayrımı yapmaz). Kanal belirsiz — banka teyidi önerilir.
+        rail, conf = "belirsiz", 30
+        ev.append("Bankalararası bir transfer ama ücret kaleminde açık EFT/FAST etiketi yok; "
+                  "başlık genel olduğundan kanal (EFT mi FAST mı) kesinleşmiyor.")
+    else:
+        return None
+
+    _RL = {"eft": "EFT", "fast": "FAST", "havale": "HAVALE", "belirsiz": "BELİRSİZ"}[rail]
+    if rail == "eft":
+        notice_tr = ("İŞLEM KANALI: Bu işlem bir **EFT** işlemidir — **FAST DEĞİLDİR**. Dekontun ücret "
+                     "kaleminde 'GEÇ EFT / EFT' ibaresi geçiyor; bu, Akbank'ta EFT kanalının KESİN "
+                     "göstergesidir (başlıktaki 'EFT BANKALAR ARASI HESABA HAVALE' ifadesi hem EFT hem "
+                     "FAST için kullanılan genel bir şablondur, tek başına ayırt etmez). NOT: Bu tespit, "
+                     "dekontun sahte olup olmadığından AYRIDIR; kanal sınıflandırmasıdır.")
+        notice_en = ("TRANSFER RAIL: This is an **EFT** transaction — **NOT FAST**. The fee line carries the "
+                     "'GEÇ EFT / EFT' marker, a definitive EFT indicator for Akbank (the title 'EFT BANKALAR "
+                     "ARASI HESABA HAVALE' is a generic template used for both EFT and FAST). NOTE: this is a "
+                     "rail classification, separate from authenticity.")
+    elif rail == "fast":
+        notice_tr = ("İŞLEM KANALI: Bu işlem bir **FAST** işlemidir (dekontta açık FAST ibaresi var).")
+        notice_en = ("TRANSFER RAIL: This is a **FAST** transaction (explicit FAST marker present).")
+    elif rail == "havale":
+        notice_tr = ("İŞLEM KANALI: Bu işlem banka-içi **HAVALE**'dir (gönderici ve alıcı aynı bankada).")
+        notice_en = ("TRANSFER RAIL: Intra-bank **HAVALE** (sender and receiver at the same bank).")
+    else:
+        notice_tr = ("İŞLEM KANALI BELİRSİZ: Dekontta açık EFT/FAST ücret etiketi bulunamadı; başlık genel "
+                     "olduğundan kanal kesinleşmiyor. Kesinlik için işlem/sıra numarası ile banka teyidi gerekir.")
+        notice_en = ("RAIL UNDETERMINED: no explicit EFT/FAST fee marker found; the title is generic. Confirm "
+                     "the rail via the transaction number with the bank.")
+
+    return {"rail": rail, "confidence": conf, "evidence": ev,
+            "notice_tr": notice_tr, "notice_en": notice_en}
+
+
 def check_fast_limit(text: str, amount, learned_max=None) -> dict | None:
     """FAST işlem-başına üst limiti. SABİT sayı yerine VERİ-ODAKLI çalışır:
       etkin_limit = max(regülasyon tabanı, elimizdeki GERÇEK FAST dekontlarının en yüksek tutarı)

@@ -773,6 +773,21 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _fl:
                 findings.append(Finding(_fl["code"], _fl["severity"], "content", _fl["weight"],
                                         tr=_fl["tr"], en=_fl["en"], detail=_fl.get("detail", "")))
+            # KANAL (RAIL) SINIFLANDIRMA — EFT / FAST / HAVALE (özgünlükten AYRI bir tespit).
+            # KULLANICI KURALI: ücret kaleminde 'GEÇ EFT / EFT' ibaresi geçiyorsa işlem KESİN EFT'dir
+            # (FAST DEĞİL); Akbank'ın 'EFT BANKALAR ARASI HESABA HAVALE' başlığı genel şablondur, ayırt
+            # etmez. Net bir BİLGİ bildirimi olarak verilir (puanı düşürmez, weight=0).
+            try:
+                _rl = _auth.classify_rail(text_layout, ex.sender.iban, ex.receiver.iban,
+                                          _bkey, ex.amount.value, ex.amount.fee)
+            except Exception:
+                _rl = None
+            if _rl and _rl.get("rail") in ("eft", "fast", "havale"):
+                _rlcode = {"eft": "RAIL_IS_EFT", "fast": "RAIL_IS_FAST", "havale": "RAIL_IS_HAVALE"}[_rl["rail"]]
+                findings.append(Finding(
+                    _rlcode, "info", "content", 0,
+                    tr=_rl["notice_tr"], en=_rl["notice_en"],
+                    detail=f"rail={_rl['rail']} conf={_rl['confidence']} evidence={' | '.join(_rl.get('evidence', []))}"))
             # Beklenen QR eksik: bu bankanın gerçek dekontlarında hep QR varken bu belgede yoksa
             # (veri-öğrenmeli, sıfır-FP: yalnızca >=5 gerçek dekontta %100 QR varsa tetiklenir)
             try:
