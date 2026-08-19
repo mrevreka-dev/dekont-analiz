@@ -396,41 +396,207 @@ async def video_web(file: UploadFile = File(...)):
             os.unlink(tmp.name)
         except Exception:
             pass
-    _rows = "".join(
-        f"<li><b>{s['code']}</b> <span style='color:#888'>[{s['severity']}]</span><br>{s.get('tr','')}</li>"
-        for s in r.get("signals", []))
-    _color = {"kritik": "#c0392b", "yüksek": "#e67e22", "orta": "#f1c40f", "düşük": "#27ae60"}.get(r.get("risk"), "#555")
-    html = (f"<html><head><meta charset='utf-8'><title>Video Analizi</title>"
-            f"<style>body{{font-family:system-ui;max-width:820px;margin:32px auto;padding:0 16px}}"
-            f"li{{margin:10px 0;line-height:1.5}}code{{background:#f4f4f4;padding:2px 5px;border-radius:4px}}</style></head><body>"
-            f"<h2>Video Adli Analizi</h2>"
-            f"<div style='font-size:40px;font-weight:700;color:{_color}'>{r.get('score')}/100 "
-            f"<span style='font-size:20px'>· {r.get('risk','').upper()}</span></div>"
-            f"<p>{r.get('verdict_tr','')}</p>"
-            f"<p><b>Süre:</b> {r.get('duration_sec')} sn · <b>creation_time:</b> "
-            f"{r.get('container',{}).get('creation_time_present')} · <b>encoder:</b> "
-            f"<code>{r.get('container',{}).get('encoder_text','')[:90]}</code></p>"
-            f"<p><b>Encoding:</b> {r.get('encoding',{}).get('codec')} "
-            f"{r.get('encoding',{}).get('width')}x{r.get('encoding',{}).get('height')} · "
-            f"ffmpeg={r.get('encoding',{}).get('ffmpeg_encode')} · editor={r.get('encoding',{}).get('editor_hits')} · "
-            f"ai={r.get('encoding',{}).get('ai_hits')}</p>"
-            f"<p><b>Kareler ({r.get('frames',{}).get('sampled')}):</b> moiré {r.get('frames',{}).get('moire_max')} · "
-            f"yeniden-çekim {r.get('frames',{}).get('recapture_suspected')} · "
-            f"lokal-düzenleme {r.get('frames',{}).get('ela_hotspot_concentrated')}</p>"
-            f"<h3>Sinyaller</h3><ul>{_rows or '<li>Belirgin sinyal yok.</li>'}</ul>"
-            f"<p><a href='/video'>← Yeni analiz</a></p></body></html>")
-    return HTMLResponse(html)
+    return HTMLResponse(_render_video_report(r))
 
 
-_VIDEO_HTML = """<html><head><meta charset='utf-8'><title>Video Analizi</title>
-<style>body{font-family:system-ui;max-width:640px;margin:48px auto;padding:0 16px}
-.box{border:2px dashed #bbb;border-radius:12px;padding:32px;text-align:center}
-button{background:#5b3df5;color:#fff;border:0;padding:12px 22px;border-radius:8px;font-size:16px;cursor:pointer;margin-top:14px}</style>
-</head><body><h2>Video Adli Analizi</h2>
-<p>Sahte / düzenlenmiş / yeniden-kodlanmış / yapay-zeka üretimi video tespiti.</p>
-<form class='box' action='/video' method='post' enctype='multipart/form-data'>
-<input type='file' name='file' accept='video/*' required><br>
-<button type='submit'>Analiz Et</button></form></body></html>"""
+_VIDEO_CSS = """<style>
+:root{--brand:#5b3df5;--brand-d:#4a30d0;--ink:#0f172a;--muted:#64748b;--line:#e6e8ef;--bg:#f5f6fb;--card:#fff}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,system-ui,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+a{color:var(--brand)}
+.topbar{background:#fff;border-bottom:1px solid var(--line)}
+.topbar .in{max-width:940px;margin:0 auto;padding:14px 20px;display:flex;align-items:center;gap:11px}
+.logo{width:32px;height:32px;border-radius:9px;background:var(--brand);color:#fff;display:grid;place-items:center;font-weight:800;font-size:17px;box-shadow:0 4px 12px rgba(91,61,245,.28)}
+.brand{font-weight:700;font-size:16px}
+.brand small{display:block;font-weight:500;font-size:11px;color:var(--muted);margin-top:1px}
+.wrap{max-width:940px;margin:0 auto;padding:24px 20px 48px}
+.hero{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:26px;display:flex;gap:28px;align-items:center;flex-wrap:wrap;box-shadow:0 1px 3px rgba(15,23,42,.04)}
+.ring{width:140px;height:140px;border-radius:50%;background:conic-gradient(var(--rc) calc(var(--rv)*1deg),#eceef4 0);display:grid;place-items:center;flex:0 0 auto}
+.ring .core{width:110px;height:110px;border-radius:50%;background:#fff;display:grid;place-items:center;text-align:center;box-shadow:inset 0 0 0 1px #eceef4}
+.ring .sc{font-size:34px;font-weight:800;line-height:1;color:var(--ink)}
+.ring .sc span{font-size:13px;color:var(--muted);font-weight:600}
+.hero-main{flex:1 1 340px;min-width:280px}
+.badge{display:inline-block;padding:6px 14px;border-radius:999px;font-weight:800;font-size:12px;letter-spacing:.05em;color:#fff}
+.h-title{font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:0 0 10px}
+.verdict{margin:13px 0 0;color:#334155;line-height:1.6;font-size:15px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:12px;margin-top:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.card .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700}
+.card .v{font-size:17px;font-weight:700;margin-top:5px;color:var(--ink)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;line-height:1}
+.chip.ok{background:#dcfce7;color:#15803d}.chip.warn{background:#fef3c7;color:#b45309}.chip.bad{background:#fee2e2;color:#b91c1c}.chip.neu{background:#eef1f6;color:#475569}.chip.info{background:#e0edff;color:#1d4ed8}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:#475569;background:#f1f4f9;border:1px solid var(--line);padding:9px 11px;border-radius:9px;word-break:break-all;margin-top:8px;line-height:1.5}
+.sec{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:26px 0 12px}
+.sig{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--sc,#94a3b8);border-radius:12px;padding:15px 17px;margin-bottom:11px}
+.sig .top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.sig .code{font-weight:800;font-size:14px;letter-spacing:.02em}
+.sig .desc{color:#475569;line-height:1.6;margin-top:8px;font-size:14px}
+.empty{background:#dcfce7;border:1px solid #bbf7d0;color:#166534;border-radius:12px;padding:15px 17px;font-weight:600}
+.btn{display:inline-flex;align-items:center;gap:8px;background:var(--brand);color:#fff;border:0;padding:12px 22px;border-radius:11px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none;box-shadow:0 6px 16px rgba(91,61,245,.26)}
+.btn:hover{background:var(--brand-d)}
+.foot{color:var(--muted);font-size:12px;margin-top:22px;line-height:1.55}
+.drop{display:block;background:var(--card);border:2px dashed #cdd3e3;border-radius:18px;padding:40px 28px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s}
+.drop input[type=file]{display:block;margin:0 auto}
+.drop:hover{border-color:var(--brand);background:#fbfaff}
+.drop .ic{width:52px;height:52px;margin:0 auto 12px;color:var(--brand)}
+.drop h3{margin:0 0 6px;font-size:18px}
+.drop .sub{color:var(--muted);font-size:13px;margin-bottom:18px}
+.file{font-size:14px}
+</style>"""
+
+_VIDEO_HTML = """<!DOCTYPE html><html lang='tr'><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Video Adli Analizi</title>""" + _VIDEO_CSS + """</head><body>
+<header class='topbar'><div class='in'>
+  <div class='logo'>D</div>
+  <div class='brand'>Dekont Adli Analiz<small>Video doğrulama</small></div>
+</div></header>
+<div class='wrap'>
+  <p class='h-title'>Video Adli Analizi</p>
+  <p style='color:#475569;line-height:1.6;margin:0 0 20px'>Sahte, düzenlenmiş, yeniden-kodlanmış veya yapay zeka ile üretilmiş videoları tespit eder. Videoyu yükleyin; konteyner/encoder imzası, kare örnekleme ve yeniden-çekim analizini otomatik çalıştıralım.</p>
+  <form action='/video' method='post' enctype='multipart/form-data'>
+    <label class='drop' for='vf'>
+      <div class='ic'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m22 8-6 4 6 4V8Z'/><rect x='2' y='6' width='14' height='12' rx='2'/></svg></div>
+      <h3>Video yükleyin</h3>
+      <div class='sub'>MP4, MOV, M4V, WEBM, AVI · en fazla 200 MB</div>
+      <input class='file' type='file' id='vf' name='file' accept='video/*' required>
+    </label>
+    <div style='text-align:center;margin-top:18px'>
+      <button class='btn' type='submit'>
+        <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M14 3v4a1 1 0 0 0 1 1h4'/><path d='M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z'/></svg>
+        Analiz Et
+      </button>
+    </div>
+  </form>
+  <p class='foot'>Dosyanız yalnızca analiz için işlenir, saklanmaz ve üçüncü taraflarla paylaşılmaz. Video analizi olasılıksaldır; tek başına kesin delil değildir.</p>
+</div></body></html>"""
+
+
+# --- Video rapor sayfası (yalnızca SUNUM; API JSON'una / anahtarlarına dokunmaz) ---
+_VRISK = {
+    "kritik":  ("#dc2626", "KRİTİK"),
+    "yüksek":  ("#ea580c", "YÜKSEK"),
+    "orta":    ("#d97706", "ORTA"),
+    "düşük":   ("#16a34a", "DÜŞÜK"),
+}
+_VSEV = {
+    "critical": ("#dc2626", "bad",  "KRİTİK"),
+    "kritik":   ("#dc2626", "bad",  "KRİTİK"),
+    "high":     ("#ea580c", "warn", "YÜKSEK"),
+    "yüksek":   ("#ea580c", "warn", "YÜKSEK"),
+    "medium":   ("#d97706", "warn", "ORTA"),
+    "orta":     ("#d97706", "warn", "ORTA"),
+    "low":      ("#2563eb", "info", "DÜŞÜK"),
+    "düşük":    ("#2563eb", "info", "DÜŞÜK"),
+    "info":     ("#3b82f6", "info", "BİLGİ"),
+    "positive": ("#16a34a", "ok",   "OLUMLU"),
+    "olumlu":   ("#16a34a", "ok",   "OLUMLU"),
+}
+
+
+def _vchip(cls: str, text: str) -> str:
+    import html as _h
+    return f"<span class='chip {cls}'>{_h.escape(str(text))}</span>"
+
+
+def _render_video_report(r: dict) -> str:
+    import html as _h
+    cont = r.get("container", {}) or {}
+    enc = r.get("encoding", {}) or {}
+    frm = r.get("frames", {}) or {}
+    score = r.get("score", 0)
+    try:
+        _sv = max(0, min(100, float(score)))
+    except Exception:
+        _sv = 0
+    rc, rlabel = _VRISK.get(str(r.get("risk", "")).lower(), ("#64748b", str(r.get("risk", "")).upper()))
+    verdict = _h.escape(r.get("verdict_tr", "") or "")
+
+    # Konteyner/encoder bilgi kartları
+    ct = bool(cont.get("creation_time_present"))
+    ct_chip = _vchip("ok", "var") if ct else _vchip("warn", "yok")
+    ffmpeg = bool(enc.get("ffmpeg_encode"))
+    ff_chip = _vchip("warn", "yeniden-kodlanmış") if ffmpeg else _vchip("ok", "ham/orijinal")
+    editors = enc.get("editor_hits") or []
+    ed_chip = _vchip("bad", ", ".join(map(str, editors))) if editors else _vchip("ok", "yok")
+    ais = enc.get("ai_hits") or []
+    ai_chip = _vchip("bad", ", ".join(map(str, ais))) if ais else _vchip("ok", "yok")
+
+    recap = bool(frm.get("recapture_suspected"))
+    recap_chip = _vchip("ok", "evet (olumlu)") if recap else _vchip("neu", "hayır")
+    localedit = bool(frm.get("ela_hotspot_concentrated"))
+    le_chip = _vchip("bad", "evet") if localedit else _vchip("ok", "hayır")
+
+    codec = _h.escape(str(enc.get("codec", "—")))
+    w, hgt = enc.get("width", "?"), enc.get("height", "?")
+    dur = r.get("duration_sec", "—")
+    sampled = frm.get("sampled", "—")
+    moire = frm.get("moire_max", "—")
+
+    # Encoder metni: '[0][0][0][0]' gibi gürültüyü temizle
+    enc_txt = str(cont.get("encoder_text", "") or "")
+    enc_txt = enc_txt.replace("[0][0][0][0]", "").replace("  ", " ").strip() or "—"
+    enc_txt = _h.escape(enc_txt[:160])
+
+    cards = f"""
+      <div class='card'><div class='k'>Süre</div><div class='v'>{_h.escape(str(dur))} sn</div></div>
+      <div class='card'><div class='k'>Çözünürlük</div><div class='v'>{w}×{hgt}</div><div class='chips'>{_vchip('neu', codec)}</div></div>
+      <div class='card'><div class='k'>Oluşturma zamanı</div><div class='chips'>{ct_chip}</div></div>
+      <div class='card'><div class='k'>Kodlama</div><div class='chips'>{ff_chip}</div></div>
+      <div class='card'><div class='k'>Düzenleyici izi</div><div class='chips'>{ed_chip}</div></div>
+      <div class='card'><div class='k'>Yapay zeka izi</div><div class='chips'>{ai_chip}</div></div>
+      <div class='card'><div class='k'>Kare örnekleme</div><div class='v'>{_h.escape(str(sampled))} kare</div><div class='chips'>{_vchip('neu', f'moiré {moire}')}</div></div>
+      <div class='card'><div class='k'>Yeniden-çekim</div><div class='chips'>{recap_chip}</div></div>
+      <div class='card'><div class='k'>Lokal düzenleme</div><div class='chips'>{le_chip}</div></div>
+    """
+
+    sigs = r.get("signals", []) or []
+    if sigs:
+        sig_html = ""
+        for s in sigs:
+            sc, cls, lbl = _VSEV.get(str(s.get("severity", "")).lower(), ("#94a3b8", "neu", str(s.get("severity", "")).upper()))
+            sig_html += (
+                f"<div class='sig' style='--sc:{sc}'>"
+                f"<div class='top'><span class='code'>{_h.escape(str(s.get('code','')))}</span>{_vchip(cls, lbl)}</div>"
+                f"<div class='desc'>{_h.escape(str(s.get('tr','')))}</div></div>"
+            )
+    else:
+        sig_html = "<div class='empty'>Belirgin bir sahtecilik/düzenleme sinyali bulunamadı.</div>"
+
+    return f"""<!DOCTYPE html><html lang='tr'><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Video Adli Analizi — Sonuç</title>{_VIDEO_CSS}</head><body>
+<header class='topbar'><div class='in'>
+  <div class='logo'>D</div>
+  <div class='brand'>Dekont Adli Analiz<small>Video doğrulama</small></div>
+</div></header>
+<div class='wrap'>
+  <p class='h-title'>Video Adli Analizi</p>
+  <div class='hero'>
+    <div class='ring' style='--rc:{rc};--rv:{_sv*3.6:.1f}'>
+      <div class='core'><div class='sc'>{score}<span>/100</span></div></div>
+    </div>
+    <div class='hero-main'>
+      <span class='badge' style='background:{rc}'>{rlabel}</span>
+      <p class='verdict'>{verdict}</p>
+    </div>
+  </div>
+
+  <div class='sec'>Teknik özet</div>
+  <div class='grid'>{cards}</div>
+  {f"<div class='mono'>encoder: {enc_txt}</div>" if enc_txt != "—" else ""}
+
+  <div class='sec'>Sinyaller</div>
+  {sig_html}
+
+  <a class='btn' href='/video' style='margin-top:22px'>
+    <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8'/><path d='M3 3v5h5'/></svg>
+    Yeni analiz
+  </a>
+  <p class='foot'>Video analizi olasılıksaldır; tek başına kesin delil değildir. Kesinlik için orijinal kayıt ve zincir-of-custody bilgisi isteyin.</p>
+</div></body></html>"""
 
 
 @app.post("/api/v1/analyze-url", response_model=AnalyzeResponse,
