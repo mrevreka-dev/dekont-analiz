@@ -975,7 +975,24 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.transaction.ref_no = _find_label(rt, ["İŞLEM REF", "ISLEM REF"])
         ex.transaction.document_no = _find_label(rt, ["BELGE NUMARASI"])
         ex.transaction.ettn = _find_label(rt, ["ETTN"])
-        ex.transaction.type = _find_label(rt, ["DEKONT TİPİ", "MESAJ TÜRÜ"])
+        # İşlem türü (KANAL): YKB 'DEKONT TİPİ' alanına çoğu FAST işleminde de 'EFT' yazar
+        # (genel etiketleme). GERÇEK kanal başlık/tutar kaleminden gelir: 'FAST GÖNDERİMİ' ya da
+        # 'GİDEN/GELEN FAST TUTARI' varsa işlem FAST'tir (DEKONT TİPİ 'EFT' olsa bile).
+        _yk_nlow = _norm_tr(rt)
+        _dtip = _norm_tr(_find_label(rt, ["DEKONT TİPİ"]) or "")
+        if ("giden fast" in _yk_nlow or "gelen fast" in _yk_nlow or "fast gonderimi" in _yk_nlow
+                or "fast tutari" in _yk_nlow):
+            ex.transaction.type = "FAST"
+        elif "hesaptan hesaba havale" in _yk_nlow or "havale" in _dtip:
+            ex.transaction.type = "HAVALE"
+        elif "eft" in _dtip:
+            ex.transaction.type = "EFT"
+        else:
+            ex.transaction.type = _find_label(rt, ["DEKONT TİPİ", "MESAJ TÜRÜ"])
+        # SORGU NO = FAST işlem sorgu/teyit numarası (banka doğrulaması için tanımlayıcı)
+        _sq = _find_label(rt, ["SORGU NO"])
+        if _sq and re.fullmatch(r"[0-9]{5,}", _sq.strip()):
+            ex.transaction.sequence_number = _sq.strip()
         ex.transaction.channel = _clean_name(_after_label(rt, "ÖDEMENİN KAYNAĞI", _YS))
         ex.sender.customer_no = _find_label(rt, ["MÜŞTERİ NO"])
         ex.sender.bank = "Yapı ve Kredi Bankası"
