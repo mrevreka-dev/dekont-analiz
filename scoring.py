@@ -133,6 +133,10 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 10)
     if "AMOUNT_CURRENCY_INCONSISTENT" in codes:  # masraf gerçek şablondaki 'TL' sonekini taşımıyor
         score = min(score, 55)
+    if "REF_FEE_CURRENCY_MISSING" in codes:   # referans: masraf bu bankada hep TL'li olur; burada yok
+        score = min(score, 55)
+    if "REF_ID_LENGTH_MISMATCH" in codes:     # referans: numara hane deseni gerçek şablondan farklı
+        score = min(score, 62)
     if "DATE_IN_FUTURE" in codes:            # işlem/dekont tarihi gelecekte
         score = min(score, 8)
     if "RECEIPT_BEFORE_TXN" in codes:        # dekont, işlemden önce üretilmiş (imkânsız)

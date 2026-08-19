@@ -162,6 +162,14 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
         bank_ctx = _bk.context_for(bank_key)
     except Exception:
         bank_ctx = ""
+    # Referans parmak izi (gerçek PDF korpusundan) — YZ 'gerçek şablon' bağlamıyla kıyaslasın
+    try:
+        import reference_profiles as _rp
+        _rctx = _rp.context_for(bank_key)
+        if _rctx:
+            bank_ctx = (bank_ctx + "\n\n" + _rctx) if bank_ctx else _rctx
+    except Exception:
+        pass
     prompt = _build_prompt(extraction, findings, bank_ctx, input_kind, text_source)
 
     content = []

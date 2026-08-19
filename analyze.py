@@ -809,12 +809,25 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _sbc:
                 findings.append(Finding(_sbc["code"], _sbc["severity"], "content", _sbc["weight"],
                                         tr=_sbc["tr"], en=_sbc["en"], detail=_sbc.get("detail", "")))
-            # PARA BİRİMİ SONEKİ TUTARLILIĞI (gerçek-şablon karşılaştırması): ana tutar TL'li ama
-            # masraf TL'siz ise gerçek şablondan sapma (masraf sonradan eklenmiş/değiştirilmiş olabilir).
-            _acc = _auth.check_amount_currency_consistency(text_layout, _bkey)
-            if _acc:
-                findings.append(Finding(_acc["code"], _acc["severity"], "content", _acc["weight"],
-                                        tr=_acc["tr"], en=_acc["en"], detail=_acc.get("detail", "")))
+            # REFERANS PARMAK-İZİ KIYASI (gerçek PDF korpusundan): gelen dekontu bankanın GERÇEK
+            # şablonuyla kıyaslar — kimlik numarası hane deseni, banka-özel para birimi soneki vb.
+            # sapmalarını işaretler (veri-odaklı; support>=3 özelliklerde).
+            _ref_codes = set()
+            try:
+                import reference_profiles as _refp
+                for _rf in _refp.check_against_reference(_bkey, text_layout):
+                    _ref_codes.add(_rf["code"])
+                    findings.append(Finding(_rf["code"], _rf["severity"], "content", _rf["weight"],
+                                            tr=_rf["tr"], en=_rf["en"], detail=_rf.get("detail", "")))
+            except Exception:
+                pass
+            # PARA BİRİMİ SONEKİ (belge-içi tutarlılık) — yalnız referans profili bunu ZATEN
+            # işaretlemediyse çalışır (profili olmayan bankalar için yedek; çift-bulgu önlenir).
+            if "REF_FEE_CURRENCY_MISSING" not in _ref_codes:
+                _acc = _auth.check_amount_currency_consistency(text_layout, _bkey)
+                if _acc:
+                    findings.append(Finding(_acc["code"], _acc["severity"], "content", _acc["weight"],
+                                            tr=_acc["tr"], en=_acc["en"], detail=_acc.get("detail", "")))
             # KİMLİK ALAN TUTARLILIĞI: 'VKN/Vergi' alanı ↔ 'İşlemi Yapan TCKN' aynı kişide birebir
             # olmalı; farklıysa/biri sağlamayı geçemiyorsa sahtecilik (foto'da sağlama-destekli).
             _idc = _auth.check_id_field_consistency(text_layout, input_kind, extraction.text_source)
