@@ -492,6 +492,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     is_getir = issuer == "getir"
     is_teb = issuer == "teb"
     is_alternatif = issuer == "alternatif"
+    is_deniz = issuer == "deniz"
     is_qnb = issuer == "qnb"
     is_halk = issuer == "halk"
     is_ptt = issuer == "ptt"
@@ -1174,6 +1175,70 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
             ex.transaction.type = "EFT"
         elif "havale" in _itype:
             ex.transaction.type = "HAVALE"
+
+    # =============================================================
+    #  DENİZBANK — 'Dekont' (FAST/EFT/Havale), iki sütunlu ve İKİ-NOKTASIZ düzen
+    #  Etiketler kolonsuz "Etiket  Değer" biçiminde ve iki sütun (Müşteri | İşlem) yan yana:
+    #    'Adı Soyadı SÜHEYL ŞEN   İşlem Türü Giden FAST'
+    #  Bu yüzden genel (kolon bekleyen) çıkarıcı ad/tutar/tür alanlarını kaçırıyordu.
+    #  KRİTİK: Denizbank İHRAÇÇI (=gönderen); alıcı bankası 'Alıcı Banka' alanından/alıcı
+    #  IBAN'ından gelir. Masraf: özet 'Masraf 16,76 TL' (toplam) alınır, 'Masraf : 15,96'
+    #  detay satırı DEĞİL. 'FAST Sorgu Numarası' = işlem sorgu no (banka teyidi için).
+    # =============================================================
+    elif is_deniz:
+        ex.doc_kind = "Dekont"
+        rt = rjoined or joined
+        # Gönderen adı: 'Adı Soyadı <ad>' — sağdaki 'İşlem Türü'ne kadar; 'Alıcı Adı Soyadı' hariç
+        _sn = re.search(r"(?:^|\n)\s*Ad[ıi]\s*Soyad[ıi]\s+(.+?)\s+[İIıi]?[şs]lem\s*T[üu]r", rt, re.I)
+        if not _sn:
+            _sn = re.search(r"(?:^|\n)\s*Ad[ıi]\s*Soyad[ıi]\s+([^\n]+?)\s*$", rt, re.I | re.M)
+        ex.sender.name = _clean_name(_sn.group(1)) if _sn else ""
+        # Gönderen IBAN: satır başı 'IBAN TR..' ('Alıcı IBAN' değil)
+        _sib = re.search(r"(?:^|\n)\s*IBAN\s+(TR[0-9 ]{20,34})", rt, re.I)
+        ex.sender.iban = banks.normalize_iban(_sib.group(1)) if _sib else ""
+        # VKN/TCKN (maskeli: '803063****/1258807****') — TCKN kısmı (/'dan sonra)
+        _sid = re.search(r"VKN\s*/\s*TCKN\s+([0-9*]+)\s*/\s*([0-9*]+)", rt, re.I)
+        if _sid:
+            ex.sender.tckn = _sid.group(2)
+        ex.sender.bank = "DenizBank"
+        _ch = re.search(r"[İIıi]?[şs]lem\s*Yap[ıi]lan\s*Kanal\s+([^\n]+)", rt, re.I)
+        ex.transaction.channel = _clean_name(_ch.group(1)) if _ch else "MobilDeniz"
+        # İşlem türü
+        _it = re.search(r"[İIıi]?[şs]lem\s*T[üu]r[üu]?\s+(Giden\s*FAST|Gelen\s*FAST|FAST|EFT|Havale)", rt, re.I)
+        _itv = _norm_tr(_it.group(1)) if _it else ""
+        if "fast" in _itv:
+            ex.transaction.type = "FAST"
+        elif "eft" in _itv:
+            ex.transaction.type = "EFT"
+        elif "havale" in _itv:
+            ex.transaction.type = "HAVALE"
+        # Tarihler
+        _td = re.search(r"[İIıi]?[şs]lem\s*Tarih[İIıi]?\s+(\d{2}\.\d{2}\.\d{4})\s*([0-9:]{5,8})?", rt, re.I)
+        ex.transaction.date = ((_td.group(1) + ((" " + _td.group(2)) if _td.group(2) else "")) if _td else "")
+        _vd = re.search(r"Val[öo]r\s*Tarih[İIıi]?\s+(\d{2}\.\d{2}\.\d{4})", rt, re.I)
+        ex.transaction.value_date = _vd.group(1) if _vd else ""
+        # Alıcı banka (baştaki '0046-' kodunu at), alıcı IBAN, alıcı ad
+        _rb = re.search(r"Al[ıi]c[ıi]\s*Banka\s+(?:\d{4}\s*-\s*)?([^\n]+)", rt, re.I)
+        if _rb:
+            ex.receiver.bank = _clean_name(_rb.group(1))
+        _rib = re.search(r"Al[ıi]c[ıi]\s*IBAN\s+(TR[0-9 ]{20,34})", rt, re.I)
+        ex.receiver.iban = banks.normalize_iban(_rib.group(1)) if _rib else ""
+        _rn = re.search(r"Al[ıi]c[ıi]\s*Ad[ıi]\s*Soyad[ıi]\s+(.+?)\s*(?:\n|Tutar|Al[ıi]c[ıi])", rt, re.I)
+        ex.receiver.name = _clean_name(_rn.group(1)) if _rn else ""
+        # Tutar + toplam masraf (özet 'Masraf 16,76 TL'; iki-noktalı '15,96' detayını ALMA)
+        _am = re.search(r"(?:^|\n)\s*Tutar\s+([0-9][0-9.]*,[0-9]{2})", rt, re.I)
+        ex.amount.value = parse_amount(_am.group(1)) if _am else None
+        _fee = re.search(r"(?:^|\n)\s*Masraf\s+([0-9][0-9.]*,[0-9]{2})\s*TL", rt, re.I)
+        ex.amount.fee = parse_amount(_fee.group(1)) if _fee else None
+        ex.amount.currency = "TL"
+        # FAST Sorgu Numarası (işlem sorgu/teyit no) + Referans Bilgisi
+        _fq = re.search(r"FAST\s*Sorgu\s*Numaras[ıi]\s*[:：]?\s*([0-9]{6,})", rt, re.I)
+        if _fq:
+            ex.transaction.ref_no = _fq.group(1)
+            ex.transaction.sequence_number = _fq.group(1)
+        _rf = re.search(r"Referans\s*Bilgisi\s*[:：]?\s*([0-9]{6,}\s*-\s*\d+\s*-\s*\d+)", rt, re.I)
+        if _rf and not ex.transaction.document_no:
+            ex.transaction.document_no = re.sub(r"\s+", "", _rf.group(1))
 
     # =============================================================
     #  GETİRFİNANS (Fibabanka markası) E-Dekont
