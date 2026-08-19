@@ -709,11 +709,28 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
             ex.confidence = _confidence(ex)
             return ex
         # ---- Yedek: metin-tabanlı ayrıştırma ----
+        # NOT: Yeni VakıfBank düzeni İKİ SÜTUNLU ve İKİ-NOKTASIZ ('İŞLEM TÜRÜ  FAST Giden Anlık
+        # Ödeme', 'SORGU NO  2856233960'). Bu yüzden etiketler kolon-OPSİYONEL yakalanır.
         rt = rjoined
-        ex.transaction.type = _find_label(rt, ["İŞLEM TÜRÜ", "ISLEM TURU"])
+        # İşlem türü (kanal): kolonsuz da yakala + FAST/EFT/HAVALE'ye normalize et
+        _itm = re.search(r"[İIıi]?[şs]lem\s*T[üu]r[üu]?\s*[:：]?\s*([^\n]+?)\s{2,}", rt, re.I) \
+            or re.search(r"[İIıi]?[şs]lem\s*T[üu]r[üu]?\s*[:：]?\s*([^\n]+)", rt, re.I)
+        _itraw = _norm_tr(_itm.group(1)) if _itm else ""
+        if "fast" in _itraw:
+            ex.transaction.type = "FAST"
+        elif "eft" in _itraw:
+            ex.transaction.type = "EFT"
+        elif "havale" in _itraw:
+            ex.transaction.type = "HAVALE"
+        else:
+            ex.transaction.type = _clean_name(_itm.group(1)) if _itm else ""
         dm = re.search(r"İŞLEM TARİHİ\s*[:：]?\s*(\d{2}\.\d{2}\.\d{4}(?:\s+\d{2}:\d{2}:\d{2})?)", rt)
         ex.transaction.date = dm.group(1) if dm else (DATE_RE.search(rt).group(0) if DATE_RE.search(rt) else "")
-        ex.transaction.ref_no = _find_label(rt, ["SORGU NO"])
+        # SORGU NO = FAST işlem sorgu/teyit numarası (kolonsuz da). ref_no + sequence olarak sakla.
+        _sq = re.search(r"SORGU\s*NO\s*[:：]?\s*([0-9]{5,})", rt, re.I)
+        if _sq:
+            ex.transaction.ref_no = _sq.group(1)
+            ex.transaction.sequence_number = _sq.group(1)
         im = re.search(r"İŞLEM NO\s*[:：]?\s*(\d{6,})", rt)
         ex.transaction.document_no = im.group(1) if im else ""
         ex.transaction.description = _find_label(rt, ["İŞLEM AÇIKLAMASI"])

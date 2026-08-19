@@ -809,6 +809,12 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _sbc:
                 findings.append(Finding(_sbc["code"], _sbc["severity"], "content", _sbc["weight"],
                                         tr=_sbc["tr"], en=_sbc["en"], detail=_sbc.get("detail", "")))
+            # PARA BİRİMİ SONEKİ TUTARLILIĞI (gerçek-şablon karşılaştırması): ana tutar TL'li ama
+            # masraf TL'siz ise gerçek şablondan sapma (masraf sonradan eklenmiş/değiştirilmiş olabilir).
+            _acc = _auth.check_amount_currency_consistency(text_layout, _bkey)
+            if _acc:
+                findings.append(Finding(_acc["code"], _acc["severity"], "content", _acc["weight"],
+                                        tr=_acc["tr"], en=_acc["en"], detail=_acc.get("detail", "")))
             # KİMLİK ALAN TUTARLILIĞI: 'VKN/Vergi' alanı ↔ 'İşlemi Yapan TCKN' aynı kişide birebir
             # olmalı; farklıysa/biri sağlamayı geçemiyorsa sahtecilik (foto'da sağlama-destekli).
             _idc = _auth.check_id_field_consistency(text_layout, input_kind, extraction.text_source)

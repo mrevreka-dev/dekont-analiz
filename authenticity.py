@@ -818,6 +818,38 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
             "notice_tr": notice_tr, "notice_en": notice_en}
 
 
+def check_amount_currency_consistency(text: str, bkey: str = "") -> dict | None:
+    """PARA BİRİMİ SONEKİ TUTARLILIĞI (gerçek-şablon karşılaştırması). Gerçek dekontlarda ana
+    tutar ve masraf/ücret AYNI biçimde yazılır (ör. gerçek VakıfBank: hem 'İşlem Tutarı 40.416,00 TL'
+    hem 'Masraf Tutarı 16,76 TL'). Ana tutarda 'TL' varken MASRAF/ÜCRET tutarında YOKSA bu biçim
+    tutarsızlığıdır — masraf alanı sonradan eklenmiş/değiştirilmiş olabilir (gerçek şablondan sapma)."""
+    if not text:
+        return None
+    m_amt = re.search(r"[İIıi]?[şsSŞ]lem\s*Tutar[ıi]\s*[:：]?\s*([\d.]+,\d{2})\s*(TL|TRY|₺)?", text, re.I)
+    # Masraf/Ücret/Komisyon tutarı (etiketli)
+    m_fee = re.search(r"(?:Masraf(?:\s*Tutar[ıi])?|[İIıi]?[şs]lem\s*[ÜUu]creti|Komisyon)\s*[:：]?\s*"
+                      r"([\d.]+,\d{2})\s*(TL|TRY|₺)?", text, re.I)
+    if not m_amt or not m_fee:
+        return None
+    amt_has_cur = bool(m_amt.group(2))
+    fee_has_cur = bool(m_fee.group(2))
+    # Yalnız ANA tutar birimli ama MASRAF birimsiz durumunu işaretle (tersinde OCR kırpması olası)
+    if amt_has_cur and not fee_has_cur:
+        return {
+            "code": "AMOUNT_CURRENCY_INCONSISTENT", "severity": "high", "weight": 22,
+            "tr": f"BİÇİM TUTARSIZLIĞI (gerçek şablondan sapma): Belgede işlem tutarı para birimiyle "
+                  f"('{m_amt.group(1)} {m_amt.group(2)}') yazılmışken MASRAF tutarı ('{m_fee.group(1)}') "
+                  f"PARA BİRİMİ (TL) OLMADAN yazılmış. Bu bankanın GERÇEK dekontlarında masraf da her zaman "
+                  f"'TL' ile yazılır; sonekin eksikliği masraf alanının sonradan eklendiğine/değiştirildiğine "
+                  f"işaret edebilir. Fotoğrafta kesinlik düşüktür; orijinal dijital PDF ile teyit edin.",
+            "en": f"FORMAT INCONSISTENCY (deviation from genuine template): the transaction amount carries a "
+                  f"currency ('{m_amt.group(1)} {m_amt.group(2)}') but the FEE ('{m_fee.group(1)}') has NO "
+                  f"currency suffix. Genuine receipts of this bank always show the fee with 'TL'; the missing "
+                  f"suffix may indicate the fee field was added/altered.",
+            "detail": f"amount='{m_amt.group(0).strip()}' fee='{m_fee.group(0).strip()}' bank={bkey}"}
+    return None
+
+
 def check_samebank_rail_contradiction(text: str, sender_iban: str, receiver_iban: str) -> dict | None:
     """AYNI-BANKA ↔ 'BANKALARARASI/EFT/FAST' BAŞLIK ÇELİŞKİSİ (sahtecilik).
     Gönderici ve alıcı IBAN AYNI bankaya aitse işlem banka-içidir; ama dekont başlığı/

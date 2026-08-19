@@ -76,16 +76,16 @@ def _get(d: dict, dotted: str):
 def should_adjudicate(findings: list, extraction: dict, input_kind: str = "pdf") -> tuple[bool, list]:
     """Bu dekont YZ değerlendiricisine gitmeli mi? (tetik, nedenler) döndürür.
     Tetikler: (a) high/critical bir bulgu var; (b) kritik alan(lar) boş; (c) yeniden-okunabilir bulgu."""
+    # HIZ: yalnız GERÇEKTEN gerekince eskale et (temiz dekontta YZ'ye gidilmez → hızlı ve ucuz).
     reasons = []
     sev = {(f.get("code")): f.get("severity") for f in (findings or [])}
-    codes = set(sev.keys())
     if any(s in ("high", "critical") for s in sev.values()):
-        reasons.append("Yüksek/kritik önem taşıyan bulgu var.")
-    if codes & _REREAD_CODES:
-        reasons.append("Fotoğraf/OCR okuma hatası olabilecek bulgu var (yeniden-okuma adayı).")
-    missing = [f for f in _CRITICAL_FIELDS if not _get(extraction or {}, f)]
-    if missing:
-        reasons.append("Kritik alan(lar) boş: " + ", ".join(missing))
+        reasons.append("Yüksek/kritik önem taşıyan bir bulgu var.")
+    # Yalnız EN KRİTİK alanlar boşsa (alıcı adı/IBAN, tutar) — düşük öncelikli boşluklar tetiklemez.
+    _core = [f for f in ("receiver.name", "receiver.iban", "amount.value")
+             if not _get(extraction or {}, f)]
+    if _core:
+        reasons.append("Kritik alan boş: " + ", ".join(_core))
     return (bool(reasons), reasons)
 
 
@@ -134,7 +134,8 @@ def _build_prompt(extraction: dict, findings: list, bank_ctx: str, input_kind: s
         "Gerekçelendir.\n"
         "2) Kuralın YANLIŞ okuduğu ya da BOŞ bıraktığı alanları GÖRÜNTÜDEN yeniden oku ve düzelt "
         "(özellikle IBAN'lar, isimler, tutar). İsim yanlış yerden alınmışsa doğru yerden al.\n"
-        "3) Uzman gibi, KANITA DAYALI bir HÜKÜM ver (gerçek/şüpheli/sahte/belirsiz) + güven yüzdesi.\n"
+        "3) Uzman gibi, KANITA DAYALI bir HÜKÜM ver (gerçek/şüpheli/sahte/belirsiz) + güven yüzdesi. "
+        "reasoning_tr KISA ve SADE olsun: EN FAZLA 2 cümle, teknik jargon yok, net konuş.\n"
         "4) Bu bankanın çıkarımında SİSTEMİK bir sorun görürsen (kod/kural iyileştirmesi), "
         "improvement_notes'a banka+alan+sorun+öneri olarak yaz.\n\n"
         "KESİN KANITLARI EZME: aynı-banka çelişkisi, revizyon-tahrifatı, kimlik alan çelişkisi, "
@@ -172,7 +173,8 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
             pass
     content.append({"type": "text", "text": prompt})
 
-    body = {"model": model, "max_tokens": 2048, "messages": [{"role": "user", "content": content}]}
+    # HIZ: kısa/sade çıktı istendiği için 1024 yeterli (daha hızlı üretim, daha düşük gecikme).
+    body = {"model": model, "max_tokens": 1024, "messages": [{"role": "user", "content": content}]}
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(API_URL, data=data, method="POST")
     req.add_header("x-api-key", api_key)
