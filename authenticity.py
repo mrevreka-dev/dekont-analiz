@@ -767,7 +767,12 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
     fast_label = any(m in ns for m in _FAST_FEE_MARKERS) or bool(re.search(r"(?<![a-z])fast(?![a-z])", n))
     interbank_title = ("bankalararasi" in ns and "eft" in ns)  # Akbank GENEL başlığı
 
+    # Başlıkta açık "EFT" (Akbank 'EFT BANKALAR ARASI HESABA HAVALE') — tek başına EFT≠FAST
+    # ayırmaz AMA hiçbir FAST işareti yoksa güçlü bir EFT karinesidir.
+    eft_in_title = ("eft" in ns) or ("eftbankalararasi" in ns) or ("bankalararasihesaba" in ns and "eft" in ns)
+
     rail, conf = "belirsiz", 0
+    title_based_eft = False
     if same_bank and not eft_label and not fast_label:
         rail, conf = "havale", 90
         ev.append("Gönderici ve alıcı IBAN aynı bankaya ait → banka-içi HAVALE.")
@@ -782,9 +787,14 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
     elif eft_label and fast_label:
         rail, conf = "belirsiz", 40
         ev.append("Hem EFT hem FAST ibaresi geçiyor — çelişki; teyit gerek.")
+    elif eft_in_title and not fast_label and (interbank or interbank_title):
+        # Başlık EFT diyor, işlem bankalararası, ve dekontta HİÇBİR FAST işareti yok → EFT.
+        # Bir FAST işlemi olsaydı 'FAST' ibaresi (Sorgu No / kalem / başlık) bulunurdu.
+        rail, conf = "eft", 75
+        title_based_eft = True
+        ev.append("Dekont başlığında 'EFT BANKALAR ARASI' ibaresi var, işlem bankalararası ve "
+                  "belgede HİÇBİR FAST işareti yok → EFT (başlık temelli tespit).")
     elif interbank:
-        # Bankalararası ama açık kanal etiketi yok (Akbank'ın GENEL 'EFT BANKALAR ARASI'
-        # başlığı EFT/FAST ayrımı yapmaz). Kanal belirsiz — banka teyidi önerilir.
         rail, conf = "belirsiz", 30
         ev.append("Bankalararası bir transfer ama ücret kaleminde açık EFT/FAST etiketi yok; "
                   "başlık genel olduğundan kanal (EFT mi FAST mı) kesinleşmiyor.")
@@ -792,7 +802,17 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
         return None
 
     _RL = {"eft": "EFT", "fast": "FAST", "havale": "HAVALE", "belirsiz": "BELİRSİZ"}[rail]
-    if rail == "eft":
+    if rail == "eft" and title_based_eft:
+        notice_tr = ("İŞLEM KANALI: Bu işlem büyük olasılıkla bir **EFT** işlemidir — **FAST DEĞİLDİR**. "
+                     "Gerekçe: dekont başlığında 'EFT BANKALAR ARASI HESABA HAVALE' ibaresi var, işlem "
+                     "bankalararası (gönderici ve alıcı farklı bankalarda) ve belgede HİÇBİR FAST işareti "
+                     "(FAST ücreti/Sorgu No/başlık) yok. Kesinlik için işlem/sıra numarasıyla bankadan teyit "
+                     "alınabilir. NOT: Bu, kanal sınıflandırmasıdır; dekontun sahte olup olmadığından AYRIDIR.")
+        notice_en = ("TRANSFER RAIL: This is most likely an **EFT** transaction — **NOT FAST**. Rationale: the "
+                     "title says 'EFT BANKALAR ARASI HESABA HAVALE', the transfer is interbank, and there is NO "
+                     "FAST marker anywhere. Confirm with the bank via the transaction number for certainty. "
+                     "NOTE: rail classification, separate from authenticity.")
+    elif rail == "eft":
         notice_tr = ("İŞLEM KANALI: Bu işlem bir **EFT** işlemidir — **FAST DEĞİLDİR**. Dekontun ücret "
                      "kaleminde 'GEÇ EFT / EFT' ibaresi geçiyor; bu, Akbank'ta EFT kanalının KESİN "
                      "göstergesidir (başlıktaki 'EFT BANKALAR ARASI HESABA HAVALE' ifadesi hem EFT hem "

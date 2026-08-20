@@ -34,6 +34,20 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "M", "date": "2026-08-20 03:50", "area": "OTORİTER KURAL: interbank ≠ havale", "test": 12,
+     "bug": "Dekont başlığında 'HAVALE' geçiyor ama IBAN'lar FARKLI bankalar (Akbank→Denizbank). "
+            "_detect_garanti_kind başlıktaki 'HAVALE' kelimesini alıp işlem türünü 'HAVALE' gösteriyordu "
+            "— oysa bankalararası bir işlem HAVALE OLAMAZ (havale banka-içidir).",
+     "fix": "İki katman: (1) _detect_garanti_kind'te 'BANKALAR ARASI' varsa EFT/FAST, HAVALE'ye öncelikli. "
+            "(2) analyze.py'de OTORİTER uzlaştırma: IBAN banka kodları farklıysa doc_kind asla HAVALE "
+            "kalmaz, kanal kanıtına (EFT/FAST) göre düzeltilir. Banka-içi gerçek havale korunur."},
+    {"id": "L", "date": "2026-08-20 03:35", "area": "Rail sınıflama — başlık-temelli EFT", "test": 11,
+     "bug": "Akbank 'EFT BANKALAR ARASI HESABA HAVALE' dekontunda 'GEÇ EFT' ücret etiketi yoksa "
+            "classify_rail 'belirsiz' dönüyor, rapora HİÇBİR kanal bulgusu düşmüyordu → kullanıcı "
+            "'hiçbir şey bulamadı' görüyordu (78/100, tahrifat yok, ama EFT/FAST bilgisi yok).",
+     "fix": "Başlıkta 'EFT BANKALAR ARASI' + işlem bankalararası + belgede HİÇBİR FAST işareti yoksa "
+            "→ EFT (başlık-temelli, conf 75). FAST işareti varsa EFT'ye kaymaz (yanlış-pozitif koruması). "
+            "Bildirim başlık-temelli tespiti dürüstçe belirtir ('büyük olasılıkla EFT, sıra no ile teyit)."},
     {"id": "K", "date": "2026-08-20 03:05", "area": "Türkçe İ hatası (SİSTEMİK KÖK)", "test": 9,
      "bug": "İki Akbank 'EFT BANKALAR ARASI HESABA HAVALE' dekontu denetimden geçti; banka Halkbank "
             "sanıldı, gönderici/alıcı isimleri boştu. Kök neden SİSTEMİK: 'İ'.lower() = 'i'+U+0307 "
@@ -225,6 +239,36 @@ def _t10_akbank_eft_template():
     return ok, (f"banka={ex.bank!r}, gönderici={ex.sender.name!r}, alıcı={ex.receiver.name!r}, rail={rail}")
 
 
+def _t11_akbank_eft_title_based():
+    """Akbank EFT dekontu 'GEÇ EFT' ücret etiketi OLMADAN (yalnız başlıkta EFT, bankalararası,
+    hiçbir FAST işareti yok) → EFT sınıflanmalı. Aksi hâlde rapor 'hiçbir şey bulamadı' der.
+    Ayrıca FAST işareti varsa EFT'ye KAYMAMALI (yanlış-pozitif koruması)."""
+    import authenticity as A
+    eft_txt = ("EFT BANKALAR ARASI HESABA HAVALE\nKOMİSYON 0,00 TL 7,97 TL\nBSMV 0,00 TL 0,40 TL\n")
+    r1 = (A.classify_rail(eft_txt, "TR420004600121888000006245", "TR830013400002646836500002", "akbank") or {}).get("rail")
+    # Karşı-koruma: FAST işareti varsa EFT DEĞİL fast olmalı
+    fast_txt = "EFT BANKALAR ARASI HESABA HAVALE\nGiden FAST\nFAST Sorgu No: 123456\n"
+    r2 = (A.classify_rail(fast_txt, "TR420004600121888000006245", "TR830013400002646836500002", "akbank") or {}).get("rail")
+    ok = (r1 == "eft" and r2 == "fast")
+    return ok, f"başlık-temelli EFT={r1} (eft olmalı), FAST-korumalı={r2} (fast olmalı)"
+
+
+def _t12_interbank_never_havale():
+    """OTORİTER KURAL: HAVALE banka-İÇİDİR. IBAN'lar FARKLI bankalarsa (bankalararası) işlem HAVALE
+    OLAMAZ. classify_rail interbank'ta asla 'havale' dönmemeli; _detect_garanti_kind interbank EFT
+    başlığını 'HAVALE' etiketlememeli. (Kullanıcının bildirdiği çelişki: başlıkta HAVALE ama farklı bankalar.)"""
+    import authenticity as A
+    from extract import _detect_garanti_kind
+    # Bankalararası (Akbank 00046 → Denizbank 00134), başlıkta 'HAVALE' kelimesi geçen dekont
+    txt = "EFT BANKALAR ARASI HESABA HAVALE\nKOMİSYON 7,97 TL\n"
+    rail = (A.classify_rail(txt, "TR420004600121888000006245", "TR830013400002646836500002", "akbank") or {}).get("rail")
+    kind = _detect_garanti_kind("EFT BANKALAR ARASI HESABA HAVALE")
+    # Banka-İÇİ gerçek havale hâlâ 'HAVALE' olmalı (yanlış-düzeltme koruması)
+    kind_intrabank = _detect_garanti_kind("HESABA HAVALE")
+    ok = (rail != "havale" and kind != "HAVALE" and kind_intrabank == "HAVALE")
+    return ok, f"interbank rail={rail} (havale OLMAMALI), interbank kind={kind} (HAVALE OLMAMALI), banka-içi kind={kind_intrabank} (HAVALE olmalı)"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -236,6 +280,8 @@ _CHECKS = [
     (8, "Referans parmak izi: VakıfBank masraf TL", _t8_reference_vakif_fee),
     (9, "Türkçe İ-güvenli banka tespiti (KALICI)", _t9_turkish_i_safe_issuer),
     (10, "Akbank EFT şablonu doğru ayrıştırılır", _t10_akbank_eft_template),
+    (11, "Başlık-temelli EFT (GEÇ EFT etiketi olmadan)", _t11_akbank_eft_title_based),
+    (12, "Bankalararası işlem ASLA havale olamaz", _t12_interbank_never_havale),
 ]
 
 

@@ -860,6 +860,19 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                     _rlcode, "info", "content", 0,
                     tr=_rl["notice_tr"], en=_rl["notice_en"],
                     detail=f"rail={_rl['rail']} conf={_rl['confidence']} evidence={' | '.join(_rl.get('evidence', []))}"))
+            # OTORİTER KURAL: HAVALE banka-İÇİDİR. IBAN'lar FARKLI bankalarsa (bankalararası) işlem
+            # HAVALE OLAMAZ → gösterilen işlem türünü (doc_kind) IBAN kanıtına göre düzelt. Başlıktaki
+            # 'HAVALE' kelimesi (Akbank genel şablonu) yanıltıcıdır; kanal EFT/FAST'tır.
+            try:
+                import banks as _bkv2
+                _scode = _bkv2.iban_bank_code(ex.sender.iban) if ex.sender.iban else ""
+                _rcode = _bkv2.iban_bank_code(ex.receiver.iban) if ex.receiver.iban else ""
+                _is_interbank = bool(_scode and _rcode and _scode != _rcode)
+                if _is_interbank and str(getattr(ex, "doc_kind", "")).upper() == "HAVALE":
+                    _rail_kind = (_rl or {}).get("rail")
+                    ex.doc_kind = {"eft": "EFT", "fast": "FAST"}.get(_rail_kind, "Bankalararası transfer (EFT/FAST)")
+            except Exception:
+                pass
             # AYNI-BANKA ↔ 'BANKALARARASI/EFT/FAST' başlık çelişkisi (sahtecilik). IBAN'lar mod-97
             # geçerli+aynı banka olduğundan fotoğrafta da güvenilir; okuma hatası bastırılır.
             _sbc = _auth.check_samebank_rail_contradiction(text_layout, ex.sender.iban, ex.receiver.iban)

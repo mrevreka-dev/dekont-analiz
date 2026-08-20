@@ -1893,11 +1893,24 @@ def _vakif_value(text: str, labels: list[str]) -> str:
 
 
 def _detect_garanti_kind(text: str) -> str:
-    if "HESAPTAN FAST" in text:
+    u = (text or "").upper()
+    if "HESAPTAN FAST" in u:
         return "HESAPTAN FAST"
-    if "HESAPTAN EFT" in text:
+    if "HESAPTAN EFT" in u:
         return "HESAPTAN EFT"
-    if "HAVALE" in text:
+    # KURAL: 'HAVALE' banka-İÇİ bir kanaldır. Başlıkta 'BANKALAR ARASI' (bankalararası) geçiyorsa
+    # işlem HAVALE OLAMAZ; EFT ya da FAST'tır. Akbank 'EFT BANKALAR ARASI HESABA HAVALE' başlığında
+    # 'HAVALE' yalnızca 'transfer' anlamındadır; kanal EFT'dir. Bu yüzden EFT/FAST HAVALE'ye önceliklidir.
+    if "BANKALAR ARASI" in u or "BANKALARARASI" in u:
+        if "FAST" in u:
+            return "FAST"
+        if "EFT" in u:
+            return "EFT"
+    if "FAST" in u:
+        return "FAST"
+    if "EFT" in u:
+        return "EFT"
+    if "HAVALE" in u:
         return "HAVALE"
     return "Dekont"
 
