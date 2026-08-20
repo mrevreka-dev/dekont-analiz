@@ -145,6 +145,30 @@
   </div>
   {% endif %}
 
+  <!-- DENETİM KAPSAMI (banka bazlı: ne yapıldı / ne yapılamadı) -->
+  {% set cov = r.denetim_kapsami %}
+  {% if cov and cov.maddeler %}
+  {% set dcolor = {'yapıldı':'var(--good)','kusur':'var(--critical)','kısmi':'#d08700','yapılamadı':'var(--text-muted)'} %}
+  {% set dword = {'yapıldı':'YAPILDI','kusur':'KUSUR','kısmi':'KISMİ','yapılamadı':'YAPILAMADI'} %}
+  <div class="card" style="border-left:5px solid var(--accent)">
+    <div class="section-title" style="margin-top:0">
+      {{ 'DENETİM KAPSAMI' if L=='tr' else 'CHECK COVERAGE' }}
+      <span class="badge-soft" style="background:var(--accent);color:#fff">{{ cov.banka }}</span>
+    </div>
+    <div class="subline" style="margin-top:-4px;margin-bottom:10px">
+      Banka bazlı · {{ cov.ozet.yapildi }} yapıldı, {{ cov.ozet.kusur }} kusur,
+      {{ cov.ozet.kismi }} kısmi, {{ cov.ozet.yapilamadi }} yapılamadı
+    </div>
+    {% for m in cov.maddeler %}
+    <div style="display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--border)">
+      <span class="badge-soft" style="background:{{ dcolor.get(m.durum,'var(--text-muted)') }};color:#fff;flex:0 0 auto;min-width:78px;text-align:center">{{ dword.get(m.durum, m.durum)|upper }}</span>
+      <div><b>{{ m.alan }}</b><div style="color:var(--text-muted);font-size:13px">{{ m.sonuc }}</div></div>
+    </div>
+    {% endfor %}
+    <p style="font-size:11px;color:var(--text-muted);margin-top:8px">Tüm maddeler tespit edilen bankaya göre değerlendirilir. "Yapılamadı" olanlar, belge tipinin (ör. görüntü) izin vermediği denetimlerdir.</p>
+  </div>
+  {% endif %}
+
   <!-- KESİN CEVAPLAR (true/false/nötr) -->
   {% set vd = r.verdicts %}
   {% set vstate = {'true':'var(--good)','false':'var(--critical)','neutral':'var(--text-muted)'} %}
