@@ -910,6 +910,58 @@ def check_samebank_rail_contradiction(text: str, sender_iban: str, receiver_iban
         "detail": f"sender_code={sc} receiver_code={rc}"}
 
 
+# HAVALE'ye ÖZGÜ (banka-içi) ücret/işlem etiketleri — İ-güvenli, boşluk-duyarsız.
+# Bu etiketler işlemin HAVALE olarak ÜCRETLENDİRİLDİĞİNİ gösterir (banka-içi bir kanal).
+_HAVALE_FEE_MARKERS = ("havaleucreti", "havale+vergi", "hvlucreti", "hvl+vergi", "dekont/hvl",
+                       "havalemasrafi", "havalekomisyonu")
+
+
+def check_interbank_havale_contradiction(text: str, sender_iban: str, receiver_iban: str) -> dict | None:
+    """BANKALARARASI ↔ HAVALE ÇELİŞKİSİ (sahtecilik/tutarsızlık — AYNA denetim).
+    HAVALE banka-İÇİ bir kanaldır. Gönderici ve alıcı IBAN FARKLI bankalara aitse işlem
+    bankalararasıdır; ama dekont kendini HAVALE olarak (havale ücreti/kalemi) gösteriyorsa bu
+    İMKÂNSIZDIR — farklı bankalar arasında HAVALE yapılamaz (EFT/FAST olmalı). İşlem türü/ücret
+    uydurulmuş ya da yanlış; kanal gizlenmeye çalışılmış olabilir → puanı düşüren bir bulgu.
+    IBAN'a dayalı olduğundan iki IBAN da mod-97 GEÇERLİ ve FARKLI banka olmalı (OCR yanlış-pozitifi yok).
+    Akbank'ın 'EFT BANKALAR ARASI HESABA HAVALE' genel şablonu HARİÇTİR (EFT/bankalararası ibaresi taşır)."""
+    if not text:
+        return None
+    import banks as _b
+    s = _b.normalize_iban(sender_iban or "")
+    r = _b.normalize_iban(receiver_iban or "")
+    if not s or not r or s == r:
+        return None
+    if _b.iban_valid(s) is False or _b.iban_valid(r) is False:
+        return None                     # geçersiz IBAN = okuma hatası
+    sc, rc = _b.iban_bank_code(s), _b.iban_bank_code(r)
+    if not sc or not rc or sc == rc:
+        return None                     # aynı banka → burada çelişki yok (gerçek havale olabilir)
+    n = _tr_low(text)
+    ns = n.replace(" ", "")
+    # İşlem HAVALE olarak mı sunuluyor? (havale ücret kalemi ya da net 'havale' türü)
+    claims_havale = any(m in ns for m in _HAVALE_FEE_MARKERS)
+    # EFT/FAST/bankalararası ibaresi VARSA çelişki yok (doğru şekilde bankalararası etiketlenmiş);
+    # Akbank 'EFT BANKALAR ARASI HESABA HAVALE' şablonu da bu kapıdan elenir.
+    asserts_interbank_rail = ("eft" in ns or "bankalararasi" in ns
+                              or bool(re.search(r"(?<![a-z])fast(?![a-z])", n)))
+    if not claims_havale or asserts_interbank_rail:
+        return None
+    s_lbl = _b.bank_label_from_iban(s) or f"kod {sc}"
+    r_lbl = _b.bank_label_from_iban(r) or f"kod {rc}"
+    return {
+        "code": "INTERBANK_HAVALE_CONTRADICTION", "severity": "high", "weight": 30,
+        "tr": f"İŞLEM TÜRÜ ÇELİŞKİSİ: Dekont işlemi HAVALE olarak gösteriyor, ancak gönderici ({s_lbl}, "
+              f"kod {sc}) ve alıcı ({r_lbl}, kod {rc}) FARKLI bankalarda. Farklı bankalar arasında "
+              f"HAVALE YAPILAMAZ — bu bir bankalararası işlemdir ve EFT ya da FAST olmalıdır. Belge "
+              f"kendini yanlış/uydurma bir kanal (havale) ile sunuyor; kanal gizlenmiş ya da tür tahrif "
+              f"edilmiş olabilir. Bu güçlü bir tutarsızlık işaretidir; orijinal dijital dekontla teyit edin.",
+        "en": f"RAIL CONTRADICTION: the receipt presents the transaction as HAVALE, but sender ({s_lbl}, "
+              f"code {sc}) and receiver ({r_lbl}, code {rc}) are at DIFFERENT banks. HAVALE cannot occur "
+              f"between different banks — this is an interbank transfer and must be EFT or FAST. The stated "
+              f"rail is wrong/fabricated. Strong inconsistency signal.",
+        "detail": f"sender_code={sc} receiver_code={rc} claims_havale=1"}
+
+
 # Kimlik (TCKN) alan etiketleri — BANKA-GENEL. Gönderen/işlemi-yapan tarafındaki 11 haneli
 # kimlik numarasını taşıyan alan adları (bankadan bankaya değişir).
 _ID_LABELS = [

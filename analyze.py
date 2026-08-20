@@ -879,6 +879,12 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _sbc:
                 findings.append(Finding(_sbc["code"], _sbc["severity"], "content", _sbc["weight"],
                                         tr=_sbc["tr"], en=_sbc["en"], detail=_sbc.get("detail", "")))
+            # AYNA: BANKALARARASI ↔ HAVALE çelişkisi. Farklı bankalar arası işlem HAVALE olarak
+            # sunuluyorsa (havale ücreti/kalemi) bu imkânsızdır → puanı düşüren tutarsızlık bulgusu.
+            _ihc = _auth.check_interbank_havale_contradiction(text_layout, ex.sender.iban, ex.receiver.iban)
+            if _ihc:
+                findings.append(Finding(_ihc["code"], _ihc["severity"], "content", _ihc["weight"],
+                                        tr=_ihc["tr"], en=_ihc["en"], detail=_ihc.get("detail", "")))
             # REFERANS PARMAK-İZİ KIYASI (gerçek PDF korpusundan): gelen dekontu bankanın GERÇEK
             # şablonuyla kıyaslar — kimlik numarası hane deseni, banka-özel para birimi soneki vb.
             # sapmalarını işaretler (veri-odaklı; support>=3 özelliklerde).

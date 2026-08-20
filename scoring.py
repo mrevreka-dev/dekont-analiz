@@ -129,6 +129,8 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 6)
     if "SAMEBANK_RAIL_CONTRADICTION" in codes:  # aynı banka ama başlık 'bankalararası/EFT/FAST'
         score = min(score, 6)
+    if "INTERBANK_HAVALE_CONTRADICTION" in codes:  # farklı bankalar ama işlem HAVALE olarak sunuluyor
+        score = min(score, 35)
     if "ID_FIELD_MISMATCH" in codes:         # VKN alanı ≠ İşlemi Yapan TCKN (kimlik uydurma)
         score = min(score, 10)
     if "AMOUNT_CURRENCY_INCONSISTENT" in codes:  # masraf gerçek şablondaki 'TL' sonekini taşımıyor

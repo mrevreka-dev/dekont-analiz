@@ -34,6 +34,12 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "N", "date": "2026-08-20 04:05", "area": "İnterbank-havale çelişkisi PUAN düşürür", "test": 13,
+     "bug": "Bir işlem HAVALE olarak sunulup IBAN'lar farklı bankalarsa, sistem bunu açıkça yazıp "
+            "puanı düşürmüyordu (kullanıcı kuralı: 'havale/fast değilse açıkça yaz ve puanı düşür').",
+     "fix": "check_interbank_havale_contradiction eklendi: farklı bankalar + havale ücreti/kalemi + "
+            "EFT/FAST yok → INTERBANK_HAVALE_CONTRADICTION (high, weight 30), skor tavanı 35. Akbank "
+            "EFT-başlıklı genel şablon muaf (yanlış-pozitif yok)."},
     {"id": "M", "date": "2026-08-20 03:50", "area": "OTORİTER KURAL: interbank ≠ havale", "test": 12,
      "bug": "Dekont başlığında 'HAVALE' geçiyor ama IBAN'lar FARKLI bankalar (Akbank→Denizbank). "
             "_detect_garanti_kind başlıktaki 'HAVALE' kelimesini alıp işlem türünü 'HAVALE' gösteriyordu "
@@ -269,6 +275,28 @@ def _t12_interbank_never_havale():
     return ok, f"interbank rail={rail} (havale OLMAMALI), interbank kind={kind} (HAVALE OLMAMALI), banka-içi kind={kind_intrabank} (HAVALE olmalı)"
 
 
+def _gen_iban(bankcode):
+    body = bankcode + "0" + "0000000000012345"        # 5+1+16 = 22 hane BBAN
+    rear = body + "TR" + "00"
+    digits = "".join(c if c.isdigit() else str(ord(c) - 55) for c in rear)
+    cd = 98 - (int(digits) % 97)
+    return "TR%02d%s" % (cd, body)
+
+
+def _t13_interbank_havale_penalized():
+    """Farklı bankalar arası bir işlem HAVALE olarak sunuluyorsa (havale ücreti/kalemi, EFT/FAST yok)
+    → INTERBANK_HAVALE_CONTRADICTION bulgusu üretilmeli ve PUANI DÜŞÜRMELİ. Akbank EFT-başlıklı
+    genel şablon (interbank ama 'EFT/bankalararası' ibaresi taşır) bu cezadan MUAF olmalı."""
+    import authenticity as A
+    a, b = _gen_iban("00046"), _gen_iban("00134")           # farklı bankalar, geçerli IBAN
+    hit = A.check_interbank_havale_contradiction("HAVALE DEKONTU\nHavale Ücreti 8,37 TL\n", a, b)
+    fired = bool(hit) and hit.get("code") == "INTERBANK_HAVALE_CONTRADICTION" and hit.get("weight", 0) >= 20
+    # Akbank EFT şablonu YANLIŞ-POZİTİF üretmemeli
+    fp = A.check_interbank_havale_contradiction("EFT BANKALAR ARASI HESABA HAVALE\nKOMİSYON 7,97 TL\n", a, b)
+    ok = fired and (fp is None)
+    return ok, f"çelişki tetikledi={fired} (w={hit.get('weight') if hit else '-'}), Akbank-EFT yanlış-poz={fp is not None} (False olmalı)"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -282,6 +310,7 @@ _CHECKS = [
     (10, "Akbank EFT şablonu doğru ayrıştırılır", _t10_akbank_eft_template),
     (11, "Başlık-temelli EFT (GEÇ EFT etiketi olmadan)", _t11_akbank_eft_title_based),
     (12, "Bankalararası işlem ASLA havale olamaz", _t12_interbank_never_havale),
+    (13, "İnterbank-havale çelişkisi puanı düşürür", _t13_interbank_havale_penalized),
 ]
 
 
