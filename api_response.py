@@ -173,6 +173,15 @@ def build_summary(report: dict) -> dict:
         # --- Kara-liste bilgisi (SAHTE hükmü DEĞİL; yalnızca 'daha önce işaretlenmişti' notu) ---
         "kara_liste": _kara_liste(report),
 
+        # --- YZ Değerlendirici (opsiyonel; yalnız DEKONT_AI_ADJUDICATOR=1 iken dolu, aksi null) ---
+        # Kural bulgusu/boş alan olan dekontlarda görüntüyü yeniden inceleyip bulguları yargılar,
+        # yanlış/boş alanları yeniden okur, banka-bazlı iyileştirme teşhisi üretir. EK alandır;
+        # mevcut anahtarları DEĞİŞTİRMEZ (kapalıyken null).
+        "yapay_zeka_degerlendirmesi": report.get("yapay_zeka_degerlendirmesi"),
+
+        # DENETİM KAPSAMI (EK): hangi denetimler yapıldı/yapılamadı — banka bazlı, şeffaf.
+        "denetim_kapsami": report.get("denetim_kapsami"),
+
         # --- Tam ayrıntılı iç rapor (isteğe bağlı) ---
         "detay": report,
     }

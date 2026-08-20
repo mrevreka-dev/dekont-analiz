@@ -34,6 +34,14 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "P", "date": "2026-08-20 05:00", "area": "Denetim Kapsamı (banka bazlı, şeffaf)", "test": 15,
+     "bug": "Fotoğrafta IBAN/TC doğruluğu, tutar aritmetiği, işlem/sıra, işlem↔dekont tarihi gibi "
+            "denetimlerin YAPILIP yapılmadığı ve YAPILAMAYANLAR raporda açıkça görünmüyordu. Ayrıca "
+            "kural: tüm denetimler BANKA BAZLI olmalı.",
+     "fix": "coverage.py eklendi → report['denetim_kapsami'] (API + /analyze web kartı). Her madde "
+            "(kanal, IBAN mod-97, TC/VKN, taraf adları, tutar+ücret=toplam, işlem tarihi, fotoğraf "
+            "üretim/tahrifat, işlem-sıra, işlem↔dekont tarihi) tespit edilen BANKAYA göre 'yapıldı/kusur/"
+            "kısmi/yapılamadı(sebep)' olarak yazılır. Görüntüde yapısal PDF denetimi 'yapılamadı' işaretlenir."},
     {"id": "O", "date": "2026-08-20 04:25", "area": "Rail matrisi + metin-tabanlı HAVALE", "test": 14,
      "bug": "VakıfBank 'Hesaptan Havale' dekontunda gönderici IBAN maskeli olduğundan rail belirsiz "
             "kalıp bildirim çıkmıyordu. Ayrıca tüm banka tiplerinin rail sınıflaması tek bir testle "
@@ -329,6 +337,37 @@ def _t14_rail_matrix_all_banks():
     return (not wrong), ("9/9 doğru" if not wrong else f"YANLIŞ: {wrong}")
 
 
+def _t15_coverage_bank_based():
+    """Denetim kapsamı BANKA BAZLI üretilmeli; her ana madde (kanal, IBAN doğruluğu, kimlik, taraf
+    adları, tutar aritmetiği, işlem tarihi, fotoğraf üretim analizi) yer almalı; görüntüde
+    YAPILAMAYAN yapısal PDF denetimi açıkça işaretlenmeli."""
+    import coverage
+    rep = {
+        "classification": {"input_kind": "image", "text_source": "ocr"},
+        "extracted": {
+            "bank": "Akbank T.A.Ş.",
+            "sender": {"name": "MEHMET ERGİN", "iban": "TR670004600002888000078637", "tckn": "14636431312"},
+            "receiver": {"name": "Yiğithan Özden", "iban": "TR720006200074700006602748"},
+            "amount": {"value": 75000.0, "fee": 16.76, "total": 75016.76},
+            "transaction": {"date": "15.08.2026 18:57:56", "value_date": "15.08.2026", "sequence_number": ""},
+        },
+        "findings_tr": [{"code": "RAIL_IS_EFT"}],
+        "image_forensics": {"exif_software": ""},
+        "cross_db": {"checked": False},
+    }
+    cov = coverage.build(rep)
+    alanlar = " | ".join(m["alan"] for m in cov["maddeler"])
+    have_bank = cov.get("banka") == "Akbank T.A.Ş."
+    have_rail = "Kanal (EFT/FAST/HAVALE)" in alanlar
+    have_iban = "Alıcı IBAN doğruluğu (mod-97)" in alanlar
+    have_amount = any("aritmet" in m["alan"].lower() for m in cov["maddeler"])
+    have_prod = any("üretim" in m["alan"].lower() or "tahrifat" in m["alan"].lower() for m in cov["maddeler"])
+    have_cannot = any(m["durum"] == "yapılamadı" and "Yapısal PDF" in m["alan"] for m in cov["maddeler"])
+    ok = all([have_bank, have_rail, have_iban, have_amount, have_prod, have_cannot])
+    return ok, (f"banka={have_bank}, kanal={have_rail}, iban={have_iban}, tutar={have_amount}, "
+                f"üretim={have_prod}, yapılamadı-yazıldı={have_cannot}")
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -344,6 +383,7 @@ _CHECKS = [
     (12, "Bankalararası işlem ASLA havale olamaz", _t12_interbank_never_havale),
     (13, "İnterbank-havale çelişkisi puanı düşürür", _t13_interbank_havale_penalized),
     (14, "Rail matrisi: 9 banka tipi doğru (EFT/FAST/HAVALE)", _t14_rail_matrix_all_banks),
+    (15, "Denetim kapsamı banka bazlı + yapılamayanı yazar", _t15_coverage_bank_based),
 ]
 
 

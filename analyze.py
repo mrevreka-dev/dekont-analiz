@@ -1282,6 +1282,12 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             _store.log_analysis(report)
         except Exception:
             pass
+    # DENETİM KAPSAMI (EK): hangi denetimler yapıldı / yapılamadı — BANKA BAZLI, şeffaf.
+    try:
+        import coverage as _cov
+        report["denetim_kapsami"] = _cov.build(report)
+    except Exception:
+        pass
     # HIZ ÖNBELLEĞİNE YAZ: aynı dosya ikinci kez gelirse tüm hattı atlayıp bunu döndürürüz.
     if use_store:
         try:
