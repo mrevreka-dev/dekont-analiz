@@ -34,6 +34,16 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "K", "date": "2026-08-20 03:05", "area": "Türkçe İ hatası (SİSTEMİK KÖK)", "test": 9,
+     "bug": "İki Akbank 'EFT BANKALAR ARASI HESABA HAVALE' dekontu denetimden geçti; banka Halkbank "
+            "sanıldı, gönderici/alıcı isimleri boştu. Kök neden SİSTEMİK: 'İ'.lower() = 'i'+U+0307 "
+            "(birleşik nokta) üretiyor; _issuer_ctx düz .lower() kullandığından 'AKBANK DİREKT' → "
+            "'akbank di̇rekt' oluyor ve 'akbank direkt' imzası eşleşmiyordu. Aynı hata QNB('İNTERNET'), "
+            "ING('ANONİM'), Garanti('GARANTİ') gibi İ-içeren imzaları da sessizce bozuyordu.",
+     "fix": "Normalizasyonun KAYNAĞI İ-güvenli yapıldı: _issuer_ctx tüm anahtarlardan (low/nlow/up/"
+            "zsig/lc_ns) U+0307'yi temizler. Artık imza hangi anahtarı kullanırsa kullansın İ hatası "
+            "oluşmaz. Akbank branch'i 'Adı Soyad/Unvan' yazımını da tanır. Test #9 (İ-güvenli tespit) + "
+            "#10 (Akbank EFT şablonu) bu hatanın geri gelmesini kalıcı olarak engeller."},
     {"id": "A", "date": "2026-08-20 02:23", "area": "Vision / tahrifat denetimi", "test": 1,
      "bug": "Daha önce yakalanan tahrifatlı dekont tekrar tarandığında 'doğru' göründü. IBAN "
             "onarımı Vision kararından ÖNCE çalışıyordu; geçersiz (en şüpheli) IBAN 'onarılınca' "
@@ -183,6 +193,38 @@ def _t8_reference_vakif_fee():
     return val == "always", f"vakif fee_currency={fee} ('always' olmalı)"
 
 
+def _t9_turkish_i_safe_issuer():
+    """KALICI: Türkçe 'İ'.lower() birleşik nokta (U+0307) üretir; imza eşleşmesini bozardı.
+    İ içeren imzalarla banka tespiti DOĞRU çalışmalı. Biri _issuer_ctx'i düz .lower()'a döndürürse
+    bu test yakalar (ör. Akbank 'AKBANK DİREKT', QNB 'İNTERNET', ING 'ANONİM')."""
+    import extract as E
+    cases = {
+        "akbank": "İşlem AKBANK DİREKT üzerinden yapıldı",      # .com YOK, yalnız 'akbank direkt'
+        "qnb": "QNB İNTERNET BANKACILIĞI",
+        "ing": "ING BANK ANONİM ŞİRKETİ",
+        "garanti": "HESAPTAN FAST GARANTİ BBVA",
+    }
+    bad = [f"{k}→{E.detect_issuer(v)}" for k, v in cases.items() if E.detect_issuer(v) != k]
+    return (not bad), ("hepsi doğru" if not bad else f"YANLIŞ tespit: {bad} (İ hatası geri gelmiş)")
+
+
+def _t10_akbank_eft_template():
+    """Akbank 'EFT BANKALAR ARASI HESABA HAVALE' şablonu: banka=Akbank, gönderici/alıcı isimleri
+    dolu, işlem EFT sınıflanmalı. (18-19 Ağustos'ta 2 dekontun denetimden geçmesine yol açan vaka.)"""
+    from extract import extract_fields
+    import authenticity
+    txt = ("AKBANK\nEFT BANKALAR ARASI HESABA HAVALE\n"
+           "Düzenleyen Şube : 7777 - AKBANK DİREKT MOBİL CEP\n"
+           "Adı Soyad/Unvan : SEDAT BİRTAN\n"
+           "ALICI BİLGİLERİ\nAlacaklı Hesap No : TR91 0001 2009 7660 0001 0378 74\n"
+           "Adı Soyad/Unvan : Uğur Bibo\n"
+           "GECEFT KOMİSYON 0,00 TL 15,96 TL\nGEC EFT BSMV 0,00 TL 0,80 TL\n")
+    ex = extract_fields(txt, txt, None)
+    rail = (authenticity.classify_rail(txt, "", "", "akbank") or {}).get("rail")
+    ok = (ex.bank == "Akbank T.A.Ş." and bool(ex.sender.name) and bool(ex.receiver.name) and rail == "eft")
+    return ok, (f"banka={ex.bank!r}, gönderici={ex.sender.name!r}, alıcı={ex.receiver.name!r}, rail={rail}")
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -192,6 +234,8 @@ _CHECKS = [
     (6, "Rail: bankalararası+EFT → eft", _t6_rail_eft),
     (7, "AI-imza 'gan' yanlış-pozitifi yok", _t7_ai_signature_no_gan_fp),
     (8, "Referans parmak izi: VakıfBank masraf TL", _t8_reference_vakif_fee),
+    (9, "Türkçe İ-güvenli banka tespiti (KALICI)", _t9_turkish_i_safe_issuer),
+    (10, "Akbank EFT şablonu doğru ayrıştırılır", _t10_akbank_eft_template),
 ]
 
 

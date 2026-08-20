@@ -447,7 +447,9 @@ BANK_REGISTRY = [
     {"key": "vakif", "label": "VakıfBank", "iban": {"00015", "00210"},
      "sig": lambda c: "vakifbank.com" in c["low"] or ("VAKIFBANK" in c["up"] and "İŞLEM BİLGİLERİ" in c["up"])},
     {"key": "akbank", "label": "Akbank T.A.Ş.", "iban": {"00046"},
-     "sig": lambda c: "akbank.com" in c["low"] or "akbank direkt" in c["low"]},
+     # İ-GÜVENLİ: "AKBANK DİREKT".lower() = "akbank di̇rekt" (İ→i+U+0307). zsig birleşik noktayı
+     # temizler → "akbank direkt" eşleşir. low ile eşleşmiyordu; bu yüzden Akbank branch'i hiç çalışmıyordu.
+     "sig": lambda c: "akbank.com" in c["zsig"] or "akbank direkt" in c["zsig"]},
     {"key": "ing", "label": "ING Bank A.Ş.", "iban": {"00099"},
      "sig": lambda c: "ing.com.tr" in c["low"] or "ing bank anonim" in c["low"]},
     {"key": "getir", "label": "GetirFinans (Fibabanka)", "iban": {"00103"},
@@ -488,10 +490,16 @@ BANK_LABEL_TO_KEY = {b["label"].strip().lower().replace("̇", ""): b["key"] for 
 
 
 def _issuer_ctx(joined: str) -> dict:
-    low = joined.lower()
-    nlow = _norm_tr(low)
-    return {"low": low, "up": joined.upper(), "nlow": nlow,
-            "zsig": nlow.replace("̇", ""), "lc_ns": low.replace(" ", "")}
+    # İ-GÜVENLİ (KALICI): 'İ'.lower() = 'i' + U+0307 (COMBINING DOT ABOVE) üretir; bu birleşik nokta
+    # tüm alt-dizi eşleşmelerini SESSİZCE bozuyordu (ör. 'AKBANK DİREKT' → 'akbank di̇rekt' ≠ 'akbank
+    # direkt'). Bu yüzden her anahtardan U+0307 temizlenir; artık imza HANGİ anahtarı kullanırsa kullansın
+    # (low/nlow/up/zsig/lc_ns) İ hatası oluşmaz. Yeni bir imza eklerken bunu düşünmeye gerek yok.
+    _Z = "̇"
+    low = joined.lower().replace(_Z, "")          # Türkçe harfler korunur (ş/ü/ö...), İ-noktası temiz
+    nlow = _norm_tr(joined).replace(_Z, "")        # ASCII-katlı, İ-güvenli
+    up = joined.upper().replace(_Z, "")
+    return {"low": low, "up": up, "nlow": nlow,
+            "zsig": nlow, "lc_ns": low.replace(" ", "")}
 
 
 def detect_issuer(joined: str) -> str:
@@ -1078,8 +1086,10 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         rt = joined
         _AS = ["Adı Soyadı", "Adres", "Alacaklı", "Borçlu", "Müşteri No", "Karşı Şube",
                "VKN", "Vergi", "Hesap No", "TUTAR", "İşlem"]
-        # İki sütunlu 'Adı Soyadı/Unvan' -> [gönderici, alıcı]
-        names = _label_values(rt, "Adı Soyadı/Unvan", _AS) or _label_values(rt, "Adı Soyadı", _AS)
+        # İki sütunlu 'Adı Soyad/Unvan' -> [gönderici, alıcı]. Akbank dekontu 'Adı Soyad/Unvan'
+        # (Soyadı DEĞİL Soyad) yazar; her iki yazımı da dene.
+        names = (_label_values(rt, "Adı Soyad/Unvan", _AS) or _label_values(rt, "Adı Soyadı/Unvan", _AS)
+                 or _label_values(rt, "Adı Soyad", _AS) or _label_values(rt, "Adı Soyadı", _AS))
         if names:
             ex.sender.name = _clean_name(names[0])
             if len(names) > 1:
