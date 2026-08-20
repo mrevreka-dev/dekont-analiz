@@ -787,6 +787,12 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
     elif eft_label and fast_label:
         rail, conf = "belirsiz", 40
         ev.append("Hem EFT hem FAST ibaresi geçiyor — çelişki; teyit gerek.")
+    elif ("hesaptanhavale" in ns) and not eft_label and not fast_label and not interbank:
+        # İşlem türü açıkça 'Hesaptan Havale' (banka-içi) ve bankalararası/EFT/FAST işareti yok.
+        # Gönderici IBAN maskeli olsa bile (same_bank IBAN'dan doğrulanamasa da) metin banka-içi
+        # HAVALE der. Alıcı farklı bankaysa (interbank) buraya düşmez; o çelişki ayrıca işaretlenir.
+        rail, conf = "havale", 80
+        ev.append("İşlem türü 'Hesaptan Havale' (banka-içi) ve belgede bankalararası/EFT/FAST işareti yok → HAVALE.")
     elif eft_in_title and not fast_label and (interbank or interbank_title):
         # Başlık EFT diyor, işlem bankalararası, ve dekontta HİÇBİR FAST işareti yok → EFT.
         # Bir FAST işlemi olsaydı 'FAST' ibaresi (Sorgu No / kalem / başlık) bulunurdu.

@@ -34,6 +34,13 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "O", "date": "2026-08-20 04:25", "area": "Rail matrisi + metin-tabanlı HAVALE", "test": 14,
+     "bug": "VakıfBank 'Hesaptan Havale' dekontunda gönderici IBAN maskeli olduğundan rail belirsiz "
+            "kalıp bildirim çıkmıyordu. Ayrıca tüm banka tiplerinin rail sınıflaması tek bir testle "
+            "korunmuyordu (bir banka düzeltmesi başka bankayı bozabilirdi).",
+     "fix": "classify_rail'e metin-tabanlı HAVALE eklendi ('Hesaptan Havale' + interbank/EFT/FAST yok → "
+            "havale). 9 banka tipini (Garanti/İşbank/Papara/VakıfBank/YapıKredi/Alternatif/Akbank/"
+            "Denizbank) kapsayan rail matrisi test #14 ile kalıcı kilitlendi."},
     {"id": "N", "date": "2026-08-20 04:05", "area": "İnterbank-havale çelişkisi PUAN düşürür", "test": 13,
      "bug": "Bir işlem HAVALE olarak sunulup IBAN'lar farklı bankalarsa, sistem bunu açıkça yazıp "
             "puanı düşürmüyordu (kullanıcı kuralı: 'havale/fast değilse açıkça yaz ve puanı düşür').",
@@ -275,8 +282,8 @@ def _t12_interbank_never_havale():
     return ok, f"interbank rail={rail} (havale OLMAMALI), interbank kind={kind} (HAVALE OLMAMALI), banka-içi kind={kind_intrabank} (HAVALE olmalı)"
 
 
-def _gen_iban(bankcode):
-    body = bankcode + "0" + "0000000000012345"        # 5+1+16 = 22 hane BBAN
+def _gen_iban(bankcode, acc="0000000000012345"):
+    body = bankcode + "0" + acc                        # 5+1+16 = 22 hane BBAN
     rear = body + "TR" + "00"
     digits = "".join(c if c.isdigit() else str(ord(c) - 55) for c in rear)
     cd = 98 - (int(digits) % 97)
@@ -297,6 +304,31 @@ def _t13_interbank_havale_penalized():
     return ok, f"çelişki tetikledi={fired} (w={hit.get('weight') if hit else '-'}), Akbank-EFT yanlış-poz={fp is not None} (False olmalı)"
 
 
+def _t14_rail_matrix_all_banks():
+    """TÜM banka dekont tiplerinin rail (EFT/FAST/HAVALE) sınıflaması — geniş matris. Bir banka-özel
+    değişiklik başka bir bankanın rail'ini bozarsa bu test yakalar. (Kullanıcının attığı gerçek
+    dekont setinden türetildi: Garanti/İşbank/Papara/VakıfBank/YapıKredi/Alternatif/Akbank/Denizbank.)"""
+    import authenticity as A
+    a = _gen_iban
+    cases = [
+        ("Garanti FAST", "HESAPTAN FAST\nFAST REF NO 584000018\nMASRAF 7,97 BSMV 0,40", a("00062"), a("00015"), "fast"),
+        ("İşbank Giden Fast", "e-Dekont\nGiden Fast İşlemi\nFAST Ücreti ve Vergi 8,37", a("00064"), a("00111"), "fast"),
+        ("Papara FAST", "FAST Para Transferi\nİşlem Türü FAST Para Transferi", a("00082"), a("00134"), "fast"),
+        ("VakıfBank FAST Anlık", "İŞLEM TÜRÜ FAST Giden Anlık Ödeme\nMASRAF TUTARI 16,76", a("00015"), a("00046"), "fast"),
+        ("YapıKredi karışık EFT/FAST", "FAST GÖNDERİMİ\nDEKONT TİPİ : EFT\nGİDEN FAST TUTARI -8600\nAÇIKLAMA:ELEKTRONİK FON TRANSFERİ (EFT) ÜCRETİ - FAST/", a("00067"), a("00134"), "fast"),
+        ("Alternatif Giden FAST", "İŞLEM TÜRÜ Giden FAST Ödemesi\nFAST Sorgu Numarası 12985127", a("00124"), a("00067"), "fast"),
+        ("Akbank GECEFT", "EFT BANKALAR ARASI HESABA HAVALE\nGECEFT KOMİSYON 15,96\nGEC EFT BSMV 0,80", a("00046"), a("00067"), "eft"),
+        ("Akbank EFT başlık", "EFT BANKALAR ARASI HESABA HAVALE\nKOMİSYON 7,97\nBSMV 0,40", a("00046"), a("00134"), "eft"),
+        ("VakıfBank Hesaptan Havale", "İŞLEM Hesaptan Havale", a("00015"), a("00015", "0000000000099999"), "havale"),
+    ]
+    wrong = []
+    for name, txt, s, r, exp in cases:
+        got = (A.classify_rail(txt, s, r, "") or {}).get("rail")
+        if got != exp:
+            wrong.append(f"{name}: beklenen={exp} bulunan={got}")
+    return (not wrong), ("9/9 doğru" if not wrong else f"YANLIŞ: {wrong}")
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -311,6 +343,7 @@ _CHECKS = [
     (11, "Başlık-temelli EFT (GEÇ EFT etiketi olmadan)", _t11_akbank_eft_title_based),
     (12, "Bankalararası işlem ASLA havale olamaz", _t12_interbank_never_havale),
     (13, "İnterbank-havale çelişkisi puanı düşürür", _t13_interbank_havale_penalized),
+    (14, "Rail matrisi: 9 banka tipi doğru (EFT/FAST/HAVALE)", _t14_rail_matrix_all_banks),
 ]
 
 
