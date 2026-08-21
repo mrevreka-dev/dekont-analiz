@@ -783,10 +783,14 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
     # Herhangi bir FAST işareti (faturalama VEYA zayıf etiket) — havale/aynı-banka kontrolü için
     fast_label = fast_billing or fast_tag
     eft_fee = eft_definitive or eft_billing                        # (geri uyum: eski kod bu adı kullanıyordu)
-    interbank_title = ("bankalararasi" in ns and "eft" in ns)      # Akbank GENEL başlığı
+    # "eft" KELİMESİ (alt-dize DEĞİL): 'defter', 'geft' gibi kelimeler yanlış-pozitif üretmesin diye
+    # kelime sınırı aranır (ör. yasal dipnottaki "Banka'nın DEFTer kayıtları" → 'eft' İÇERMEZ sayılır).
+    _eft_word = bool(re.search(r"(?<![a-zçğıöşü])eft(?![a-zçğıöşü])", n)) or ("eftbankalararasi" in ns)
+    interbank_title = ("bankalararasi" in ns and _eft_word)         # Akbank GENEL başlığı
 
     # Başlıkta açık "EFT" (Akbank 'EFT BANKALAR ARASI HESABA HAVALE') — tek başına EFT≠FAST ayırmaz.
-    eft_in_title = ("eft" in ns) or ("eftbankalararasi" in ns) or ("bankalararasihesaba" in ns and "eft" in ns)
+    # ALT-DİZE DEĞİL kelime eşleşmesi ('defter'/'geft' yakalanmaz).
+    eft_in_title = _eft_word or ("eftbankalararasi" in ns) or ("bankalararasihesaba" in ns and _eft_word)
 
     rail, conf = "belirsiz", 0
     title_based_eft = False
@@ -833,8 +837,13 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
             rail, conf = "fast", 88; ev.append("FAST faturalama → FAST (IBAN kodu okunamadı).")
         elif eft_billing and not fast_billing:
             rail, conf = "eft", 86; ev.append("EFT faturalama → EFT (IBAN kodu okunamadı).")
-        elif "hesaptanhavale" in ns and not eft_fee and not fast_label:
-            rail, conf = "havale", 78; ev.append("İşlem türü 'Hesaptan Havale' (banka-içi) → HAVALE.")
+        elif (("hesaptanhavale" in ns or "hesaptanhesabahavale" in ns) and not eft_fee
+              and not fast_label and not _eft_word and "bankalararasi" not in ns):
+            # 'Hesaptan (Hesaba) Havale' başlığı + GERÇEK EFT/FAST işareti YOK + 'bankalararası' YOK →
+            # banka-içi HAVALE (ör. Ziraat Mobil). Akbank'ın 'EFT BANKALAR ARASI HESABA HAVALE' genel
+            # şablonu HARİÇ tutulur (o başlıkta 'eft' KELİMESİ ve 'bankalararası' vardır).
+            rail, conf = "havale", 80
+            ev.append("İşlem türü 'Hesaptan Hesaba Havale' (banka-içi), EFT/FAST işareti yok → HAVALE.")
         elif fast_tag:
             rail, conf = "fast", 80; ev.append("Açık FAST ibaresi → FAST (IBAN kodu okunamadı).")
         elif eft_in_title:

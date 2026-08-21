@@ -34,6 +34,19 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z5", "date": "2026-08-21 19:45", "area": "RAIL YANLIŞ-POZİTİFİ: 'Hesaptan Hesaba Havale' EFT sanılıyordu → HAVALE düzeltildi", "test": 28,
+     "bug": "Gerçek Ziraat 'Hesaptan Hesaba Havale' (banka-içi, aynı IBAN kodu 00010) dekontu yeni EFT kuralıyla "
+            "yanlışlıkla EFT işaretlenip 'güvenilir değil / riskli' (skor 40) çıkıyordu. İKİ kök hata: (1) "
+            "classify_rail'de eft_in_title = ('eft' in metin) ALT-DİZE eşleşmesi, yasal dipnottaki 'Banka'nın "
+            "DEFTer kayıtları' kelimesinin içindeki 'eft'i yakalıyordu → sahte EFT. (2) IBAN kodu okunamadığında "
+            "(gönderici IBAN çıkarılamamıştı) HAVALE fallback'i yalnız 'hesaptanhavale' arıyordu; başlık "
+            "'hesaptan HESABA havale' olduğundan kaçırılıp eft_in_title'a düşüyordu. Böylece banka-içi bir "
+            "HAVALE, riskli bir EFT gibi görünüyordu.",
+     "fix": "(1) eft_in_title artık KELİME sınırı arar (regex (?<![a-zçğıöşü])eft(?![a-zçğıöşü])) → 'defter'/"
+            "'geft' yakalanmaz. (2) HAVALE fallback'i 'hesaptanhavale' VE 'hesaptanhesabahavale' başlıklarını "
+            "kapsar; koşul: gerçek EFT/FAST işareti YOK + 'bankalararası' YOK + 'eft' KELİMESİ yok. Akbank'ın "
+            "'EFT BANKALAR ARASI HESABA HAVALE' genel şablonu ('eft' kelimesi + 'bankalararası' taşır) ve 'GEÇ "
+            "EFT' KESİN EFT olarak korunur. Sonuç: Ziraat Havale → HAVALE, skor 100, güvenilir. Test #28 kilitler."},
     {"id": "Z4", "date": "2026-08-21 15:15", "area": "İŞLEM KANALI KURALI: EFT anında geçmez → RİSKLİ (tüm bankalar, YZ + kural)", "test": 27,
      "bug": "Dolandırıcılık senaryosu: oyun pini alan müşteri ödemeyi EFT ile yapıp dekontu gönderiyor. EFT "
             "ANINDA hesaba geçmez (saatli/toplu işlenir, geri çağrılabilir) → para henüz yansımamış olabilir, "
@@ -840,6 +853,31 @@ def _t27_eft_settlement_risk():
     return ok, f"EFT(güvenilir-değil+skor{sc_e.authenticity_score}≤40)={eft_ok}, FAST(cezasız)={fast_ok}, HAVALE={hav_ok}"
 
 
+def _t28_havale_not_eft_false_positive():
+    """RAIL YANLIŞ-POZİTİFİ: 'Hesaptan Hesaba Havale' (Ziraat, banka-içi) EFT DEĞİL HAVALE olmalı. İki kök hata
+    kilitlenir: (a) 'eft' ALT-DİZE eşleşmesi yasal dipnottaki 'DEFTer kayıtları' kelimesini yakalayıp yanlış EFT
+    üretiyordu → artık KELİME sınırı aranır; (b) HAVALE fallback'i yalnız 'hesaptanhavale' arıyordu, 'hesaptan
+    HESABA havale' başlığını kaçırıp EFT'ye düşüyordu → artık ikisi de HAVALE. Akbank 'GEÇ EFT' hâlâ EFT kalır."""
+    import authenticity as _a
+    # (a) Ziraat 'Hesaptan Hesaba Havale' + yasal dipnotta 'defter kayıtları' (IBAN kodu okunamadı senaryosu)
+    ziraat = ("Hesaptan Hesaba Havale\nİŞLEM YERİ : ZİRAAT MOBİL\nAlacaklı IBAN : TR17 0001 0024 5259 1457 4150 02\n"
+              "Komisyon : 8,38 TRY\nHavale Tutarı : 10.000,00 TRY\n"
+              "Banka'nın defter kayıtları ve belgeleri kesin delildir.\nINTTHVLG MOBIL İNTERNET ŞUBESİ")
+    rz = _a.classify_rail(ziraat, "", "TR170001002452591457415002", "ziraat")   # sender IBAN boş (motorun gördüğü gibi)
+    havale_ok = bool(rz) and rz["rail"] == "havale"
+    # (b) Akbank GEÇ EFT (GECEFT) → hâlâ EFT (yanlışlıkla HAVALE'ye kaymamalı)
+    akbank = ("EFT BANKALAR ARASI HESABA HAVALE\nGECEFT KOMİSYON 15,96\nGEC EFT BSMV 0,80\n"
+              "Alıcı IBAN TR72 0006 2000 7470 0006 6027 48")
+    ak = _a.classify_rail(akbank, "TR670004600002888000786377", "TR720006200074700006602748", "akbank")
+    akbank_eft_ok = bool(ak) and ak["rail"] == "eft"
+    # (c) 'defter' tek başına EFT üretmemeli (kelime sınırı) — düz metin, havale başlığı yok
+    only_defter = _a.classify_rail("Banka'nın defter kayıtları esastır. Alacaklı IBAN TR17 0001 0024 5259 1457 4150 02",
+                                   "", "TR170001002452591457415002", "ziraat")
+    defter_ok = (only_defter is None) or (only_defter.get("rail") != "eft")
+    ok = havale_ok and akbank_eft_ok and defter_ok
+    return ok, f"ziraat-havale={havale_ok}(rail={rz['rail'] if rz else None}), akbank-eft={akbank_eft_ok}, defter≠eft={defter_ok}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -868,6 +906,7 @@ _CHECKS = [
     (25, "'Dekont değil' yanlış-pozitifi: YZ alanları okuduysa NOT_A_RECEIPT kalkar", _t25_not_a_receipt_false_positive),
     (26, "Enpara ↔ QNB ayrı banka + yanlış 'banka çelişkisi' yok (marka önceliği)", _t26_enpara_qnb_separate_no_false_mismatch),
     (27, "İşlem kanalı: EFT anında geçmez → riskli/güvenilir değil; FAST/HAVALE anında", _t27_eft_settlement_risk),
+    (28, "Rail: 'Hesaptan Hesaba Havale' → HAVALE (EFT değil); 'defter' EFT tetiklemez", _t28_havale_not_eft_false_positive),
 ]
 
 
