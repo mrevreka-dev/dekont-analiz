@@ -281,6 +281,17 @@ async def scan_log_api(q: str | None = None, limit: int = 20):
     return {"query": q or "", "count": len(rows), "results": rows}
 
 
+@app.get("/api/v1/diag_log")
+async def diag_log_api(limit: int = 100, only_problems: bool = False):
+    """TANI/HATA GÜNLÜĞÜ: her analizin tanı bilgisi (çıkarım boş mu, YZ verdict/başarı, kesik-kurtarma,
+    kara-liste, görsel tahrifat, süre, kodlar). Gün sonu hata tespiti/düzeltmesi için. only_problems=true
+    ise yalnız sorunlu kayıtlar (çıkarım boş / YZ başarısız / vision başarısız / warn-error)."""
+    import store as _st
+    limit = max(1, min(int(limit or 100), 500))
+    rows = _st.diag_log_recent(limit, only_problems=bool(only_problems))
+    return {"count": len(rows), "only_problems": bool(only_problems), "results": rows}
+
+
 @app.get("/api/v1/self_check")
 async def self_check_api():
     """Motorun ÖZ-DENETİMİ: canlı koda karşı tüm değişmez (invariant) testlerini çalıştırır.

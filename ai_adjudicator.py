@@ -205,8 +205,8 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
             pass
     content.append({"type": "text", "text": prompt})
 
-    # Forensic JSON yanıtı (gerekçe + düzeltmeler + görsel tahrifat + iyileştirme notları) için yeterli alan.
-    body = {"model": model, "max_tokens": 2048, "messages": [{"role": "user", "content": content}]}
+    # Forensic JSON yanıtı için yeterli alan (yanıt max_tokens'a takılıp KESİLMESİN → parse edilemiyor).
+    body = {"model": model, "max_tokens": 4096, "messages": [{"role": "user", "content": content}]}
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(API_URL, data=data, method="POST")
     req.add_header("x-api-key", api_key)
@@ -254,6 +254,42 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
     return _san
 
 
+def _salvage_json(frag: str) -> dict | None:
+    """max_tokens ile KESİLMİŞ JSON'u kurtarır: ilk '{'ten başlar, sondan kırparak açık tırnak/parantezleri
+    dengeler ve en uzun AYRIŞTIRILABİLİR ön-eki bulur. Böylece verdict/confidence/gorsel_tahrifat KURTARILIR."""
+    frag = (frag or "").strip()
+    i = frag.find("{")
+    if i < 0:
+        return None
+    frag = frag[i:]
+    try:
+        o = json.loads(frag)
+        if isinstance(o, dict):
+            return o
+    except Exception:
+        pass
+    for end in range(len(frag), 1, -1):
+        s = frag[:end].rstrip().rstrip(",")
+        if not s.endswith(("}", "]", '"')) and not s[-1:].isdigit() and s[-1:] not in ("e", "l"):
+            continue  # yalnız bir değerin bittiği konumlarda dene (hız)
+        cand = s
+        if cand.count('"') % 2 == 1:
+            cand += '"'
+        _sq = cand.count("[") - cand.count("]")
+        _cu = cand.count("{") - cand.count("}")
+        if _sq > 0:
+            cand += "]" * _sq
+        if _cu > 0:
+            cand += "}" * _cu
+        try:
+            o = json.loads(cand)
+            if isinstance(o, dict) and o.get("verdict"):
+                return o
+        except Exception:
+            continue
+    return None
+
+
 def _parse_json(text: str) -> dict | None:
     if not text:
         return None
@@ -262,9 +298,23 @@ def _parse_json(text: str) -> dict | None:
         text = text.strip("`")
         if text[:4].lower() == "json":
             text = text[4:]
-    a, b = text.find("{"), text.rfind("}")
-    if a < 0 or b <= a:
+    a = text.find("{")
+    b = text.rfind("}")
+    if a < 0:
         return None
+    if b > a:
+        try:
+            o = json.loads(text[a:b + 1])
+            if isinstance(o, dict):
+                return o
+        except Exception:
+            pass
+    # KURTARMA: yanıt max_tokens'a takılıp KESİLMİŞSE (geçerli JSON kapanmamış), açık tırnak/parantezleri
+    # dengeleyip artan şekilde en uzun geçerli ön-eki ayrıştırmayı dene — verdict/gorsel_tahrifat kurtarılır.
+    salvaged = _salvage_json(text[a:])
+    if salvaged is not None:
+        print("[adjudicator] KESİK yanıt kurtarıldı (partial JSON).", flush=True)
+        return salvaged
     try:
         o = json.loads(text[a:b + 1])
         return o if isinstance(o, dict) else None

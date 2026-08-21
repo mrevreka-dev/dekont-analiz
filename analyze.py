@@ -1371,6 +1371,39 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             _store_sl.log_scan(report)
         except Exception:
             pass
+    # TANI/HATA GÜNLÜĞÜ: her analizin tanı bilgisini kalıcı diag_log'a yaz (gün sonu inceleme/düzeltme).
+    if use_store:
+        try:
+            import store as _store_diag
+            _codes = {f.code for f in findings}
+            _ex_d = report.get("extracted", {}) or {}
+            _empty = not ((_ex_d.get("bank") or _ex_d.get("sender", {}).get("bank"))
+                          and (_ex_d.get("amount", {}).get("value") is not None
+                               or _ex_d.get("receiver", {}).get("iban")))
+            _ai_on = False
+            try:
+                import ai_adjudicator as _aj_d
+                _ai_on = _aj_d.is_enabled()
+            except Exception:
+                pass
+            _vis_ok = (extraction.text_source == "vision")
+            _sev = "error" if _empty else ("warn" if (_ai_on and ai_adjudication is None) else "info")
+            _store_diag.log_diag({
+                "sha256": struct.sha256, "bank": _ex_d.get("bank") or _ex_d.get("sender", {}).get("bank"),
+                "input_kind": input_kind, "severity": _sev,
+                "extraction_empty": _empty, "ai_enabled": _ai_on,
+                "ai_escalated": ai_adjudication is not None, "ai_ok": ai_adjudication is not None,
+                "ai_verdict": (ai_adjudication or {}).get("verdict"),
+                "ai_recovered": False, "vision_ok": _vis_ok,
+                "blocklist_hit": "KNOWN_FAKE" in _codes, "visual_tamper": "AI_VISUAL_TAMPER" in _codes,
+                "score": report.get("score", {}).get("authenticity_score"),
+                "risk": report.get("score", {}).get("risk_level"),
+                "codes": sorted(_codes),
+                "notes": f"text_source={extraction.text_source}",
+                "elapsed_ms": report.get("elapsed_ms"),
+            })
+        except Exception:
+            pass
     # HIZ ÖNBELLEĞİNE YAZ: aynı dosya ikinci kez gelirse tüm hattı atlayıp bunu döndürürüz.
     if use_store:
         try:

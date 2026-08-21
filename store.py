@@ -103,6 +103,14 @@ def _connect():
         sender_name TEXT, receiver_name TEXT, sender_bank TEXT, receiver_bank TEXT,
         amount REAL, fee REAL, total REAL, rail TEXT, risk TEXT, score INTEGER,
         input_kind TEXT, findings TEXT, created_at TEXT )""")
+    # TANI/HATA GÜNLÜĞÜ: HER analizin tanı bilgisi. Gün sonu bu tabloya + Railway loglarına bakıp
+    # hata tespiti ve düzeltmesi yapılır. severity: info | warn | error.
+    con.execute("""CREATE TABLE IF NOT EXISTS diag_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, sha256 TEXT, bank TEXT, input_kind TEXT,
+        severity TEXT, extraction_empty INTEGER, ai_enabled INTEGER, ai_escalated INTEGER,
+        ai_ok INTEGER, ai_verdict TEXT, ai_recovered INTEGER, vision_ok INTEGER,
+        blocklist_hit INTEGER, visual_tamper INTEGER, score INTEGER, risk TEXT,
+        codes TEXT, notes TEXT, elapsed_ms INTEGER, created_at TEXT )""")
     con.commit()
     _maybe_unblock(con)
     return con
@@ -612,6 +620,67 @@ def check(report: dict) -> list[dict]:
     return findings
 
 
+def log_diag(d: dict) -> bool:
+    """HER analizin tanı bilgisini kalıcı diag_log tablosuna yazar (gün sonu hata inceleme/düzeltme için).
+    d: sha256, bank, input_kind, severity, extraction_empty, ai_enabled, ai_escalated, ai_ok, ai_verdict,
+    ai_recovered, vision_ok, blocklist_hit, visual_tamper, score, risk, codes(list), notes, elapsed_ms."""
+    if not enabled():
+        return False
+    try:
+        con = _connect()
+    except Exception:
+        return False
+    try:
+        _codes = d.get("codes")
+        if isinstance(_codes, (list, tuple, set)):
+            _codes = ",".join(str(c) for c in _codes)
+        con.execute(
+            "INSERT INTO diag_log (sha256, bank, input_kind, severity, extraction_empty, ai_enabled, "
+            "ai_escalated, ai_ok, ai_verdict, ai_recovered, vision_ok, blocklist_hit, visual_tamper, "
+            "score, risk, codes, notes, elapsed_ms, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (d.get("sha256"), d.get("bank"), d.get("input_kind"), d.get("severity", "info"),
+             int(bool(d.get("extraction_empty"))), int(bool(d.get("ai_enabled"))),
+             int(bool(d.get("ai_escalated"))), int(bool(d.get("ai_ok"))), d.get("ai_verdict"),
+             int(bool(d.get("ai_recovered"))), int(bool(d.get("vision_ok"))),
+             int(bool(d.get("blocklist_hit"))), int(bool(d.get("visual_tamper"))),
+             d.get("score"), d.get("risk"), _codes, (d.get("notes") or "")[:1000], d.get("elapsed_ms"),
+             _dt.datetime.utcnow().isoformat()))
+        con.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        con.close()
+
+
+def diag_log_recent(limit: int = 100, only_problems: bool = False) -> list:
+    """Son tanı kayıtlarını döndürür (gün sonu inceleme). only_problems=True ise yalnız warn/error
+    ya da sorun içerenler (çıkarım boş / YZ başarısız / kurtarılmış / görsel tahrifat)."""
+    if not enabled():
+        return []
+    try:
+        con = _connect()
+    except Exception:
+        return []
+    try:
+        q = ("SELECT created_at, bank, input_kind, severity, extraction_empty, ai_ok, ai_verdict, "
+             "ai_recovered, vision_ok, blocklist_hit, visual_tamper, score, risk, codes, notes, "
+             "elapsed_ms, sha256 FROM diag_log ")
+        if only_problems:
+            q += ("WHERE severity IN ('warn','error') OR extraction_empty=1 OR ai_ok=0 OR "
+                  "ai_recovered=1 OR vision_ok=0 ")
+        q += "ORDER BY id DESC LIMIT ?"
+        rows = con.execute(q, (int(limit),)).fetchall()
+        cols = ["created_at", "bank", "input_kind", "severity", "extraction_empty", "ai_ok",
+                "ai_verdict", "ai_recovered", "vision_ok", "blocklist_hit", "visual_tamper",
+                "score", "risk", "codes", "notes", "elapsed_ms", "sha256"]
+        return [dict(zip(cols, r)) for r in rows]
+    except Exception:
+        return []
+    finally:
+        con.close()
+
+
 def check_number_reuse(report: dict) -> list[dict]:
     """BANKA-BAZLI NUMARA TEKRARI — bu dekonttaki tanımlayıcı numaralardan (işlem/doküman no,
     sıra/sorgu no, referans no) herhangi biri, AYNI bankada daha önce analiz edilmiş FARKLI bir
@@ -865,11 +934,40 @@ def check_blocklist(report: dict) -> list[dict]:
         # pozitiflerden, ör. bozuk dönemde OCR'ın DATE_IN_FUTURE'ı) kafa karıştırır ve aynı dekontu haksız
         # yere kara-listede gösterir. Kara-liste YALNIZ FARKLI bir dosyanın, daha önce sahte görülmüş bir
         # belgeyle AYNI banka+sıra numarasını taşıması durumunda BİLGİ olarak gösterilir.
+        # AYNI İŞLEMİN farklı-sha kopyası kara-liste FP'si üretmesin: eşleşen sahte kayıt, bu dekontla
+        # AYNI tutar+alıcı+işlem tarihini taşıyorsa (aynı belgenin tekrar taranması) göstergesi ÜRETİLMEZ.
+        def _round2(a):
+            try:
+                return round(float(a), 2)
+            except Exception:
+                return None
+
+        def _daykey(s):
+            dt, _ = parse_content_datetime(s or "")
+            return dt.date().isoformat() if dt else None
+
+        _cur_amt = _round2(f.get("amount"))
+        _cur_riban = re.sub(r"\s+", "", (f.get("receiver_iban") or "")).upper()
+        _cur_rname = re.sub(r"\s+", " ", (f.get("receiver_name") or "").strip()).upper()
+        _cur_day = _daykey(f.get("txn_date"))
         hit_seq = None
         if f["bank"] and f["seq_number"]:
-            hit_seq = con.execute(
-                "SELECT codes FROM analyses WHERE bank=? AND seq_number=? AND is_fake=1 AND sha256<>? LIMIT 1",
-                (f["bank"], f["seq_number"], f["sha256"])).fetchone()
+            _rows = con.execute(
+                "SELECT amount, receiver_iban, receiver_name, txn_date FROM analyses "
+                "WHERE bank=? AND seq_number=? AND is_fake=1 AND sha256<>? LIMIT 20",
+                (f["bank"], f["seq_number"], f["sha256"])).fetchall()
+            for _pr in _rows:
+                p_amt = _round2(_pr[0])
+                p_riban = re.sub(r"\s+", "", (_pr[1] or "")).upper()
+                p_rname = re.sub(r"\s+", " ", (_pr[2] or "").strip()).upper()
+                p_day = _daykey(_pr[3])
+                amt_diff = (_cur_amt is not None and p_amt is not None and _cur_amt != p_amt)
+                riban_diff = bool(_cur_riban and p_riban and _cur_riban != p_riban)
+                rname_diff = bool(_cur_rname and p_rname and _cur_rname != p_rname)
+                date_diff = bool(_cur_day and p_day and _cur_day != p_day)
+                if amt_diff or riban_diff or rname_diff or date_diff:
+                    hit_seq = _pr   # gerçekten FARKLI bir belge → kara-liste göstergesi
+                    break
         print(f"[blocklist] bank={f['bank']!r} seq={f['seq_number']!r} sha={f['sha256'][:10]} "
               f"cross_doc_hit={bool(hit_seq)}", flush=True)
         if hit_seq:
