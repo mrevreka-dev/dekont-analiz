@@ -90,9 +90,13 @@ NAME_KEYWORDS = [
     (r"halkbank|halk bankas", "Türkiye Halk Bankası"),
     (r"vak[ıi]fbank|vak[ıi]f bankas", "VakıfBank"),
     (r"denizbank", "DenizBank"),
+    # MARKA ÖNCELİĞİ: Enpara ARTIK QNB'den AYRI bir bankadır (00157 Enpara / 00111 QNB — farklı tüzel
+    # kişiler, farklı IBAN kodları). Enpara dekont etiketi 'Enpara.com (QNB)' gibi İÇİNDE 'QNB' geçen bir
+    # metin taşıyabildiğinden, 'enpara' kalıbı 'qnb'DEN ÖNCE denenmelidir; aksi halde Enpara dekontu
+    # yanlışlıkla 'QNB Finansbank'a çözülür ve gönderici IBAN'ı (Enpara, 00157) ile ÇELİŞİR (yanlış SAHTE).
+    (r"enpara", "Enpara Bank"),
     (r"finansbank|qnb", "QNB Finansbank"),
     (r"\bteb\b|türk ekonomi", "Türk Ekonomi Bankası (TEB)"),
-    (r"enpara", "Enpara Bank"),
     (r"kuveyt türk", "Kuveyt Türk Katılım"),
     (r"albaraka", "Albaraka Türk Katılım"),
     (r"ing bank|\bing\b", "ING Bank"),

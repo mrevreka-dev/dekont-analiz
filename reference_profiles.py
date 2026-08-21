@@ -47,7 +47,7 @@ REFERENCE_PROFILES = {
              "id_lengths": {"sorgu_no": ({10}, 3)}},
     "qnb": {"label": "QNB Bank A.Ş.", "n": 4, "amount_currency": ("never", 2),
             "id_lengths": {"sorgu_no": ({10}, 3), "fis_no": ({15}, 3)}},
-    "enpara": {"label": "Enpara.com (QNB)", "n": 18, "amount_currency": ("never", 14),
+    "enpara": {"label": "Enpara Bank", "n": 18, "amount_currency": ("never", 14),
                "id_lengths": {"fis_no": ({15}, 6)}},   # SORGU NO enpara'da 7 ve 10 → tutarsız, kural yok
     "ing": {"label": "ING Bank A.Ş.", "n": 1, "amount_currency": ("never", 1),
             "id_lengths": {}},

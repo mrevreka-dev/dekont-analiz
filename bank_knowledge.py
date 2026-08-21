@@ -159,7 +159,7 @@ BANK_KNOWLEDGE = {
         "notes": "IBAN kodu 00064.",
     },
     "enpara": {
-        "label": "Enpara.com (QNB)",
+        "label": "Enpara Bank",
         "layout": "'ALICI ÜNVANI' / 'MÜŞTERİ ÜNVANI' iki blok. Fiş No = YYYYAAGG + sayaç.",
         "rail_labeling": "KANAL = FATURA ETİKETİ. Enpara işlemi 'EFT (FAST)' / 'GİDEN FAST EFT' diye "
                          "gösterse de, tutar/ücreti 'EFT TUTARI' ve 'EFT ÜCRETİ' diye FATURALAR → işlem "

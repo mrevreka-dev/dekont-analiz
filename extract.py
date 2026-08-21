@@ -482,7 +482,7 @@ BANK_REGISTRY = [
     {"key": "alternatif", "label": "Alternatifbank (ABank)", "iban": {"00124"},
      "sig": lambda c: ("alternatifbank.com" in c["low"] or "alternatif bank" in c["low"]
                        or "alternatifbank a" in c["low"] or "0060003154500048" in c["lc_ns"])},
-    {"key": "enpara", "label": "Enpara.com (QNB)", "iban": {"00157", "00111"},
+    {"key": "enpara", "label": "Enpara Bank", "iban": {"00157"},
      "sig": lambda c: ("enpara.com" in c["low"] or "enpara subesi" in c["nlow"]
                        or ("qnb.com" not in c["low"] and (
                            ("alici unvani" in c["nlow"] and "eft tutari" in c["nlow"])
@@ -916,7 +916,7 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.transaction.document_no = fis.group(1) if fis else ""
         sira = re.search(r"S[ıi]ra\s*No\s*[:：]?\s*([\d\-]{6,})", rt, re.I)
         ex.transaction.receipt_no = sira.group(1) if sira else ""
-        ex.sender.bank = ex.bank or ("QNB Bank A.Ş." if is_qnb else "Enpara.com (QNB)")
+        ex.sender.bank = ex.bank or ("QNB Bank A.Ş." if is_qnb else "Enpara Bank")
 
     # =============================================================
     #  T.C. ZİRAAT BANKASI (HESAPTAN FAST / EFT / HAVALE)

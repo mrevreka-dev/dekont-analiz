@@ -34,6 +34,18 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z3", "date": "2026-08-21 14:45", "area": "ENPARA ↔ QNB AYRI BANKA: yanlış 'gönderici banka çelişkisi' (SENDER_BANK_MISMATCH) giderildi", "test": 26,
+     "bug": "Gerçek Enpara dekontu (Ahmet Özkul → Serhat, GİDEN FAST EFT) webde SENDER_BANK_MISMATCH ile kritik "
+            "(12 puan) çıkıyordu; YZ ise 'gerçek' diyordu (katman çelişkisi). Neden: parser gönderici bankasını "
+            "'Enpara.com (QNB)' etiketliyor; _canon_bank içinde NAME_KEYWORDS sırası 'qnb'yi 'enpara'dan ÖNCE "
+            "deneyince metin yanlışlıkla 'QNB Finansbank'a çözülüyor, ama gönderici IBAN'ı Enpara (00157→'Enpara "
+            "Bank'). İki kanonik ad farklı → yanlış 'banka çelişkisi'. Enpara ARTIK QNB'den AYRI bir bankadır "
+            "(00157/00111 farklı kodlar) — birleştirmek YANLIŞ; doğru çözüm markayı doğru tanımak.",
+     "fix": "(1) banks.NAME_KEYWORDS: 'enpara' kalıbı 'finansbank|qnb'DEN ÖNCE (marka önceliği) → 'Enpara.com "
+            "(QNB)' artık 'Enpara Bank'a çözülür, IBAN ile ÇELİŞMEZ. (2) extract.py: enpara kaydı etiketi 'Enpara "
+            "Bank', IBAN kümesi {00157} (00111 kaldırıldı; o QNB'ye ait). sender.bank yedeği 'Enpara Bank'. "
+            "(3) bank_knowledge/reference_profiles etiketleri 'Enpara Bank'. Enpara ile QNB kanonik+kod olarak "
+            "AYRI kalır. Test #26 kilitler (marka önceliği + çelişki-yok + ayrı-banka)."},
     {"id": "Z2", "date": "2026-08-21 13:00", "area": "'DEKONT DEĞİL' YANLIŞ-POZİTİFİ: YZ/Vision alan doldurduysa NOT_A_RECEIPT kalkar", "test": 25,
      "bug": "Gerçek Enpara dekontu (Ahmet Özkul → Serhat, 40.000 TL, GİDEN FAST EFT) webde tarandığında YZ "
             "'sorunsuz/gerçek' diyordu, AMA skor kartı 'sahte (5 puan)' diyordu — KATMAN ÇELİŞKİSİ. Neden: "
@@ -515,7 +527,7 @@ def _t18_coverage_new_items():
     rep = {
         "classification": {"input_kind": "pdf", "text_source": "digital"},
         "extracted": {
-            "bank": "Enpara.com (QNB)",
+            "bank": "Enpara Bank",
             "sender": {"name": "NURULLAH ONAT", "iban": "TR080015700000000116981974", "tckn": ""},
             "receiver": {"name": "UĞUR ERDAL", "iban": "TR080015700000000118637085"},
             "amount": {"value": 35000.0, "fee": 0.0, "total": 35000.0},
@@ -744,6 +756,29 @@ def _t25_not_a_receipt_false_positive():
     return ok, f"gerçek-dekont(kalktı={('NOT_A_RECEIPT' in rem_a)},skor={sc_a}), dekont-değil(kaldı={not rem_b},skor={sc_b})"
 
 
+def _t26_enpara_qnb_separate_no_false_mismatch():
+    """ENPARA ↔ QNB AYRI BANKA + YANLIŞ 'BANKA ÇELİŞKİSİ' YOK: Enpara, QNB'den AYRI bir bankadır
+    (00157 Enpara / 00111 QNB). Enpara dekont etiketi 'Enpara.com (QNB)' gibi içinde 'QNB' geçen bir
+    metin taşıyabilir; marka önceliği (NAME_KEYWORDS'te 'enpara' 'qnb'DEN ÖNCE) olmadan bu metin
+    yanlışlıkla 'QNB Finansbank'a çözülür ve Enpara gönderici IBAN'ı (00157) ile ÇELİŞİR → gerçek Enpara
+    dekontu SAHTE damgalanırdı. Kural: (a) 'Enpara.com (QNB)' → 'Enpara Bank'; (b) Enpara stated ↔ Enpara
+    IBAN çelişmez (SENDER/RECEIVER_BANK_MISMATCH YOK); (c) Enpara ile QNB kanonik olarak AYRI kalır."""
+    import banks as _b, authenticity as _a
+    # (a) marka önceliği: içinde 'qnb' geçse bile Enpara markası kazanır
+    ca = _a._canon_bank("Enpara.com (QNB)") == "Enpara Bank"
+    # (b) Enpara gönderici: yazan banka ('Enpara.com (QNB)') ile IBAN bankası (00157→Enpara Bank) ÇELİŞMEZ
+    s_iban = "TR180015700000000083817494"           # Enpara 00157 (geçerli)
+    stated = _a._canon_bank("Enpara.com (QNB)")
+    iban_canon = _a._canon_bank(_b.bank_from_iban(s_iban))
+    no_mismatch = bool(stated) and bool(iban_canon) and (stated == iban_canon)
+    # (c) Enpara ve QNB AYRI banka: farklı IBAN kodu + farklı kanonik ad
+    q_iban = "TR330011100000000012345678"            # QNB 00111
+    sep = (_b.iban_bank_code(s_iban) == "00157" and _b.iban_bank_code(q_iban) == "00111"
+           and _a._canon_bank("Enpara Bank") != _a._canon_bank("QNB Finansbank"))
+    ok = ca and no_mismatch and sep
+    return ok, f"marka-önceliği={ca}, çelişki-yok={no_mismatch}, enpara≠qnb-ayrı={sep}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -770,6 +805,7 @@ _CHECKS = [
     (23, "Görsel tahrifat: fotoğraf her zaman YZ'ye + font uyuşmazlığı bulgusu", _t23_ai_visual_tamper_escalation),
     (24, "Mantıksal çelişki (aynı banka ↔ EFT başlığı) → %50 altı + güvenilir değil", _t24_samebank_rail_contradiction),
     (25, "'Dekont değil' yanlış-pozitifi: YZ alanları okuduysa NOT_A_RECEIPT kalkar", _t25_not_a_receipt_false_positive),
+    (26, "Enpara ↔ QNB ayrı banka + yanlış 'banka çelişkisi' yok (marka önceliği)", _t26_enpara_qnb_separate_no_false_mismatch),
 ]
 
 
