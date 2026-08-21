@@ -101,7 +101,7 @@ def should_adjudicate(findings: list, extraction: dict, input_kind: str = "pdf")
     return (bool(reasons), reasons)
 
 
-def _img_b64(pil_img, max_dim: int = 1900):
+def _img_b64(pil_img, max_dim: int = 1568):   # Anthropic optimal ~1568px; daha büyüğü hız kazandırmaz
     from PIL import Image
     img = pil_img.convert("RGB")
     w, h = img.size
@@ -137,10 +137,10 @@ _SCHEMA_HINT = (
 
 def _build_prompt(extraction: dict, findings: list, bank_ctx: str, input_kind: str,
                   text_source: str) -> str:
-    fields_json = json.dumps(extraction or {}, ensure_ascii=False, indent=1)[:3500]
+    fields_json = json.dumps(extraction or {}, ensure_ascii=False)[:1800]
     finds = [{"code": f.get("code"), "severity": f.get("severity"), "tr": (f.get("tr") or "")[:300]}
              for f in (findings or []) if f.get("severity") in ("high", "critical", "medium") or f.get("weight", 0) > 0]
-    finds_json = json.dumps(finds, ensure_ascii=False)[:2500]
+    finds_json = json.dumps(finds, ensure_ascii=False)[:1400]
     kind_note = ("Bu bir FOTOĞRAF/GÖRÜNTÜdür — IBAN/kimlik gibi rakam-alanlarda kuralın 'geçersiz' demesi "
                  "genelde OKUMA hatasıdır; görüntüden NETLEŞTİRİP doğru değeri OKU."
                  if (input_kind == "image" or text_source in ("ocr", "vision"))
@@ -150,41 +150,30 @@ def _build_prompt(extraction: dict, findings: list, bank_ctx: str, input_kind: s
         "aşağıdaki ALANLARI ve BULGULARI üretti. Şimdi GÖRSELİ (varsa) DOĞRUDAN incele ve şu işleri yap:\n"
         "1) Her BULGUYU değerlendir: gerçek bir tahrifat/uyuşmazlık mı, yoksa kuralın/OCR'ın HATASI mı? "
         "Gerekçelendir.\n"
-        "2) OCR'ın okuduğu TÜM alanları GÖRÜNTÜYLE karşılaştırıp DOĞRULA. Boş, eksik, yanlış ya da hatalı "
-        "okunan HER alanı görüntüden yeniden oku ve corrected_fields'a DOĞRU değeri yaz — özellikle: "
-        "GÖNDERİCİ IBAN, ALICI IBAN (her koşulda oku; dekontta varsa MUTLAKA yaz, gerçekten yoksa boş bırak), "
-        "gönderici adı, alıcı adı, tutar (rakam+yazı), işlem/referans/sorgu no, tarih, TC. Kural doğru okuduysa "
-        "tekrar yazmana gerek yok; en ufak farkta bile DOĞRUSUNU yaz. Değer görüntüde okunuyorsa ASLA boş bırakma.\n"
-        "   BANKA ADI ↔ IBAN KODU (KATI KURAL, HER İKİ TARAF): Dekontta gönderici ve alıcı için YAZAN banka "
-        "adını (ör. 'Alıcı Banka: Garanti') o tarafın IBAN'ının banka koduyla (TR + 2 kontrol hanesinden "
-        "sonraki 5 hane) KARŞILAŞTIR. Farklı bankaları gösteriyorlarsa (ör. yazan 'Garanti' ama IBAN kodu "
-        "Yapı Kredi) bu bir ÇELİŞKİDİR → finding_reviews'a 'RECEIVER_BANK_MISMATCH'/'SENDER_BANK_MISMATCH' "
-        "olarak yaz ve reasoning'de belirt. Türk banka kodları: 00010 Ziraat, 00015 Vakıf, 00046 Akbank, "
-        "00062 Garanti, 00064 İş Bankası, 00067 Yapı Kredi, 00111 QNB, 00134 Denizbank, 00157 Enpara, 00205 Kuveyt Türk.\n"
-        "3) GÖRSEL/YAZI TAHRİFAT DENETİMİ — EN ÖNEMLİ ADIM, HER BANKA ve HER ANALİZ için ZORUNLU. "
-        "Gerçek bir dekontta TÜM metin TEK ve tutarlı bir yazı tipinde/kalınlıkta/taban çizgisinde basılır. "
-        "Aşağıdaki KRİTİK ALANLARIN HER BİRİNİ TEK TEK, belgenin genel yazı tipiyle KARŞILAŞTIRARAK incele "
-        "(alan rakamla da yazılmış olsa yazıyla da): "
-        "(a) TUTAR — rakamla yazılan (ör. 75.000,00 TL) VE yazıyla yazılan (ör. 'YetmişBeşBinTL'); "
-        "(b) GÖNDERİCİ IBAN; (c) ALICI IBAN; (d) İŞLEM NO / REFERANS NO / SORGU NO / DEKONT NO; "
-        "(e) GÖNDERİCİ ADI ve ALICI ADI; (f) TARİH ve TC/VKN. "
-        "Bir alanın fontu/kalınlığı/boyutu/hizası/taban çizgisi belgenin GENELİNDEN farklıysa, ya da "
-        "kenarları keskin/bulanık, arka planı farklı, hafif kaymış ya da orantısız görünüyorsa → o alan "
-        "SONRADAN YAPIŞTIRILMIŞ/DEĞİŞTİRİLMİŞ demektir. HER FARKLI alanı gorsel_tahrifat'a AYRI AYRI yaz "
-        "(alan adı + neyin farklı olduğu + güven). Tek bir alanın bile farklı font olması güçlü sahteciliktir. "
-        "Hiçbir tutarsızlık YOKSA gorsel_tahrifat'ı BOŞ dizi [] bırak — ama bu denetimi ATLAMA, her alana BAK. "
-        "Emin değilsen uydurma; yalnız GÖRÜNTÜDE açıkça görünen farkı yaz.\n"
-        "   ÇOK ÖNEMLİ AYRIM: Bir alanın DEĞER olarak tutarlı olması (ör. rakamla 75.000,00 TL ile yazıyla "
-        "'YetmişBeşBinTL'in AYNI meblağ olması) YAZI TİPİ tutarlılığı DEĞİLDİR ve tahrifatı DIŞLAMAZ. Sen "
-        "DEĞERE değil, HARFLERİN BİÇİMİNE bak: yazıyla yazılan tutar satırının FONT AİLESİNİ (serif/sans-serif), "
-        "KALINLIĞINI ve harf aralığını belgenin GERİ KALANIYLA kıyasla. Örnek: belgenin geneli ince, aralıklı, "
-        "DAKTİLO/monospace bir yazı tipindeyken, yazıyla tutar KALIN ve ORANSAL (Arial/Helvetica Bold gibi, "
-        "harfler sıkışık) görünüyorsa → bu KESİNLİKLE sonradan eklenmiş/yapıştırılmıştır, gorsel_tahrifat'a "
-        "yüksek güvenle yaz. Değer eşleşse bile font farklıysa TAHRİFAT vardır.\n"
+        "2) TÜM alanları görüntüyle doğrula; boş/yanlış okunanı yeniden oku ve corrected_fields'a DOĞRUsunu "
+        "yaz (gönderici+alıcı IBAN, isimler, tutar, işlem/referans no, tarih, TC). Değer görüntüde varsa boş "
+        "bırakma. BANKA ADI↔IBAN: gönderici ve alıcı için YAZAN banka adını IBAN'ın banka koduyla (TR+kontrol "
+        "sonrası 5 hane) kıyasla; farklıysa (ör. yazan Garanti ama IBAN 00067=Yapı Kredi) finding_reviews'a "
+        "'RECEIVER_BANK_MISMATCH'/'SENDER_BANK_MISMATCH' yaz. Kodlar: 00010 Ziraat,00015 Vakıf,00046 Akbank,"
+        "00062 Garanti,00064 İş Bankası,00067 Yapı Kredi,00111 QNB,00134 Denizbank,00157 Enpara,00205 Kuveyt Türk.\n"
+        "3) GÖRSEL/YAZI TAHRİFAT DENETİMİ — EN ÖNEMLİ, ZORUNLU. Gerçek dekontta TÜM metin TEK yazı tipinde "
+        "basılır. Her kritik alanı (tutar rakam+YAZIYLA, gönderici/alıcı IBAN, işlem/referans no, isimler, "
+        "tarih/TC) belgenin geneliyle TEK TEK kıyasla. Bir alanın fontu/kalınlığı/hizası farklıysa ya da "
+        "kenarları keskin/kaymış görünüyorsa → SONRADAN YAPIŞTIRILMIŞ; gorsel_tahrifat'a AYRI yaz (alan+neden+"
+        "güven). ÇOK ÖNEMLİ: DEĞER tutarlılığı (75.000 = YetmişBeşBin) FONT tutarlılığı DEĞİLDİR — DEĞERE değil "
+        "HARF BİÇİMİNE bak; belge geneli ince/monospace iken yazıyla tutar KALIN/oransal (Arial Bold gibi) ise "
+        "değer eşleşse bile TAHRİFATtır, yüksek güvenle yaz. Tutarsızlık yoksa [] bırak ama denetimi ATLAMA.\n"
         "4) Uzman gibi, KANITA DAYALI bir HÜKÜM ver (gerçek/şüpheli/sahte/belirsiz) + güven yüzdesi. "
         "reasoning_tr KISA ve SADE olsun: EN FAZLA 2 cümle, teknik jargon yok, net konuş.\n"
         "5) Bu bankanın çıkarımında SİSTEMİK bir sorun görürsen (kod/kural iyileştirmesi), "
         "improvement_notes'a banka+alan+sorun+öneri olarak yaz.\n\n"
+        "OCR HATASI ≠ TAHRİFAT (ÇOK ÖNEMLİ): Kuralın çıkardığı bir değer görüntüdekiyle uyuşmuyorsa (ör. "
+        "IBAN'da bir rakam yanlış, tarih/müşteri no/TCKN yanlış okunmuş, ya da fazladan/karışık bir alan var), "
+        "bu neredeyse her zaman OCR/okuma hatasıdır — SAHTECİLİK DEĞİLDİR. Böyle durumda doğru değeri "
+        "corrected_fields'a yaz ve belgeyi bu yüzden 'şüpheli/sahte' SAYMA, güveni düşürme. Yalnızca (a) GÖRSEL "
+        "tahrifat (font/kalınlık/yapıştırma), (b) MANTIKSAL çelişki (banka adı≠IBAN kodu, aynı-banka ama EFT/FAST, "
+        "farklı-banka ama havale, numara tekrarı, tutar aritmetiği tutmaması, kimlik/mod-97 çelişkisi) gerçek "
+        "sahtecilik kanıtıdır. Okuma hatalarını sessizce DÜZELT, gerçek çelişkileri BULGU yap.\n"
         "KESİN KANITLARI EZME: aynı-banka çelişkisi, revizyon-tahrifatı, kimlik alan çelişkisi, "
         "dijital-PDF'te IBAN mod-97 hatası MATEMATİKSEL kesinliktir — bunları yalnız AÇIKLA, çürütme. "
         "Yalnız GÖRÜNTÜDE açıkça okunabilen değeri düzelt; emin değilsen alanı KOYMA ve banka teyidi öner. "
@@ -232,7 +221,7 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
     # ÜRETMEDEN kesiliyordu (stop_reason=max_tokens, content=['thinking']) → boş yanıt + YÜKSEK MALİYET
     # (her çağrı 4096 düşünme token'ı). Düşünmeyi KAPATIYORUZ: model doğrudan JSON üretir → hızlı, ucuz,
     # dolu yanıt. 2048 token forensic JSON için yeterli.
-    body = {"model": model, "max_tokens": 2048, "thinking": {"type": "disabled"},
+    body = {"model": model, "max_tokens": 1400, "thinking": {"type": "disabled"},
             "messages": [{"role": "user", "content": content}]}
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(API_URL, data=data, method="POST")

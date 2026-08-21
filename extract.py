@@ -581,13 +581,29 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.transaction.channel = _find_label(joined, ["İşlem Yeri"])
         ex.transaction.document_no = _find_label(joined, ["Doküman Numarası", "e-Dekont Belge No"])
         ex.transaction.ettn = _find_label(joined, ["ETTN"])
-        ex.transaction.ref_no = _find_label(joined, ["Referans Numarası", "Sorgu Numarası"])
-        ex.transaction.date = _find_label(joined, ["Dekont Tarihi", "İşlem Zam", "İşlem Zam\\./Valör"])
+        ex.transaction.ref_no = _find_label(joined, ["Sorgu Numarası", "Referans Numarası"])
+        # İŞLEM TARİHİ = 'İşlem Zam./Valör' (işlemin GERÇEK anı). 'Dekont Tarihi' belgenin OLUŞTURULMA
+        # anıdır ve İşbank'ta işlemden GÜNLERCE sonra olabilir → işlem tarihi olarak Dekont Tarihi'ni
+        # KULLANMA (yanlış 'tarih uyuşmuyor'/gelecek-tarih sorunlarına yol açıyordu). İş Bankası özel.
+        ex.transaction.date = (_after_label(joined, "İşlem Zam./Valör", ["Referans", "Dekont", "e-Dekont", "ETTN", "Senaryo"])
+                               or _after_label(joined, "İşlem Zam", ["Referans", "Dekont", "e-Dekont"])
+                               or _find_label(joined, ["İşlem Zam"])
+                               or _find_label(joined, ["Dekont Tarihi"]))
+        # 'İşlem Zam./Valör : <işlem anı> / <valör>' → valör tarihini ayrı sakla (varsa)
+        _izv = _after_label(joined, "İşlem Zam./Valör", ["Referans", "Dekont"])
+        if _izv and "/" in _izv:
+            ex.transaction.value_date = _izv.split("/")[-1].strip()
         ex.transaction.description = _find_label(joined, ["Açıklama"])
         # Gönderici: sol üstteki isim (Müşteri No satırından önce) — ilk büyük harf satırı
         ex.sender.customer_no = _find_label(joined, ["Müşteri No"])
         ex.sender.tckn = _find_label(joined, ["TCKN", "TC Kimlik"])
-        ex.sender.iban = _first_iban_after(joined, ["IBAN"]) or (ex.all_ibans[0] if ex.all_ibans else "")
+        # GÖNDERİCİ IBAN: HVL 'Para Aktarma' formatında 'Gönderici Hesap : <ad> <IBAN>' ya da 'Ücret Tah.
+        # IBAN : <IBAN>' (masraf hesabı = gönderenin hesabı) güvenilir çapadır. FAST formatında 'IBAN'.
+        ex.sender.iban = banks.normalize_iban(
+            _first_iban_after(joined, ["Gönderici Hesap", "Gönderen Hesap"])
+            or _first_iban_after(joined, ["Ücret Tah. IBAN", "Ücret Tah"])
+            or _first_iban_after(joined, ["IBAN"])
+            or (ex.all_ibans[0] if ex.all_ibans else ""))
         ex.sender.name = _isbank_sender_name(lines)
         # Alıcı adı: FAST'ta 'Alıcı Isim\Unvan'; HAVALE (Para Aktarma) formatında iki-sütunlu
         # 'Alıcı Hesap : <ad>' (ad maskeli olabilir: 'YU**** EM**** SO****').
@@ -597,7 +613,10 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
             _find_label(joined, ["Alıcı Isim.?Unvan", "Alıcı İsim.?Unvan", "Alıcı Ad"]))
         if not ex.receiver.name:
             ex.receiver.name = _clean_name(_after_label(joined, "Alıcı Hesap", _ISTOP))
-        ex.receiver.iban = banks.normalize_iban(_find_label(joined, ["Alıcı IBAN"]))
+        # ALICI IBAN: FAST 'Alıcı IBAN'; HVL 'Alıcı Hesap : <ad> <IBAN>' (etiketsiz — Alıcı Hesap çapası).
+        ex.receiver.iban = banks.normalize_iban(
+            _find_label(joined, ["Alıcı IBAN"])
+            or _first_iban_after(joined, ["Alıcı Hesap"]))
         ex.receiver.bank = _find_label(joined, ["Alıcı Banka"])
         # Tutar: FAST 'İşlem Tutarı'; HAVALE 'Aktarılan Tutar'
         amt_txt = _find_label(joined, ["İşlem Tutarı"]) or _find_label(joined, ["Aktarılan Tutar"])
