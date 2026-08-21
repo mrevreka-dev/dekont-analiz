@@ -1136,6 +1136,38 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         except Exception:
             pass
 
+    # 7.95) YZ GÖRSEL TAHRİFAT → BULGU: Fotoğraf/görüntü dekontta yazı tipi/yapıştırma uyuşmazlığı
+    # (ör. yazıyla yazılan tutarın farklı fontta olması) kural motoruyla GÖRÜLEMEZ; YZ görüntüden
+    # gördüyse bunu GERÇEK bir bulguya çevirir ve skoru + kesin kararı YENİDEN hesaplarız.
+    if ai_adjudication:
+        try:
+            _gt = [g for g in (ai_adjudication.get("gorsel_tahrifat") or []) if int(g.get("guven") or 0) >= 60]
+        except Exception:
+            _gt = []
+        if _gt:
+            _alanlar = "; ".join(f"{g.get('alan','')}: {g.get('aciklama','')}" for g in _gt)[:600]
+            findings.append(Finding(
+                "AI_VISUAL_TAMPER", "high", "image", 30,
+                tr=("GÖRSEL TAHRİFAT (YZ görüntü incelemesi): belgede yazı tipi/kalınlık uyuşmazlığı — bir "
+                    "alan belgenin genel yazı tipinden FARKLI, sonradan yapıştırılmış/değiştirilmiş görünüyor. "
+                    + _alanlar),
+                en=("VISUAL TAMPER (AI image review): font/weight inconsistency — a field is in a DIFFERENT "
+                    "font than the document and appears pasted/altered. " + _alanlar),
+                detail="ai_gorsel_tahrifat"))
+            # bulgu eklendi → kesin kararı, skoru, alt-skorları ve tahrifat karşılaştırmasını yenile
+            verdicts = _vd.compute_verdicts(
+                doc_type=doc_type, input_kind=input_kind,
+                codes={f.code for f in findings}, cons=cons,
+                has_pdf_dates=struct.creation_dt is not None,
+                txn_date=_txn_ref, seq=ex.transaction.sequence_number,
+                db_checked=bool(use_store and is_receipt), db_count=_db_count, is_receipt=is_receipt,
+                doc_kind=doc_kind, balance_state=_bal_state, timing=timing)
+            _untrusted = verdicts["overall"]["state"] == "false"
+            score = compute_score(findings, doc_type, manip, ai, verdict_untrusted=_untrusted)
+            subscores = _compute_subscores(struct, rev, cons, xml, qr_check, findings, doc_type)
+            tamper_comparison = _build_tamper_comparison(
+                {f.code for f in findings}, rev, timing, stmt if is_statement else None)
+
     # 8) Rapor derle
     lang_findings = [f.as_dict("tr") for f in findings]
     lang_findings_en = [f.as_dict("en") for f in findings]

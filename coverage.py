@@ -184,6 +184,20 @@ def build(report: dict) -> dict:
         add("Banka-bazlı numara tekrarı kontrolü", "yapılamadı",
             "Belgede karşılaştırılabilir işlem/sıra/referans numarası okunamadı.")
 
+    # 6d) GÖRSEL TAHRİFAT (YZ): yazı tipi/kalınlık/hizalama uyuşmazlığı (yapıştırılmış alan). Fotoğraf/
+    #     görüntü dekontlarda kural motoru göremez; YZ görsel incelemesi yapar.
+    if "AI_VISUAL_TAMPER" in codes:
+        add("Görsel tahrifat (yazı tipi/yapıştırma)", "kusur",
+            "YZ görsel incelemesi: bir alan (ör. yazıyla tutar) belgenin genel yazı tipinden FARKLI → "
+            "sonradan yapıştırılmış/değiştirilmiş (görsel sahtecilik).")
+    elif input_kind == "image":
+        add("Görsel tahrifat (yazı tipi/yapıştırma)", "yapıldı",
+            "YZ görsel incelemesinden geçti; yazı tipi/hizalama tutarsızlığı (yapıştırma) tespit edilmedi.")
+    else:
+        add("Görsel tahrifat (yazı tipi/yapıştırma)", "kısmi",
+            "Dijital PDF — font tutarlılığı yapısal olarak denetlenir; görüntü-bazlı yapıştırma denetimi "
+            "yalnız fotoğraf/görüntü dekontlarda YZ ile yapılır.")
+
     # 7) ÜRETİM UYGULAMASI + DÜZENLEME TESPİTİ (hangi uygulamada yapıldı; AI/Photoshop/Canva ile
     #    değiştirilip yeniden kaydedilmiş mi). Hem fotoğraf (EXIF/XMP) hem PDF (producer/creator) için.
     imf = report.get("image_forensics", {}) or {}

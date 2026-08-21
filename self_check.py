@@ -34,6 +34,16 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Y", "date": "2026-08-21 11:55", "area": "GÖRSEL TAHRİFAT: YZ font/yapıştırma incelemesi (fotoğraf her zaman)", "test": 23,
+     "bug": "Garanti dekontunda yazıyla yazılan tutar ('YetmişBeşBinTL.') belgenin monospace fontundan "
+            "FARKLI bir kalın/proporsiyonel fontta — çıplak gözle görülen yapıştırma. Kural motoru rasterize "
+            "görüntüde font okuyamadığı için göremiyordu; dekont 'temiz' göründüğünden YZ görsel incelemesine "
+            "HİÇ eskale EDİLMİYORDU (AI devreye girmiyordu).",
+     "fix": "(1) should_adjudicate: input_kind='image' (fotoğraf/görüntü) dekontlar KURAL temiz olsa bile HER "
+            "ZAMAN YZ görsel incelemesine eskale edilir. (2) Prompt: yazı tipi/kalınlık/hizalama tutarlılığı "
+            "taranır; bir alan (özellikle TUTAR — rakam veya yazıyla) genel fonttan farklıysa gorsel_tahrifat'a "
+            "yazılır. (3) analyze.py: güven≥60 görsel-tahrifat → AI_VISUAL_TAMPER bulgusu (high), skor+karar "
+            "YENİDEN hesaplanır (puan ≤20, GÜVENİLİR DEĞİL). Test #23 kilitler."},
     {"id": "X", "date": "2026-08-21 11:30", "area": "YZ ARKA-UÇ: boş kritik alanları görüntüden doldurur", "test": 22,
      "bug": "OCR bir dekonttaki alıcı adı/alıcı IBAN/tutar/işlem no/referans no'yu okuyamayınca EKRANA BOŞ "
             "geliyordu. YZ değerlendiricisi (yapay_zeka_degerlendirmesi) alanları yeniden okusa bile sonucu "
@@ -598,6 +608,22 @@ def _t22_ai_fills_blank_fields():
     return ok, f"boş-alanlar-dolduruldu={filled}, geçersiz-IBAN-reddi={reject}"
 
 
+def _t23_ai_visual_tamper_escalation():
+    """GÖRSEL TAHRİFAT: (a) fotoğraf/görüntü dekont KURAL 'temiz' olsa bile YZ görsel incelemesine
+    eskale edilir (font/yapıştırma yalnız görüntüden görülür); (b) YZ'nin bildirdiği görsel-tahrifat
+    (font uyuşmazlığı) _sanitize'dan geçip bulguya dönüştürülebilir."""
+    import ai_adjudicator as AJ
+    clean_ex = {"sender": {"name": "X"}, "receiver": {"name": "Y", "iban": "TR330006200000000000000017"},
+                "amount": {"value": 100.0}, "transaction": {"ref_no": "123456"}}
+    go, reasons = AJ.should_adjudicate([], clean_ex, "image")   # temiz görüntü dekont
+    esc = bool(go) and any(("örsel" in r) or ("font" in r.lower()) for r in reasons)
+    san = AJ._sanitize({"verdict": "sahte", "gorsel_tahrifat": [
+        {"alan": "tutar (yazıyla)", "aciklama": "belgenin genel fontundan farklı, yapıştırılmış", "guven": 90}]})
+    gt_ok = bool(san.get("gorsel_tahrifat")) and san["gorsel_tahrifat"][0]["guven"] == 90
+    ok = esc and gt_ok
+    return ok, f"görüntü-eskalasyon={esc}, görsel-tahrifat-sanitize={gt_ok}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -621,6 +647,7 @@ _CHECKS = [
     (20, "IBAN otoritesi: banka + rail IBAN kodundan (tüm bankalar)", _t20_iban_authority_bank_and_rail),
     (21, "Banka-bazlı numara tekrarı → NUMBER_REUSE (her banka kendi içinde)", _t21_bank_scoped_number_reuse),
     (22, "YZ boş kritik alanları görüntüden doldurur (alıcı/IBAN/tutar/no)", _t22_ai_fills_blank_fields),
+    (23, "Görsel tahrifat: fotoğraf her zaman YZ'ye + font uyuşmazlığı bulgusu", _t23_ai_visual_tamper_escalation),
 ]
 
 

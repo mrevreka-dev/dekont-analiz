@@ -81,6 +81,11 @@ def should_adjudicate(findings: list, extraction: dict, input_kind: str = "pdf")
     sev = {(f.get("code")): f.get("severity") for f in (findings or [])}
     if any(s in ("high", "critical") for s in sev.values()):
         reasons.append("Yüksek/kritik önem taşıyan bir bulgu var.")
+    # GÖRÜNTÜ/FOTOĞRAF DEKONT: görsel tahrifat (font uyuşmazlığı, yapıştırma, hizalama, montaj) YALNIZ
+    # görüntüden görülür; kural motoru rasterize metinde bunu göremez. Bu yüzden fotoğraf/görüntü
+    # dekontlar KURAL 'TEMİZ' dese bile HER ZAMAN YZ görsel incelemesine eskale edilir (kullanıcı kuralı).
+    if input_kind == "image":
+        reasons.append("Görüntü/fotoğraf dekont: görsel tahrifat (font/hizalama/montaj) incelemesi şart.")
     # KRİTİK alanlar boşsa YZ görüntüden okuyup DOLDURUR (kullanıcı kuralı: alıcı adı, alıcı IBAN,
     # tutar, işlem no, referans no ekrana ASLA boş gelmemeli). Bu alanlardan HERHANGİ biri boşsa eskale.
     _core = [f for f in ("sender.name", "receiver.name", "receiver.iban", "amount.value")
@@ -119,6 +124,9 @@ _SCHEMA_HINT = (
     'REFERANS/SORGU NO alanları ekrana boş gelmemeli — bu alanlar boşsa GÖRÜNTÜDEN OKU ve DOLDUR; '
     'gerçekten okunamıyorsa KOYMA (asla uydurma)\n'
     '  "finding_reviews": [ {"code":"IBAN_INVALID","gercek_mi":false,"aciklama":"foto okuma hatası; doğru IBAN ..."} ],\n'
+    '  "gorsel_tahrifat": [ {"alan":"tutar (yazıyla)","aciklama":"yazıyla yazılan tutar belgenin '
+    'genel yazı tipinden farklı bir fontta/kalınlıkta — sonradan yapıştırılmış görünüyor","guven":85} ], '
+    '// GÖRÜNTÜDE font/kalınlık/hizalama uyuşmazlığı gördüğün alanlar; yoksa boş bırak\n'
     '  "verify_suggestion": "banka teyidi için ne sorgulanmalı (sorgu/işlem no vb.)",\n'
     '  "improvement_notes": [ {"bank":"denizbank","field":"receiver.name","problem":"...",'
     '"suggestion":"...","label_hint":"Alıcı Adı Soyadı"} ]  // label_hint: bu alanın belgede YANINDA '
@@ -144,9 +152,15 @@ def _build_prompt(extraction: dict, findings: list, bank_ctx: str, input_kind: s
         "Gerekçelendir.\n"
         "2) Kuralın YANLIŞ okuduğu ya da BOŞ bıraktığı alanları GÖRÜNTÜDEN yeniden oku ve düzelt "
         "(özellikle IBAN'lar, isimler, tutar). İsim yanlış yerden alınmışsa doğru yerden al.\n"
-        "3) Uzman gibi, KANITA DAYALI bir HÜKÜM ver (gerçek/şüpheli/sahte/belirsiz) + güven yüzdesi. "
+        "3) GÖRSEL TAHRİFAT taraması yap: belgedeki YAZI TİPİ / KALINLIK / HİZALAMA / TABAN ÇİZGİSİ "
+        "tutarlılığını incele. Bir alan — ÖZELLİKLE TUTAR (hem rakamla hem YAZIYLA yazılan) — belgenin "
+        "genel yazı tipinden FARKLI bir fontta/kalınlıkta ya da kaymış/keskin kenarlı görünüyorsa, bu "
+        "sonradan YAPIŞTIRILMIŞ/DEĞİŞTİRİLMİŞ demektir → gorsel_tahrifat'a yaz (alan + açıklama + güven). "
+        "Gerçek dekontta tüm metin TEK bir yazı tipinde olur; tek bir satırın farklı font olması güçlü "
+        "sahtecilik işaretidir.\n"
+        "4) Uzman gibi, KANITA DAYALI bir HÜKÜM ver (gerçek/şüpheli/sahte/belirsiz) + güven yüzdesi. "
         "reasoning_tr KISA ve SADE olsun: EN FAZLA 2 cümle, teknik jargon yok, net konuş.\n"
-        "4) Bu bankanın çıkarımında SİSTEMİK bir sorun görürsen (kod/kural iyileştirmesi), "
+        "5) Bu bankanın çıkarımında SİSTEMİK bir sorun görürsen (kod/kural iyileştirmesi), "
         "improvement_notes'a banka+alan+sorun+öneri olarak yaz.\n\n"
         "KESİN KANITLARI EZME: aynı-banka çelişkisi, revizyon-tahrifatı, kimlik alan çelişkisi, "
         "dijital-PDF'te IBAN mod-97 hatası MATEMATİKSEL kesinliktir — bunları yalnız AÇIKLA, çürütme. "
@@ -259,6 +273,13 @@ def _sanitize(obj: dict) -> dict:
          "aciklama": str(x.get("aciklama", ""))[:500]}
         for x in fr if isinstance(x, dict)][:20]
     out["verify_suggestion"] = str(obj.get("verify_suggestion") or "")[:500]
+    # GÖRSEL TAHRİFAT: YZ'nin görüntüden tespit ettiği font/hizalama/montaj uyuşmazlıkları
+    # (ör. yazıyla tutar belgenin genel fontundan farklı → yapıştırılmış). Bulguya dönüştürülür.
+    gt = obj.get("gorsel_tahrifat") or []
+    out["gorsel_tahrifat"] = [
+        {"alan": str(x.get("alan", ""))[:80], "aciklama": str(x.get("aciklama", ""))[:400],
+         "guven": max(0, min(100, int(x.get("guven") or 0))) if str(x.get("guven") or "").strip().isdigit() else 0}
+        for x in gt if isinstance(x, dict)][:10]
     im = obj.get("improvement_notes") or []
     out["improvement_notes"] = [
         {"bank": str(x.get("bank", "")), "field": str(x.get("field", "")),
