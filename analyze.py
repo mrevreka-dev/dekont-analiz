@@ -408,7 +408,11 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         # yüksel ki doğru IBAN okunsun ve yanlış IBAN_INVALID üretilmesin.
         _iban_bad = any(_bkv.iban_valid(ib) is False
                         for ib in (extraction.sender.iban, extraction.receiver.iban) if ib)
-        if vision_ocr.is_configured() and (len(_missing) >= 1 or _iban_bad):
+        # HIZ: Adjudicator (Sonnet) artık TÜM alanları yetkiyle okuyup düzelttiği için ayrı vision (Haiku)
+        # turu çoğu fotoğrafta GEREKSİZ ve toplam süreyi ~50 sn'ye çıkarıp 499 (tarayıcı isteği kapattı)
+        # hatasına yol açıyordu. Bu yüzden vision YALNIZ tesseract KATASTROFİK başarısızsa (4 kritik alandan
+        # 3+'i eksik) ya da okunan IBAN mod-97 bozuksa çağrılır. Aksi halde tek AI çağrısı (adjudicator) → hızlı.
+        if vision_ocr.is_configured() and (len(_missing) >= 3 or _iban_bad):
             try:
                 _pil = ocr.render_page_to_image(pdf_bytes, 0, scale=2.0)
                 vision_result = vision_ocr.extract_from_image(_pil)
