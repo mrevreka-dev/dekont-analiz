@@ -224,6 +224,23 @@ async def index(request: Request, lang: str | None = None):
     })
 
 
+def _save_problem_sample(data: bytes, filename: str, report: dict) -> None:
+    """SORUNLU analizin HAM dosyasını (fotoğraf/PDF/video) kalıcı diske saklar — gün sonu Claude'un
+    tekrar denetleyebilmesi için (indirme ucu: /api/v1/diag_sample?sha=...). Yalnız sorun varsa saklar."""
+    try:
+        _diag = (report or {}).get("_diag") or {}
+        if not _diag.get("is_problem"):
+            return
+        import store as _st
+        sha = _diag.get("sha256") or (report.get("file", {}) or {}).get("sha256")
+        if not sha:
+            return
+        ext = (filename or "").lower().rsplit(".", 1)[-1] if "." in (filename or "") else "bin"
+        _st.save_diag_sample(sha, data, ext)
+    except Exception:
+        pass
+
+
 @app.post("/analyze", response_class=HTMLResponse)
 async def analyze_web(request: Request, file: UploadFile = File(...), lang: str = Form("tr")):
     L = _lang(request, lang)
@@ -247,6 +264,7 @@ async def analyze_web(request: Request, file: UploadFile = File(...), lang: str 
         return templates.TemplateResponse("index.html",
             {"request": request, "L": L, "T": T, "version": ENGINE_VERSION,
              "error": f"{T['err_failed']} ({e})"}, status_code=500)
+    _save_problem_sample(data, file.filename or "", report)
     return templates.TemplateResponse("report.html", {
         "request": request, "L": L, "T": T, "version": ENGINE_VERSION,
         "r": report, "report_json": json.dumps(report, ensure_ascii=False, indent=2),
@@ -290,6 +308,28 @@ async def diag_log_api(limit: int = 100, only_problems: bool = False):
     limit = max(1, min(int(limit or 100), 500))
     rows = _st.diag_log_recent(limit, only_problems=bool(only_problems))
     return {"count": len(rows), "only_problems": bool(only_problems), "results": rows}
+
+
+@app.get("/api/v1/diag_samples")
+async def diag_samples_api(limit: int = 200):
+    """SORUNLU analizlerde saklanan ham dosyaların (fotoğraf/PDF/video) listesi. Her biri
+    /api/v1/diag_sample?sha=... ile indirilir → gün sonu Claude tekrar denetler ve düzeltir."""
+    import store as _st
+    rows = _st.diag_samples_recent(max(1, min(int(limit or 200), 500)))
+    for r in rows:
+        r["download"] = f"/api/v1/diag_sample?sha={r['sha256']}"
+    return {"count": len(rows), "results": rows}
+
+
+@app.get("/api/v1/diag_sample")
+async def diag_sample_download(sha: str):
+    """Saklanan sorunlu dosyayı indirir (sha ile). Gün sonu inceleme/düzeltme için."""
+    from fastapi.responses import FileResponse
+    import store as _st
+    path, ext = _st.diag_sample_file(sha)
+    if not path:
+        raise HTTPException(404, "sample not found")
+    return FileResponse(path, filename=f"{sha}.{ext or 'bin'}")
 
 
 @app.get("/api/v1/self_check")
@@ -422,6 +462,7 @@ async def analyze_api(file: UploadFile = File(...), x_api_key: str | None = Head
         report = analyze_document(prepared, file.filename or "document.pdf", input_kind=kind)
     except Exception as e:
         raise HTTPException(500, f"Analysis failed: {e}")
+    _save_problem_sample(data, file.filename or "", report)
     return JSONResponse(build_summary(report))
 
 

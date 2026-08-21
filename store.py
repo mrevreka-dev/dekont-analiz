@@ -620,6 +620,77 @@ def check(report: dict) -> list[dict]:
     return findings
 
 
+def _samples_dir() -> str:
+    d = os.path.join(os.path.dirname(os.path.abspath(_db_path())), "diag_samples")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def save_diag_sample(sha256: str, data: bytes, ext: str = "bin", max_bytes: int = 30 * 1024 * 1024,
+                     retain: int = 400) -> bool:
+    """SORUNLU analizin HAM dosyasını (fotoğraf/PDF/video) kalıcı diske saklar — gün sonu tekrar
+    tarayıp hatayı üretmek/düzeltmek için. Boyut sınırı aşılırsa saklamaz; retention: en eski
+    dosyalar silinerek en fazla `retain` örnek tutulur (disk şişmesin)."""
+    if not enabled() or not sha256 or not data:
+        return False
+    if len(data) > max_bytes:
+        print(f"[diag_sample] atlandı (çok büyük {len(data)}B) sha={sha256[:10]}", flush=True)
+        return False
+    try:
+        d = _samples_dir()
+        ext = re.sub(r"[^a-z0-9]", "", (ext or "bin").lower())[:8] or "bin"
+        path = os.path.join(d, f"{sha256}.{ext}")
+        if not os.path.exists(path):
+            with open(path, "wb") as fh:
+                fh.write(data)
+        # retention: en eskileri buda
+        files = sorted((os.path.join(d, x) for x in os.listdir(d)), key=lambda p: os.path.getmtime(p))
+        for old in files[:-retain] if len(files) > retain else []:
+            try:
+                os.remove(old)
+            except Exception:
+                pass
+        return True
+    except Exception as e:
+        print(f"[diag_sample] hata: {type(e).__name__}: {e}", flush=True)
+        return False
+
+
+def diag_samples_recent(limit: int = 200) -> list:
+    """Saklanan sorunlu dosya örneklerini (yeni→eski) listeler: sha, uzantı, boyut, zaman."""
+    if not enabled():
+        return []
+    try:
+        d = _samples_dir()
+        out = []
+        for x in os.listdir(d):
+            p = os.path.join(d, x)
+            if not os.path.isfile(p):
+                continue
+            sha, _, ext = x.partition(".")
+            st = os.stat(p)
+            out.append({"sha256": sha, "ext": ext, "bytes": st.st_size,
+                        "saved_at": _dt.datetime.utcfromtimestamp(st.st_mtime).isoformat()})
+        out.sort(key=lambda r: r["saved_at"], reverse=True)
+        return out[:int(limit)]
+    except Exception:
+        return []
+
+
+def diag_sample_file(sha256: str):
+    """Verilen sha için saklanan örnek dosyanın (yol, uzantı)'ını döndürür; yoksa (None, None)."""
+    if not enabled() or not sha256:
+        return None, None
+    try:
+        d = _samples_dir()
+        for x in os.listdir(d):
+            if x.startswith(sha256 + "."):
+                return os.path.join(d, x), x.partition(".")[2]
+    except Exception:
+        pass
+    return None, None
+
+
 def log_diag(d: dict) -> bool:
     """HER analizin tanı bilgisini kalıcı diag_log tablosuna yazar (gün sonu hata inceleme/düzeltme için).
     d: sha256, bank, input_kind, severity, extraction_empty, ai_enabled, ai_escalated, ai_ok, ai_verdict,

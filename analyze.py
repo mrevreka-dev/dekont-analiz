@@ -1388,7 +1388,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 pass
             _vis_ok = (extraction.text_source == "vision")
             _sev = "error" if _empty else ("warn" if (_ai_on and ai_adjudication is None) else "info")
-            _store_diag.log_diag({
+            _diag = {
                 "sha256": struct.sha256, "bank": _ex_d.get("bank") or _ex_d.get("sender", {}).get("bank"),
                 "input_kind": input_kind, "severity": _sev,
                 "extraction_empty": _empty, "ai_enabled": _ai_on,
@@ -1401,7 +1401,11 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 "codes": sorted(_codes),
                 "notes": f"text_source={extraction.text_source}",
                 "elapsed_ms": report.get("elapsed_ms"),
-            })
+            }
+            # sorun mu? (dosya saklama kararı main.py'de buna göre verilir)
+            _diag["is_problem"] = bool(_empty or (_ai_on and ai_adjudication is None) or (not _vis_ok and input_kind == "image"))
+            report["_diag"] = _diag   # EK alan (şeffaflık + main.py örnek-saklama kararı)
+            _store_diag.log_diag(_diag)
         except Exception:
             pass
     # HIZ ÖNBELLEĞİNE YAZ: aynı dosya ikinci kez gelirse tüm hattı atlayıp bunu döndürürüz.
