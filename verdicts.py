@@ -261,17 +261,69 @@ def compute_verdicts(*, doc_type: str, input_kind: str, codes: set, cons: dict,
             NEUTRAL, "Karşılaştırılacak numara yok ya da veritabanında henüz geçmiş kayıt yok.",
             "No number to compare, or no prior records in the database yet.")
 
+    # 5.5) ÖDEME ANINDA HESABA GEÇER Mİ? (İŞLEM KANALI RİSKİ — KULLANICI KURALI, TÜM BANKALAR)
+    # HAVALE ve FAST işlemleri anında + kesin hesaba geçer. EFT ise ANINDA GEÇMEZ (toplu/saatli işlenir,
+    # geri çağrılabilir) → ödeme henüz yansımamış olabilir. Anlık teslimatta (oyun pini vb.) bu RİSKLİDİR.
+    # Bu, SAHTECİLİKTEN AYRI bir eksendir: belge gerçek olsa bile 'anında tahsil' garanti değildir.
+    _is_receipt_kind = not is_statement
+    if _is_receipt_kind:
+        if "RAIL_IS_EFT" in codes:
+            add("settlement_instant", "Ödeme anında hesaba geçer mi (işlem kanalı)?",
+                "Does the payment settle instantly (transfer rail)?", FALSE,
+                "İşlem bir EFT işlemidir → para alıcı hesabına ANINDA GEÇMEZ (EFT belirli saatlerde toplu "
+                "işlenir ve gönderen tarafından geri çağrılabilir). Dekont gerçek olsa bile ödeme henüz "
+                "hesaba yansımamış olabilir; anlık teslimatta RİSKLİDİR. Bakiye yüklemeden önce paranın "
+                "fiilen geçtiğini teyit edin. (Yalnız HAVALE ve FAST anında ve kesin geçer.)",
+                "The transaction is an EFT → it does NOT credit the receiver instantly (EFT settles in "
+                "timed batches and can be recalled by the sender). Even if the receipt is genuine, the "
+                "payment may not have arrived yet; risky for instant delivery. Confirm the money actually "
+                "landed before crediting. (Only HAVALE and FAST settle instantly and finally.)")
+        elif ("RAIL_IS_FAST" in codes) or ("RAIL_IS_HAVALE" in codes):
+            _rk = "FAST" if "RAIL_IS_FAST" in codes else "HAVALE"
+            add("settlement_instant", "Ödeme anında hesaba geçer mi (işlem kanalı)?",
+                "Does the payment settle instantly (transfer rail)?", TRUE,
+                f"İşlem {_rk} kanalıyla yapılmış → para alıcı hesabına ANINDA ve KESİN geçer. Anlık teslimat "
+                f"açısından işlem kanalı uygundur (EFT değildir).",
+                f"The transaction used {_rk} → the payment credits the receiver instantly and finally. The "
+                f"rail is suitable for instant delivery (not EFT).")
+        else:
+            add("settlement_instant", "Ödeme anında hesaba geçer mi (işlem kanalı)?",
+                "Does the payment settle instantly (transfer rail)?", NEUTRAL,
+                "İşlem kanalı (EFT/FAST/HAVALE) kesin belirlenemedi → ödeme anında geçer mi teyit edilemedi. "
+                "Kanalı doğrulamak için ücret kalemi (EFT/FAST TUTARI/ÜCRETİ) ve IBAN banka kodlarına bakın.",
+                "The transfer rail (EFT/FAST/HAVALE) could not be determined → instant settlement is "
+                "unconfirmed. Check the fee label (EFT/FAST amount/fee) and IBAN bank codes to verify.")
+
     # 6) GENEL: Dekont güvenilir mi (sahte değil)?
     states = {c["key"]: c["state"] for c in checks}
-    any_false = any(c["state"] == FALSE for c in checks)
+    # İŞLEM-KANALI (EFT) riski ile SAHTECİLİK/tutarsızlık FALSE'unu ayır: EFT tek başına 'sahte' değildir.
+    _eft_risk = states.get("settlement_instant") == FALSE
+    _tamper_false = any(c["state"] == FALSE and c["key"] != "settlement_instant" for c in checks)
     _B = "Hesap hareketi" if is_statement else "Dekont"
     _Ben = "account statement" if is_statement else "receipt"
-    if any_false:
+    if _tamper_false:
         overall = FALSE
         o_tr = (f"{_B} GÜVENİLİR DEĞİL: en az bir doğrulama kesin olarak başarısız oldu "
                 "(tahrifat/uyumsuzluk tespit edildi).")
         o_en = (f"The {_Ben} is NOT trustworthy: at least one verification definitively failed "
                 "(tampering/inconsistency detected).")
+        if _eft_risk:
+            o_tr += (" AYRICA işlem EFT'dir → para anında hesaba geçmez; ödeme henüz yansımamış olabilir "
+                     "(anlık teslimatta RİSKLİ).")
+            o_en += (" ALSO the transaction is an EFT → it does not settle instantly; the payment may not "
+                     "have arrived yet (risky for instant delivery).")
+    elif _eft_risk:
+        # SAHTECİLİK YOK ama işlem EFT → 'güvenilir/anında tahsil' DEĞİL. Belge sahte olmayabilir; sorun
+        # ödemenin anında geçmemesidir. Bu ayrımı açıkça yaz (özgünlük ≠ tahsil garantisi).
+        overall = FALSE
+        o_tr = (f"{_B} ANLIK TESLİMAT İÇİN GÜVENİLİR DEĞİL: işlem EFT olduğundan para alıcı hesabına ANINDA "
+                "GEÇMEZ (EFT saatli/toplu işlenir, geri çağrılabilir). Belge sahte olmasa BİLE ödeme henüz "
+                "hesaba yansımamış olabilir — bakiye yüklemeden önce paranın fiilen geçtiğini teyit edin. "
+                "Yalnız HAVALE ve FAST işlemleri anında ve kesin geçer.")
+        o_en = (f"The {_Ben} is NOT safe for instant delivery: the transaction is an EFT, so the money does "
+                "NOT credit the receiver instantly (EFT settles in timed batches and can be recalled). Even "
+                "if the document is genuine, the payment may not have arrived yet — confirm it actually "
+                "landed before crediting. Only HAVALE and FAST settle instantly and finally.")
     elif states.get("content_integrity") == TRUE:
         overall = TRUE
         o_tr = (f"{_B} GÜVENİLİR: gerçek dijital PDF üzerinde yapılan kesin doğrulamalarda "

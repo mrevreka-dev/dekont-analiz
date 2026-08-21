@@ -88,6 +88,28 @@ def build_summary(report: dict) -> dict:
         c = checks.get(key)
         return c["state"] if c else "neutral"
 
+    # İŞLEM KANALI (EFT/FAST/HAVALE) ve ANINDA-TAHSİL RİSKİ — bulgu kodlarından türetilir (ek alanlar).
+    _codes = {f.get("code", "") for f in report.get("findings_tr", [])}
+    if "RAIL_IS_EFT" in _codes:
+        _rail, _rail_instant = "EFT", False
+    elif "RAIL_IS_FAST" in _codes:
+        _rail, _rail_instant = "FAST", True
+    elif "RAIL_IS_HAVALE" in _codes:
+        _rail, _rail_instant = "HAVALE", True
+    else:
+        _rail, _rail_instant = "belirsiz", None
+    if _rail == "EFT":
+        _rail_risk_tr = ("YÜKSEK: İşlem EFT — para anında hesaba geçmez (saatli/toplu işlenir, geri "
+                         "çağrılabilir). Bakiye yüklemeden önce paranın fiilen geçtiğini teyit edin.")
+        _rail_risk_en = ("HIGH: EFT — funds do not settle instantly (timed/batch, recallable). Confirm "
+                         "the money actually landed before crediting.")
+    elif _rail_instant is True:
+        _rail_risk_tr = f"YOK: İşlem {_rail} — para anında ve kesin hesaba geçer."
+        _rail_risk_en = f"NONE: {_rail} — funds settle instantly and finally."
+    else:
+        _rail_risk_tr = "BELİRSİZ: İşlem kanalı kesin belirlenemedi (EFT/FAST/HAVALE)."
+        _rail_risk_en = "UNKNOWN: transfer rail could not be determined (EFT/FAST/HAVALE)."
+
     summary = {
         "basarili": True,
         "motor_surumu": report.get("engine_version", ""),
@@ -128,6 +150,15 @@ def build_summary(report: dict) -> dict:
             "veri_tutarli": vstate("data_consistency"),
             "bakiye_zinciri_tutarli": vstate("balance_chain"),        # hesap hareketi için
             "numara_celiskisi_yok": vstate("cross_reference"),
+            "odeme_aninda_gecer": vstate("settlement_instant"),       # true=FAST/HAVALE | false=EFT(riskli) | neutral=belirsiz
+        },
+
+        # --- İŞLEM KANALI RİSKİ (EFT anında geçmez → riskli; yalnız HAVALE/FAST anında geçer) ---
+        "islem_kanali_riski": {
+            "kanal": _rail,                       # EFT | FAST | HAVALE | belirsiz
+            "aninda_hesaba_gecer": _rail_instant, # true | false | null
+            "risk_tr": _rail_risk_tr,
+            "risk_en": _rail_risk_en,
         },
 
         # --- Evrakta işlem tespit edildi mi ---

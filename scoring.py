@@ -131,6 +131,8 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 6)
     if "INTERBANK_HAVALE_CONTRADICTION" in codes:  # farklı bankalar ama işlem HAVALE olarak sunuluyor
         score = min(score, 35)
+    if "EFT_SETTLEMENT_RISK" in codes:       # işlem EFT → para anında geçmez (anlık teslimatta riskli)
+        score = min(score, 40)               # 'güvenilir/yeşil' OLAMAZ; belge gerçek olsa da ödeme riski var
     if "ID_FIELD_MISMATCH" in codes:         # VKN alanı ≠ İşlemi Yapan TCKN (kimlik uydurma)
         score = min(score, 10)
     if "AMOUNT_CURRENCY_INCONSISTENT" in codes:  # masraf gerçek şablondaki 'TL' sonekini taşımıyor

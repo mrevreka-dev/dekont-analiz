@@ -127,6 +127,10 @@ _SCHEMA_HINT = (
     '  "gorsel_tahrifat": [ {"alan":"tutar (yazıyla)","aciklama":"yazıyla yazılan tutar belgenin '
     'genel yazı tipinden farklı bir fontta/kalınlıkta — sonradan yapıştırılmış görünüyor","guven":85} ], '
     '// GÖRÜNTÜDE font/kalınlık/hizalama uyuşmazlığı gördüğün alanlar; yoksa boş bırak\n'
+    '  "islem_kanali": {"kanal":"EFT | FAST | HAVALE | belirsiz","aninda_gecer":true,'
+    '"kanit":"ücret kalemi/başlık/IBAN kodu kanıtı"},  // İşlem hangi kanaldan gitti? EFT=anında GEÇMEZ '
+    '(aninda_gecer=false, RİSKLİ); FAST/HAVALE=anında geçer (true). Ücret kalemine bak: "GEÇ EFT/EFT '
+    'TUTARI/ÜCRETİ"→EFT; "FAST Ücreti/TUTARI"→FAST; "Havale Ücreti" veya gönderici=alıcı IBAN aynı banka→HAVALE\n'
     '  "verify_suggestion": "banka teyidi için ne sorgulanmalı (sorgu/işlem no vb.)",\n'
     '  "improvement_notes": [ {"bank":"denizbank","field":"receiver.name","problem":"...",'
     '"suggestion":"...","label_hint":"Alıcı Adı Soyadı"} ]  // label_hint: bu alanın belgede YANINDA '
@@ -173,7 +177,14 @@ def _build_prompt(extraction: dict, findings: list, bank_ctx: str, input_kind: s
         "olmalı, sırf 'tam doğrulayamadım' diye ŞÜPHELİ deme. Yine de kesin 'gerçek' iddiası yerine reasoning'de "
         "kısa bir 'kesin teyit için banka kaydı gerekir' notu bırak. reasoning_tr EN FAZLA 2 cümle, sade.\n"
         "5) Bu bankanın çıkarımında SİSTEMİK bir sorun görürsen (kod/kural iyileştirmesi), "
-        "improvement_notes'a banka+alan+sorun+öneri olarak yaz.\n\n"
+        "improvement_notes'a banka+alan+sorun+öneri olarak yaz.\n"
+        "6) İŞLEM KANALI (KRİTİK, TÜM BANKALAR) — bu dekont EFT mi, FAST mı, HAVALE mi? 'islem_kanali'na yaz. "
+        "KURAL: EFT işleminde para alıcı hesabına ANINDA GEÇMEZ (saatli/toplu işlenir, geri çağrılabilir) → "
+        "aninda_gecer=false, RİSKLİDİR. FAST ve HAVALE anında + kesin geçer → aninda_gecer=true. Kanalı ÜCRET "
+        "KALEMİNDEN belirle: 'GEÇ EFT / GECEFT / EFT TUTARI / EFT ÜCRETİ / EFT BSMV' → EFT; 'FAST Ücreti / "
+        "GİDEN FAST TUTARI / FAST BSMV' → FAST; 'Havale Ücreti' ya da gönderici ve alıcı IBAN AYNI bankaya "
+        "aitse → HAVALE. Başlıktaki genel şablon ('EFT BANKALAR ARASI HESABA HAVALE' gibi) yanıltıcıdır; "
+        "asıl kanıt ÜCRET KALEMİdir. Bu belge sahte olmasa BİLE EFT ise anlık teslimatta risklidir.\n\n"
         "OCR HATASI ≠ TAHRİFAT (ÇOK ÖNEMLİ): Kuralın çıkardığı bir değer görüntüdekiyle uyuşmuyorsa (ör. "
         "IBAN'da bir rakam yanlış, tarih/müşteri no/TCKN yanlış okunmuş, ya da fazladan/karışık bir alan var), "
         "bu neredeyse her zaman OCR/okuma hatasıdır — SAHTECİLİK DEĞİLDİR. Böyle durumda doğru değeri "
@@ -363,6 +374,17 @@ def _sanitize(obj: dict) -> dict:
          "aciklama": str(x.get("aciklama", ""))[:500]}
         for x in fr if isinstance(x, dict)][:20]
     out["verify_suggestion"] = str(obj.get("verify_suggestion") or "")[:500]
+    # İŞLEM KANALI (EFT/FAST/HAVALE) — EFT anında geçmez (riskli). YZ'nin belirlediği kanal korunur.
+    ik = obj.get("islem_kanali")
+    if isinstance(ik, dict):
+        _k = str(ik.get("kanal", "belirsiz")).strip().upper()
+        _k = _k if _k in ("EFT", "FAST", "HAVALE") else "belirsiz"
+        _ag = ik.get("aninda_gecer")
+        out["islem_kanali"] = {
+            "kanal": _k,
+            "aninda_gecer": (False if _k == "EFT" else (True if _k in ("FAST", "HAVALE") else (bool(_ag) if isinstance(_ag, bool) else None))),
+            "kanit": str(ik.get("kanit", ""))[:300],
+        }
     # GÖRSEL TAHRİFAT: YZ'nin görüntüden tespit ettiği font/hizalama/montaj uyuşmazlıkları
     # (ör. yazıyla tutar belgenin genel fontundan farklı → yapıştırılmış). Bulguya dönüştürülür.
     gt = obj.get("gorsel_tahrifat") or []

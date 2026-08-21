@@ -864,6 +864,27 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                     _rlcode, "info", "content", 0,
                     tr=_rl["notice_tr"], en=_rl["notice_en"],
                     detail=f"rail={_rl['rail']} conf={_rl['confidence']} evidence={' | '.join(_rl.get('evidence', []))}"))
+                # KULLANICI KURALI (TÜM BANKALAR): İşlem EFT ise ÖDEME ANINDA HESABA GEÇMEZ → RİSKLİ.
+                # EFT belirli saatlerde toplu işlenir; para henüz yansımamış olabilir ve gönderen iptal
+                # edebilir. Anlık teslimat (oyun pini vb.) için tehlikeli: dekont GERÇEK olsa bile ödeme
+                # tahsil edilmemiş olabilir. Yalnız HAVALE ve FAST anında + kesin hesaba geçer. Bu bulgu
+                # SAHTECİLİKTEN AYRIDIR (weight=0, özgünlük puanına dokunmaz) ama YÜKSEK riskli bir uyarıdır;
+                # kesin kararı 'güvenilir' olmaktan çıkarır (bkz. verdicts.settlement_instant).
+                if _rl["rail"] == "eft":
+                    findings.append(Finding(
+                        "EFT_SETTLEMENT_RISK", "high", "content", 0,
+                        tr=("İŞLEM TÜRÜ EFT — PARA ANINDA GEÇMEZ (RİSKLİ): Bu dekont bir EFT işlemine aittir. "
+                            "EFT'de para alıcı hesabına ANINDA yansımaz; belirli saatlerde toplu işlenir ve "
+                            "gönderen tarafından geri çağrılabilir/geç yansıyabilir. Dekont GERÇEK olsa dahi "
+                            "ödeme henüz hesaba GEÇMEMİŞ olabilir — anlık teslimatta (oyun pini vb.) bakiye "
+                            "yüklemeden ÖNCE paranın hesaba fiilen geçtiği MUTLAKA teyit edilmelidir. Yalnız "
+                            "HAVALE ve FAST işlemleri anında ve kesin hesaba geçer."),
+                        en=("TRANSACTION IS EFT — NOT INSTANT (RISKY): this receipt is an EFT transfer. EFT does "
+                            "NOT credit the receiver instantly; it settles in batches at set times and can be "
+                            "recalled/delayed by the sender. Even if the receipt is GENUINE, the payment may NOT "
+                            "have arrived yet — before crediting (e.g. game pins) you MUST confirm the money "
+                            "actually landed. Only HAVALE and FAST settle instantly and finally."),
+                        detail=f"rail=eft conf={_rl['confidence']}"))
             # OTORİTER KURAL: HAVALE banka-İÇİDİR. IBAN'lar FARKLI bankalarsa (bankalararası) işlem
             # HAVALE OLAMAZ → gösterilen işlem türünü (doc_kind) IBAN kanıtına göre düzelt. Başlıktaki
             # 'HAVALE' kelimesi (Akbank genel şablonu) yanıltıcıdır; kanal EFT/FAST'tır.
@@ -1218,6 +1239,36 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _ihc2:
                 _post_ai.append(Finding(_ihc2["code"], _ihc2["severity"], "content", _ihc2["weight"],
                                         tr=_ihc2["tr"], en=_ihc2["en"], detail=_ihc2.get("detail", "")))
+    except Exception:
+        pass
+
+    # (c2) İŞLEM KANALI EFT — YZ İLE UZLAŞTIR (EFT'yi ASLA KAÇIRMA): Kural motoru rail'i ücret kaleminden
+    #     belirler; fotoğrafta tesseract ücret kalemini ('GEÇ EFT / EFT ÜCRETİ') okuyamazsa RAIL_IS_EFT
+    #     üretilemez ve EFT riski KAÇAR. YZ görüntüden kanalı okuyup 'islem_kanali.kanal=EFT' derse, kuralın
+    #     kaçırdığı bu riski EKLERİZ (RAIL_IS_EFT bilgi + EFT_SETTLEMENT_RISK yüksek). Yalnız ESKALE ederiz
+    #     (YZ 'FAST/HAVALE' dese bile kuralın EFT'sini SİLMEYİZ — dolandırıcılık riskini korumak için ihtiyatlı).
+    try:
+        _exist_codes_eft = {f.code for f in findings} | {f.code for f in _post_ai}
+        _ai_kanal = str(((ai_adjudication or {}).get("islem_kanali") or {}).get("kanal") or "").upper()
+        if _ai_kanal == "EFT" and "RAIL_IS_EFT" not in _exist_codes_eft:
+            _post_ai.append(Finding(
+                "RAIL_IS_EFT", "info", "content", 0,
+                tr="İşlem türü EFT (YZ görüntü incelemesi: ücret kalemi/başlık EFT'i gösteriyor).",
+                en="Transaction rail is EFT (AI image review: fee label/title indicates EFT).",
+                detail="rail=eft source=ai"))
+            _post_ai.append(Finding(
+                "EFT_SETTLEMENT_RISK", "high", "content", 0,
+                tr=("İŞLEM TÜRÜ EFT — PARA ANINDA GEÇMEZ (RİSKLİ): Bu dekont bir EFT işlemine aittir (YZ "
+                    "görüntüden tespit etti). EFT'de para alıcı hesabına ANINDA yansımaz; belirli saatlerde "
+                    "toplu işlenir ve gönderen tarafından geri çağrılabilir/geç yansıyabilir. Dekont GERÇEK "
+                    "olsa dahi ödeme henüz hesaba GEÇMEMİŞ olabilir — anlık teslimatta (oyun pini vb.) bakiye "
+                    "yüklemeden ÖNCE paranın hesaba fiilen geçtiği MUTLAKA teyit edilmelidir. Yalnız HAVALE ve "
+                    "FAST işlemleri anında ve kesin hesaba geçer."),
+                en=("TRANSACTION IS EFT — NOT INSTANT (RISKY): this receipt is an EFT transfer (AI detected it "
+                    "from the image). EFT does NOT credit instantly; it settles in batches and can be recalled. "
+                    "Even if genuine, the payment may not have arrived — confirm the money landed before "
+                    "crediting. Only HAVALE and FAST settle instantly and finally."),
+                detail="rail=eft source=ai"))
     except Exception:
         pass
 

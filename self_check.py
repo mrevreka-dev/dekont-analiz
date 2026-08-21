@@ -34,6 +34,20 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z4", "date": "2026-08-21 15:15", "area": "İŞLEM KANALI KURALI: EFT anında geçmez → RİSKLİ (tüm bankalar, YZ + kural)", "test": 27,
+     "bug": "Dolandırıcılık senaryosu: oyun pini alan müşteri ödemeyi EFT ile yapıp dekontu gönderiyor. EFT "
+            "ANINDA hesaba geçmez (saatli/toplu işlenir, geri çağrılabilir) → para henüz yansımamış olabilir, "
+            "ama operatör dekonta bakıp bakiye yükleyince dolandırılıyoruz. Sistem gerçek bir EFT dekontunu "
+            "'düşük risk' (72) gösteriyordu; işlem kanalının (EFT/FAST/HAVALE) ödeme-tahsil riski hiç "
+            "değerlendirilmiyordu. Kural: işlem HAVALE ya da FAST değilse SORUN var.",
+     "fix": "Yeni eksen (SAHTECİLİKTEN AYRI): (1) analyze.py rail=EFT → EFT_SETTLEMENT_RISK (yüksek, weight=0); "
+            "ayrıca YZ 'islem_kanali=EFT' derse kuralın kaçırdığı EFT eskale edilir (fotoğrafta OCR ücret "
+            "kalemini kaçırsa bile EFT ASLA kaçmaz). (2) verdicts.py: 'settlement_instant' denetimi — EFT→FALSE "
+            "(kesin karar 'anlık teslimat için güvenilir değil', SAHTECİLİKTEN ayrı gerekçe), FAST/HAVALE→TRUE. "
+            "(3) scoring: EFT skoru ≤40 (yüksek risk, 'yeşil' olamaz). (4) api_response: ek alanlar "
+            "'islem_kanali_riski{kanal,aninda_hesaba_gecer,risk}' + 'kesin_cevaplar.odeme_aninda_gecer'. "
+            "(5) ai_adjudicator: prompt görev #6 + 'islem_kanali' şeması (EFT/FAST/HAVALE, ücret kaleminden). "
+            "Belge GERÇEK olsa bile EFT ise anlık teslimatta riskli. Test #27 kilitler."},
     {"id": "Z3", "date": "2026-08-21 14:45", "area": "ENPARA ↔ QNB AYRI BANKA: yanlış 'gönderici banka çelişkisi' (SENDER_BANK_MISMATCH) giderildi", "test": 26,
      "bug": "Gerçek Enpara dekontu (Ahmet Özkul → Serhat, GİDEN FAST EFT) webde SENDER_BANK_MISMATCH ile kritik "
             "(12 puan) çıkıyordu; YZ ise 'gerçek' diyordu (katman çelişkisi). Neden: parser gönderici bankasını "
@@ -779,6 +793,53 @@ def _t26_enpara_qnb_separate_no_false_mismatch():
     return ok, f"marka-önceliği={ca}, çelişki-yok={no_mismatch}, enpara≠qnb-ayrı={sep}"
 
 
+def _t27_eft_settlement_risk():
+    """İŞLEM KANALI KURALI (TÜM BANKALAR): EFT işlemi ANINDA HESABA GEÇMEZ → RİSKLİ; yalnız HAVALE ve FAST
+    anında geçer. Kural: (a) RAIL_IS_EFT → settlement_instant=FALSE, kesin karar 'güvenilir değil', skor ≤40;
+    (b) RAIL_IS_FAST/HAVALE → settlement_instant=TRUE, cezalandırılmaz; (c) özet 'islem_kanali_riski' ve
+    'odeme_aninda_gecer' alanları doğru. Kullanıcı kuralı: EFT dekontu anlık teslimatta dolandırıcılık riski."""
+    import verdicts as _v, scoring as _sc, api_response as _api
+    from forensics import Finding
+
+    def _run(rail_code):
+        findings = [Finding(code="IMAGE_ONLY_DOC", severity="info", category="content", weight=0, tr="x", en="x")]
+        if rail_code:
+            findings.append(Finding(code=rail_code, severity="info", category="content", weight=0, tr="x", en="x"))
+        if rail_code == "RAIL_IS_EFT":
+            findings.append(Finding(code="EFT_SETTLEMENT_RISK", severity="high", category="content", weight=0, tr="x", en="x"))
+        codes = {f.code for f in findings}
+        vd = _v.compute_verdicts(doc_type="image_only", input_kind="image", codes=codes, cons=None,
+                                 has_pdf_dates=False, txn_date="2026-08-15", seq="123", db_checked=False,
+                                 db_count=0, is_receipt=True, doc_kind="dekont", balance_state=None, timing=None)
+        unt = vd["overall"]["state"] == "false"
+        sc = _sc.compute_score(findings, "image_only", 0.0, 0.0, verdict_untrusted=unt)
+        rep = {"extracted": {"sender": {}, "receiver": {}, "amount": {}, "transaction": {}},
+               "classification": {"input_kind": "image", "is_receipt": True}, "score": {
+                   "authenticity_score": sc.authenticity_score, "risk_level": sc.risk_level},
+               "verdicts": vd, "findings_tr": [{"code": f.code} for f in findings]}
+        summ = _api.build_summary(rep)
+        return vd, sc, summ
+
+    # (a) EFT → güvenilir değil, skor ≤40, settlement FALSE, özet kanal=EFT/aninda=False
+    vd_e, sc_e, su_e = _run("RAIL_IS_EFT")
+    si_e = next((c["state"] for c in vd_e["checks"] if c["key"] == "settlement_instant"), None)
+    eft_ok = (vd_e["overall"]["state"] == "false" and sc_e.authenticity_score <= 40 and si_e == "false"
+              and su_e["islem_kanali_riski"]["kanal"] == "EFT"
+              and su_e["islem_kanali_riski"]["aninda_hesaba_gecer"] is False
+              and su_e["kesin_cevaplar"]["odeme_aninda_gecer"] == "false")
+    # (b) FAST → settlement TRUE, cezalandırılmaz (skor yüksek kalır)
+    vd_f, sc_f, su_f = _run("RAIL_IS_FAST")
+    si_f = next((c["state"] for c in vd_f["checks"] if c["key"] == "settlement_instant"), None)
+    fast_ok = (si_f == "true" and sc_f.authenticity_score >= 50
+               and su_f["islem_kanali_riski"]["aninda_hesaba_gecer"] is True)
+    # (c) HAVALE → settlement TRUE
+    vd_h, _, su_h = _run("RAIL_IS_HAVALE")
+    si_h = next((c["state"] for c in vd_h["checks"] if c["key"] == "settlement_instant"), None)
+    hav_ok = (si_h == "true" and su_h["islem_kanali_riski"]["kanal"] == "HAVALE")
+    ok = eft_ok and fast_ok and hav_ok
+    return ok, f"EFT(güvenilir-değil+skor{sc_e.authenticity_score}≤40)={eft_ok}, FAST(cezasız)={fast_ok}, HAVALE={hav_ok}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -806,6 +867,7 @@ _CHECKS = [
     (24, "Mantıksal çelişki (aynı banka ↔ EFT başlığı) → %50 altı + güvenilir değil", _t24_samebank_rail_contradiction),
     (25, "'Dekont değil' yanlış-pozitifi: YZ alanları okuduysa NOT_A_RECEIPT kalkar", _t25_not_a_receipt_false_positive),
     (26, "Enpara ↔ QNB ayrı banka + yanlış 'banka çelişkisi' yok (marka önceliği)", _t26_enpara_qnb_separate_no_false_mismatch),
+    (27, "İşlem kanalı: EFT anında geçmez → riskli/güvenilir değil; FAST/HAVALE anında", _t27_eft_settlement_risk),
 ]
 
 
