@@ -205,8 +205,8 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
             pass
     content.append({"type": "text", "text": prompt})
 
-    # HIZ: kısa/sade çıktı istendiği için 1024 yeterli (daha hızlı üretim, daha düşük gecikme).
-    body = {"model": model, "max_tokens": 1024, "messages": [{"role": "user", "content": content}]}
+    # Forensic JSON yanıtı (gerekçe + düzeltmeler + görsel tahrifat + iyileştirme notları) için yeterli alan.
+    body = {"model": model, "max_tokens": 2048, "messages": [{"role": "user", "content": content}]}
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(API_URL, data=data, method="POST")
     req.add_header("x-api-key", api_key)
@@ -231,6 +231,13 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
         text = "".join(p.get("text", "") for p in parts if p.get("type") == "text").strip()
     except Exception:
         return None
+    if not text:
+        try:
+            _types = [p.get("type") for p in (payload.get("content") or [])]
+            print(f"[adjudicator] BOŞ metin. stop_reason={payload.get('stop_reason')} "
+                  f"content_types={_types} usage={payload.get('usage')}", flush=True)
+        except Exception:
+            pass
     obj = _parse_json(text)
     if not obj:
         print(f"[adjudicator] JSON parse edilemedi; ham yanıt başı: {text[:200]!r}", flush=True)

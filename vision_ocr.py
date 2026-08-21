@@ -166,6 +166,12 @@ def extract_from_image(pil_img, timeout: float = 60.0) -> dict | None:
     except Exception:
         return None
     if not text:
+        try:
+            _types = [p.get("type") for p in (payload.get("content") or [])]
+            print(f"[vision_ocr] BOŞ metin. stop_reason={payload.get('stop_reason')} "
+                  f"content_types={_types} usage={payload.get('usage')} keys={list(payload.keys())}", flush=True)
+        except Exception:
+            pass
         return None
     # JSON gövdesini ayıkla (model bazen ``` ile sarabilir)
     text = text.strip()
