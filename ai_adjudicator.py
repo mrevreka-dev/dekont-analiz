@@ -175,7 +175,7 @@ def _build_prompt(extraction: dict, findings: list, bank_ctx: str, input_kind: s
 
 
 def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=None,
-               input_kind: str = "pdf", text_source: str = "digital", timeout: float = 25.0) -> dict | None:
+               input_kind: str = "pdf", text_source: str = "digital", timeout: float = 55.0) -> dict | None:
     """YZ değerlendiricisini çalıştırır. Dönen dict rapora EK alan olarak konur; hata/kapalıysa None."""
     if not is_enabled():
         return None
