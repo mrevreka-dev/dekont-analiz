@@ -112,11 +112,7 @@ def extract_from_image(pil_img, timeout: float = 60.0) -> dict | None:
     if not is_configured():
         return None
     api_key = os.environ["ANTHROPIC_API_KEY"]
-    # BİRLEŞİK OKUYUCU: fotoğrafta TEK Sonnet çağrısı hem okur hem font/adli inceleme yapar (ayrı
-    # adjudicator turu kaldırıldı). Bu yüzden GÜÇLÜ modeli tercih ederiz: önce adjudicator modeli
-    # (Sonnet), yoksa vision modeli, yoksa varsayılan. Font tahrifatı için güçlü model şart.
-    model = (os.environ.get("DEKONT_ADJUDICATOR_MODEL")
-             or os.environ.get("DEKONT_VISION_MODEL") or DEFAULT_MODEL)
+    model = os.environ.get("DEKONT_VISION_MODEL", DEFAULT_MODEL)
     try:
         b64, media = _img_to_b64_jpeg(pil_img)
     except Exception:

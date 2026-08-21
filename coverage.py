@@ -186,10 +186,11 @@ def build(report: dict) -> dict:
 
     # 6d) GÖRSEL TAHRİFAT (YZ): yazı tipi/kalınlık/hizalama uyuşmazlığı (yapıştırılmış alan). Fotoğraf/
     #     görüntü dekontlarda kural motoru göremez; YZ görsel incelemesi yapar.
-    if "AI_VISUAL_TAMPER" in codes:
+    if ("AI_VISUAL_TAMPER" in codes) or ("VISION_TEXT_TAMPER" in codes):
         add("Görsel tahrifat (yazı tipi/yapıştırma)", "kusur",
             "YZ görsel incelemesi: bir alan (ör. yazıyla tutar) belgenin genel yazı tipinden FARKLI → "
-            "sonradan yapıştırılmış/değiştirilmiş (görsel sahtecilik).")
+            "sonradan yapıştırılmış/değiştirilmiş (görsel sahtecilik). Ayrıntı için 'Tahrifat Bulguları' "
+            "bölümündeki AI_VISUAL_TAMPER / VISION_TEXT_TAMPER maddesine bakınız.")
     elif input_kind == "image":
         add("Görsel tahrifat (yazı tipi/yapıştırma)", "yapıldı",
             "YZ görsel incelemesinden geçti; yazı tipi/hizalama tutarsızlığı (yapıştırma) tespit edilmedi.")

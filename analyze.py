@@ -408,10 +408,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         # yüksel ki doğru IBAN okunsun ve yanlış IBAN_INVALID üretilmesin.
         _iban_bad = any(_bkv.iban_valid(ib) is False
                         for ib in (extraction.sender.iban, extraction.receiver.iban) if ib)
-        # BİRLEŞİK OKUYUCU: FOTOĞRAF dekontlarda vision (Sonnet) HER ZAMAN çalışır — hem tüm alanları
-        # okur hem font/adli inceleme yapar → ayrı adjudicator turuna gerek kalmaz (tek çağrı). Taranmış
-        # PDF'lerde ise yalnız kritik alan eksik/IBAN bozuksa çağrılır (maliyet).
-        if vision_ocr.is_configured() and (input_kind == "image" or len(_missing) >= 1 or _iban_bad):
+        if vision_ocr.is_configured() and (len(_missing) >= 1 or _iban_bad):
             try:
                 _pil = ocr.render_page_to_image(pdf_bytes, 0, scale=2.0)
                 vision_result = vision_ocr.extract_from_image(_pil)
@@ -1101,13 +1098,9 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     # KAPALI varsayılan (DEKONT_AI_ADJUDICATOR=1 + ANTHROPIC_API_KEY gerekir) → mevcut API davranışı
     # ve anahtarları DEĞİŞMEZ; yalnız yeni 'yapay_zeka_degerlendirmesi' alanı eklenir.
     ai_adjudication = None
-    # BİRLEŞİK OKUYUCU: FOTOĞRAF dekontlarda vision (Sonnet) zaten hem okuma hem font/adli incelemeyi
-    # yaptı → AYRI adjudicator turu ÇALIŞTIRILMAZ (tekrar Sonnet çağrısı olmasın, tek çağrı = ucuz+hızlı).
-    # Adjudicator yalnız DİJİTAL/taranmış PDF'lerde (vision çalışmadıysa) devreye girer.
-    _skip_adjudicator = (input_kind == "image" and vision_result is not None)
     try:
         import ai_adjudicator as _aj
-        if _aj.is_enabled() and not _skip_adjudicator:
+        if _aj.is_enabled():
             _ex_dict = extraction.as_dict()
             _find_dicts = [{"code": f.code, "severity": f.severity, "weight": f.weight, "tr": f.tr}
                            for f in findings]
