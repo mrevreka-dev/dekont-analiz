@@ -1141,9 +1141,20 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     # gördüyse bunu GERÇEK bir bulguya çevirir ve skoru + kesin kararı YENİDEN hesaplarız.
     if ai_adjudication:
         try:
-            _gt = [g for g in (ai_adjudication.get("gorsel_tahrifat") or []) if int(g.get("guven") or 0) >= 60]
+            _gt = [g for g in (ai_adjudication.get("gorsel_tahrifat") or []) if int(g.get("guven") or 0) >= 50]
         except Exception:
             _gt = []
+        # YEDEK TETİK: YZ gorsel_tahrifat alanını doldurmasa bile, hükmü sahte/şüpheli VE gerekçesinde
+        # yazı tipi/font/yapıştırma geçiyorsa görsel tahrifat bulgusu üret (yapılandırılmamış olsa da yakala).
+        if not _gt:
+            _rz = (ai_adjudication.get("reasoning_tr") or "").lower()
+            _fr_txt = " ".join((x.get("aciklama") or "") for x in (ai_adjudication.get("finding_reviews") or [])).lower()
+            _blob = _rz + " " + _fr_txt
+            _font_kw = ("yazı tipi", "yazi tipi", "font", "yapıştır", "yapistir", "kalınlık", "kalinlik",
+                        "farklı fontta", "farkli fontta", "karakter")
+            if ai_adjudication.get("verdict") in ("sahte", "şüpheli", "supheli") and any(k in _blob for k in _font_kw):
+                _gt = [{"alan": "tutar/metin", "aciklama": (ai_adjudication.get("reasoning_tr") or "")[:300], "guven": 60}]
+                ai_adjudication.setdefault("gorsel_tahrifat", _gt)
         if _gt:
             _alanlar = "; ".join(f"{g.get('alan','')}: {g.get('aciklama','')}" for g in _gt)[:600]
             findings.append(Finding(

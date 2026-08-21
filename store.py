@@ -860,16 +860,19 @@ def check_blocklist(report: dict) -> list[dict]:
     except Exception:
         return out
     try:
-        r = con.execute("SELECT is_fake, codes FROM analyses WHERE sha256=? AND is_fake=1",
-                        (f["sha256"],)).fetchone()
+        # AYNI DOSYANIN (sha256) tekrar taranması KARA-LİSTE göstergesi ÜRETMEZ: belge zaten kendi GÜNCEL
+        # bulgularıyla yeniden değerlendirilir; "daha önce sahte demiştik" etiketi (özellikle eski yanlış-
+        # pozitiflerden, ör. bozuk dönemde OCR'ın DATE_IN_FUTURE'ı) kafa karıştırır ve aynı dekontu haksız
+        # yere kara-listede gösterir. Kara-liste YALNIZ FARKLI bir dosyanın, daha önce sahte görülmüş bir
+        # belgeyle AYNI banka+sıra numarasını taşıması durumunda BİLGİ olarak gösterilir.
         hit_seq = None
-        if not r and f["bank"] and f["seq_number"]:
+        if f["bank"] and f["seq_number"]:
             hit_seq = con.execute(
                 "SELECT codes FROM analyses WHERE bank=? AND seq_number=? AND is_fake=1 AND sha256<>? LIMIT 1",
                 (f["bank"], f["seq_number"], f["sha256"])).fetchone()
-        if r or hit_seq:
-            why = ("aynı dosya daha önce sahte olarak işaretlenmişti" if r
-                   else f"aynı banka+sıra numarası ({f['seq_number']}) daha önce sahte işaretlenmiş bir belgede görüldü")
+        if hit_seq:
+            why = (f"aynı banka+sıra numarası ({f['seq_number']}) daha önce sahte işaretlenmiş FARKLI "
+                   f"bir belgede görüldü")
             # ÖNEMLİ: Kara-liste eşleşmesi ARTIK tek başına "sahte" hükmü DEĞİLDİR. Bir belgenin
             # daha önce sahte damgalanmış olması, bu sefer de otomatik sahte sayılmasına yol açmaz
             # (eski yanlış-pozitifler zincirleme ceza üretmesin). Bilgi olarak verilir; belge YİNE DE
