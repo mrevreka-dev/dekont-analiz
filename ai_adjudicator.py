@@ -81,12 +81,18 @@ def should_adjudicate(findings: list, extraction: dict, input_kind: str = "pdf")
     sev = {(f.get("code")): f.get("severity") for f in (findings or [])}
     if any(s in ("high", "critical") for s in sev.values()):
         reasons.append("Yüksek/kritik önem taşıyan bir bulgu var.")
-    # Yalnız EN KRİTİK alanlar boşsa (gönderen/alıcı adı, alıcı IBAN, tutar) — düşük öncelikli
-    # boşluklar tetiklemez. Gönderen adı boşsa YZ görüntüden okuyup doldurur.
+    # KRİTİK alanlar boşsa YZ görüntüden okuyup DOLDURUR (kullanıcı kuralı: alıcı adı, alıcı IBAN,
+    # tutar, işlem no, referans no ekrana ASLA boş gelmemeli). Bu alanlardan HERHANGİ biri boşsa eskale.
     _core = [f for f in ("sender.name", "receiver.name", "receiver.iban", "amount.value")
              if not _get(extraction or {}, f)]
     if _core:
         reasons.append("Kritik alan boş: " + ", ".join(_core))
+    # İŞLEM TANIMLAYICISI: işlem/doküman no, referans no ve sıra/sorgu no'nun HEPSİ birden boşsa
+    # (belgede hiçbir işlem numarası okunamamış) → YZ görüntüden okusun.
+    _ids = [f for f in ("transaction.document_no", "transaction.ref_no", "transaction.sequence_number")
+            if _get(extraction or {}, f)]
+    if not _ids:
+        reasons.append("İşlem/referans numarası okunamadı (işlem no, referans no, sıra no boş).")
     return (bool(reasons), reasons)
 
 
@@ -107,8 +113,11 @@ _SCHEMA_HINT = (
     '  "verdict": "gerçek | şüpheli | sahte | belirsiz",\n'
     '  "confidence": 0-100,\n'
     '  "reasoning_tr": "uzman gerekçesi (kısa paragraf, kanıta dayalı)",\n'
-    '  "corrected_fields": { "receiver.iban": "TR...", "sender.name": "...", ... },  // yalnız GÖRÜNTÜDE '
-    'AÇIKÇA okuduğun ve kuralın YANLIŞ/BOŞ verdiği alanlar; emin değilsen KOYMA\n'
+    '  "corrected_fields": { "receiver.iban": "TR...", "receiver.name": "...", "sender.name": "...", '
+    '"amount.value": 63500.00, "transaction.document_no": "...", "transaction.ref_no": "..." },  // GÖRÜNTÜDE '
+    'AÇIKÇA okuduğun ve kuralın YANLIŞ/BOŞ verdiği alanlar. ALICI ADI, ALICI IBAN, TUTAR, İŞLEM NO ve '
+    'REFERANS/SORGU NO alanları ekrana boş gelmemeli — bu alanlar boşsa GÖRÜNTÜDEN OKU ve DOLDUR; '
+    'gerçekten okunamıyorsa KOYMA (asla uydurma)\n'
     '  "finding_reviews": [ {"code":"IBAN_INVALID","gercek_mi":false,"aciklama":"foto okuma hatası; doğru IBAN ..."} ],\n'
     '  "verify_suggestion": "banka teyidi için ne sorgulanmalı (sorgu/işlem no vb.)",\n'
     '  "improvement_notes": [ {"bank":"denizbank","field":"receiver.name","problem":"...",'
@@ -306,6 +315,17 @@ def apply_corrections(extraction: dict, adjudication: dict, hard_proof_codes=Non
             if _b.iban_valid(n) is not True:
                 continue
             val = n
+        # Sayısal alanlar (tutar/ücret/toplam) YZ'den metin gelebilir → float'a çevir; olmuyorsa atla.
+        if dotted in ("amount.value", "amount.fee", "amount.total"):
+            try:
+                s = str(val).replace(" ", "").replace("TL", "").replace("TRY", "")
+                if "," in s and "." in s:
+                    s = s.replace(".", "").replace(",", ".")
+                elif "," in s:
+                    s = s.replace(",", ".")
+                val = float(s)
+            except Exception:
+                continue
         parts = dotted.split(".")
         cur = ex
         ok = True

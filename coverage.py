@@ -169,6 +169,20 @@ def build(report: dict) -> dict:
                 f"Fiş No ({_docno}) ilk 8 hanesinden geçerli tarih çözülemedi.")
     except Exception:
         pass
+    # 6c) BANKA-BAZLI NUMARA TEKRARI: işlem/sıra/referans numarası aynı bankada başka bir dekontta
+    #     görüldü mü? (kopyala-yapıştır sahtecilik). Her banka kendi içinde değerlendirilir.
+    _has_num = bool((tx.get("document_no") or "").strip() or (tx.get("ref_no") or "").strip()
+                    or (tx.get("sequence_number") or "").strip())
+    if "NUMBER_REUSE" in codes or "SEQ_DB_DUPLICATE" in codes:
+        add("Banka-bazlı numara tekrarı kontrolü", "kusur",
+            "Bu dekonttaki işlem/sıra/referans numarası AYNI bankada daha önce FARKLI bir dekontta da "
+            "görüldü → kopyalanmış/uydurulmuş numara (kritik sahtecilik).")
+    elif _has_num:
+        add("Banka-bazlı numara tekrarı kontrolü", "yapıldı",
+            "İşlem/sıra/referans numarası banka-bazlı geçmişle karşılaştırıldı; başka dekontta tekrar yok.")
+    else:
+        add("Banka-bazlı numara tekrarı kontrolü", "yapılamadı",
+            "Belgede karşılaştırılabilir işlem/sıra/referans numarası okunamadı.")
 
     # 7) ÜRETİM UYGULAMASI + DÜZENLEME TESPİTİ (hangi uygulamada yapıldı; AI/Photoshop/Canva ile
     #    değiştirilip yeniden kaydedilmiş mi). Hem fotoğraf (EXIF/XMP) hem PDF (producer/creator) için.

@@ -744,8 +744,19 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         if _sq:
             ex.transaction.ref_no = _sq.group(1)
             ex.transaction.sequence_number = _sq.group(1)
-        im = re.search(r"İŞLEM NO\s*[:：]?\s*(\d{6,})", rt)
-        ex.transaction.document_no = im.group(1) if im else ""
+        # İŞLEM NO = VakıfBank işlem numarası (14-16 hane, ilk 8 hanesi işlem tarihi YYYYAAGG).
+        # OCR bu etiketi sık bozar ("İŞLEM NO" -> "ss Exo" vb.), bu yüzden etiket bulunamazsa
+        # tarih-önekli uzun numarayı DOĞRUDAN kalıptan yakalarız (SORGU NO/IBAN ile karışmaz).
+        im = re.search(r"İŞLEM\s*NO\s*[:：]?\s*(\d{6,})", rt) or \
+             re.search(r"(?i)i\s*[şs]\s*lem\s*no\s*[:：]?\s*(\d{6,})", rt)
+        _docno = im.group(1) if im else ""
+        if not _docno:
+            _sorgu = ex.transaction.ref_no or ""
+            for _mm in re.finditer(r"(?<!\d)(20\d{2}(?:0[1-9]|1[0-2])(?:[0-2]\d|3[01])\d{5,9})(?!\d)", rt):
+                if _mm.group(1) != _sorgu:
+                    _docno = _mm.group(1)
+                    break
+        ex.transaction.document_no = _docno
         ex.transaction.description = _find_label(rt, ["İŞLEM AÇIKLAMASI"])
         # Tutar
         am = re.search(r"İŞLEM TUTARI\s*[:：]?\s*([\d.]+,\d{2})\s*(TL|TRY)?", rt)

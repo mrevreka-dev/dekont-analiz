@@ -1048,6 +1048,10 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 _w = 45 if df["code"] == "SEQ_DB_DUPLICATE" else 8
                 findings.append(Finding(df["code"], df["severity"], "content", _w,
                                         tr=df["tr"], en=df["en"], detail=df.get("detail", "")))
+            # BANKA-BAZLI NUMARA TEKRARI: aynı bankada daha önce görülmüş işlem/sıra/referans numarası
+            for nf in _store.check_number_reuse(_pre):
+                findings.append(Finding(nf["code"], nf["severity"], "content", 45,
+                                        tr=nf["tr"], en=nf["en"], detail=nf.get("detail", "")))
             # KARA LİSTE: daha önce sahte damgalanmış belgeyle eşleşme
             for bf in _store.check_blocklist(_pre):
                 findings.append(Finding(bf["code"], bf["severity"], "content", bf["weight"],
@@ -1121,6 +1125,16 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                             pass
     except Exception as _e:
         ai_adjudication = None
+
+    # 7.9) YZ'NİN GÖRÜNTÜDEN OKUDUĞU ALANLARI EKRANA YANSIT: OCR boş/yanlış bıraktığı kritik alanları
+    # (alıcı adı, alıcı IBAN, tutar, işlem no, referans no) YZ okuduysa, çıkarım dict'ine EK olarak işle
+    # ki rapor ekranında BOŞ görünmesin. IBAN yalnız mod-97 geçerliyse uygulanır (uydurma engellenir).
+    _extracted_dict = extraction.as_dict()
+    if ai_adjudication:
+        try:
+            _extracted_dict = _aj.apply_corrections(_extracted_dict, ai_adjudication)
+        except Exception:
+            pass
 
     # 8) Rapor derle
     lang_findings = [f.as_dict("tr") for f in findings]
@@ -1232,7 +1246,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             "annotation_count": struct.annotation_count,
             "js_present": struct.js_present,
         },
-        "extracted": extraction.as_dict(),
+        "extracted": _extracted_dict,   # YZ görüntüden okuduğu kritik alanlarla doldurulmuş (boş bırakmaz)
         "iban_ocr_onarim": _iban_fixes,   # EK: OCR tek-rakam IBAN onarımları (şeffaflık)
         "image_forensics": _img_forensics_dict(img_forensics),
         "cross_db": {

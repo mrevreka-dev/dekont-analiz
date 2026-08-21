@@ -72,6 +72,12 @@ def _connect():
         score INTEGER, risk TEXT, is_fake INTEGER,
         seq_number TEXT, ref_no TEXT, document_no TEXT,
         amount REAL, txn_date TEXT, codes TEXT, created_at TEXT )""")
+    # NUMARA-TEKRARI RAPORU İÇİN: önceki dekontun taraf/tutar detaylarını da tut (idempotent ekleme).
+    for _col, _typ in (("sender_name", "TEXT"), ("receiver_name", "TEXT"), ("receiver_iban", "TEXT")):
+        try:
+            con.execute(f"ALTER TABLE analyses ADD COLUMN {_col} {_typ}")
+        except Exception:
+            pass
     con.execute("CREATE INDEX IF NOT EXISTS idx_an_bankseq ON analyses(bank, seq_number)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_an_fake ON analyses(is_fake)")
     # ÖĞRENME: YZ değerlendiricisi bir alanı (ör. blank kalan alıcı adı) belgede HANGİ ETİKETİN
@@ -143,6 +149,7 @@ def _fields(report: dict) -> dict:
         "document_no": tx.get("document_no") or "",
         "sender_iban": re.sub(r"\s+", "", (ex.get("sender", {}).get("iban") or "")).upper(),
         "sender_name": (ex.get("sender", {}).get("name") or "").strip(),
+        "receiver_name": (ex.get("receiver", {}).get("name") or "").strip(),
         "receiver_iban": re.sub(r"\s+", "", (ex.get("receiver", {}).get("iban") or "")).upper(),
         "amount": ex.get("amount", {}).get("value"),
         "txn_date": tx.get("date") or "",
@@ -605,6 +612,89 @@ def check(report: dict) -> list[dict]:
     return findings
 
 
+def check_number_reuse(report: dict) -> list[dict]:
+    """BANKA-BAZLI NUMARA TEKRARI — bu dekonttaki tanımlayıcı numaralardan (işlem/doküman no,
+    sıra/sorgu no, referans no) herhangi biri, AYNI bankada daha önce analiz edilmiş FARKLI bir
+    dosyada (sha256) görülmüş mü? Bankalar her işleme BENZERSİZ numara verir; aynı numaranın başka
+    bir belgede tekrar etmesi numaranın kopyalandığını/uydurulduğunu gösterir → sahtecilik.
+
+    Mevcut SEQ_DB_DUPLICATE yalnız TEMİZ (kaydedilmiş) dekontların 'receipts' tablosuna bakar ve
+    yalnız seq_number'ı karşılaştırır. Bu denetim ise HER analizi (sahte dahil) tutan 'analyses'
+    tablosuna bakar ve seq/ref/document alanlarının HEPSİNİ karşılaştırır. Böylece ikisi de
+    reddedilmiş (ör. RECEIVER_BANK_MISMATCH'li) iki dekont aynı işlem numarasını taşısa bile,
+    ikinci/üçüncü tekrar burada yakalanır. HER BANKA KENDİ İÇİNDE değerlendirilir (banka zorunlu)."""
+    if not enabled():
+        return []
+    f = _fields(report)
+    out = []
+    bank = f["bank"]
+    sha = f["sha256"]
+    if not bank or not sha:
+        return out
+    # Tanımlayıcı numaralar (alan etiketi + değer). Yalnız 6+ haneli gerçek numaralar; kısa/ortak
+    # sayılar (şube kodu vb.) yanlış-pozitif üretmesin diye elenir.
+    nums = []
+    for label_tr, label_en, val in (
+        ("işlem/doküman no", "transaction/document no", f["document_no"]),
+        ("sıra/sorgu no", "sequence/query no", f["seq_number"]),
+        ("referans no", "reference no", f["ref_no"]),
+    ):
+        v = re.sub(r"\s+", "", str(val or ""))
+        if v and v.isdigit() and len(v) >= 6:
+            nums.append((label_tr, label_en, v))
+    if not nums:
+        return out
+    try:
+        con = _connect()
+    except Exception:
+        return out
+    try:
+        seen = set()
+        for label_tr, label_en, v in nums:
+            if v in seen:
+                continue
+            # AYNI banka, FARKLI dosya; numara seq/ref/document alanlarından herhangi birinde geçiyor mu?
+            # Önceki dekontun taraf/tutar/tarih detaylarını da çekeriz (kullanıcı: "hangi dekontta
+            # yaşandığını, alıcı/gönderen/tutar bilgilerini söyle").
+            r = con.execute(
+                "SELECT sha256, amount, txn_date, sender_name, receiver_name, receiver_iban, created_at "
+                "FROM analyses WHERE bank=? AND sha256<>? AND (seq_number=? OR ref_no=? OR document_no=?) "
+                "ORDER BY id ASC LIMIT 1",
+                (bank, sha, v, v, v)).fetchone()
+            if r:
+                seen.add(v)
+                _amt = r[1] if r[1] is not None else "—"
+                _dtx = r[2] or "—"
+                _snd = r[3] or "—"
+                _rcv = r[4] or "—"
+                _riban = r[5] or "—"
+                _seen_at = (r[6] or "")[:10] or "—"
+                _onceki_tr = (f"ÖNCEKİ DEKONT — gönderen: {_snd}; alıcı: {_rcv}; alıcı IBAN: {_riban}; "
+                              f"tutar: {_amt}; işlem tarihi: {_dtx}; sisteme ilk görülme: {_seen_at}")
+                _prev_en = (f"EARLIER RECEIPT — sender: {_snd}; receiver: {_rcv}; receiver IBAN: {_riban}; "
+                            f"amount: {_amt}; txn date: {_dtx}; first seen: {_seen_at}")
+                out.append({
+                    "code": "NUMBER_REUSE", "severity": "critical",
+                    "tr": f"BANKA-BAZLI NUMARA TEKRARI ({bank}): bu dekonttaki {label_tr} ({v}) daha önce "
+                          f"analiz edilmiş FARKLI bir dekontta da görülmüş. {bank} her işleme benzersiz numara "
+                          f"verir; aynı numaranın başka bir belgede tekrar etmesi numaranın kopyalandığını/"
+                          f"uydurulduğunu gösterir. Yüksek sahtecilik riski. {_onceki_tr}.",
+                    "en": f"BANK-SCOPED NUMBER REUSE ({bank}): the {label_en} on this receipt ({v}) was already "
+                          f"seen on a DIFFERENT previously-analyzed receipt. {bank} assigns a unique number per "
+                          f"transaction; a repeat on another document indicates the number was copied/fabricated. "
+                          f"High forgery risk. {_prev_en}.",
+                    "detail": f"bank={bank} num={v} vs sha={r[0][:12]} snd={_snd} rcv={_rcv} amt={_amt}",
+                    "onceki_dekont": {"sender_name": r[3] or "", "receiver_name": r[4] or "",
+                                      "receiver_iban": r[5] or "", "amount": r[1], "txn_date": r[2] or "",
+                                      "first_seen": r[6] or "", "sha256": r[0]},
+                })
+    except Exception:
+        pass
+    finally:
+        con.close()
+    return out
+
+
 def record(report: dict) -> bool:
     """Dekont doğrulanmışsa (yüksek puan, kritik tahrifat yok, gerçek dekont) numaralarını kaydeder.
     Zaten kayıtlıysa (aynı sha256) veya uygun değilse False döner."""
@@ -629,7 +719,7 @@ def record(report: dict) -> bool:
             "AMOUNT_MISMATCH", "BROWSER_RERENDER", "FONT_BROWSER_RERENDER", "FONT_SET_MISMATCH",
             "INTERNAL_DATE_MISMATCH", "PDFIUM_PRODUCED",
             "IBAN_INVALID", "ISSUER_IBAN_MISMATCH", "RECEIVER_BANK_MISMATCH",
-            "FEE_RAIL_MISMATCH", "RAIL_SAMEBANK_MISMATCH",
+            "FEE_RAIL_MISMATCH", "RAIL_SAMEBANK_MISMATCH", "NUMBER_REUSE",
             "DATE_IN_FUTURE", "RECEIPT_BEFORE_TXN", "IMAGE_EDITOR_SOFTWARE",
             "ID_CHECKSUM_INVALID", "SELF_TRANSFER"}
     if codes & _BAD:
@@ -664,7 +754,7 @@ _FAKE_CODES = {"REV_AMOUNT_CHANGED", "REV_CONTENT_CHANGED", "TIME_FILE_BEFORE_TX
                "AMOUNT_MISMATCH", "BROWSER_RERENDER", "FONT_BROWSER_RERENDER", "FONT_SET_MISMATCH",
                "INTERNAL_DATE_MISMATCH", "PDFIUM_PRODUCED", "IBAN_INVALID", "ISSUER_IBAN_MISMATCH",
                "RECEIVER_BANK_MISMATCH", "STATEMENT_BALANCE_BREAK", "STATEMENT_ROW_COUNT_MISMATCH",
-               "FEE_RAIL_MISMATCH", "RAIL_SAMEBANK_MISMATCH",
+               "FEE_RAIL_MISMATCH", "RAIL_SAMEBANK_MISMATCH", "NUMBER_REUSE",
                "DATE_IN_FUTURE", "RECEIPT_BEFORE_TXN", "IMAGE_EDITOR_SOFTWARE",
             "ID_CHECKSUM_INVALID", "SELF_TRANSFER"}
 
@@ -693,12 +783,14 @@ def log_analysis(report: dict) -> bool:
     try:
         con.execute(
             "INSERT OR IGNORE INTO analyses (sha256, bank, is_receipt, score, risk, is_fake, "
-            "seq_number, ref_no, document_no, amount, txn_date, codes, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "seq_number, ref_no, document_no, amount, txn_date, codes, created_at, "
+            "sender_name, receiver_name, receiver_iban) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (f["sha256"], f["bank"], 1 if cls.get("is_receipt") else 0,
              sc.get("authenticity_score"), sc.get("risk_level"), is_fake,
              f["seq_number"], f["ref_no"], f["document_no"], f["amount"], f["txn_date"],
-             ",".join(c for c in codes if c in _FAKE_CODES), _dt.datetime.utcnow().isoformat()))
+             ",".join(c for c in codes if c in _FAKE_CODES), _dt.datetime.utcnow().isoformat(),
+             f.get("sender_name"), f.get("receiver_name"), f.get("receiver_iban")))
         con.commit()
         return True
     except Exception:

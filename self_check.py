@@ -34,6 +34,25 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "X", "date": "2026-08-21 11:30", "area": "YZ ARKA-UÇ: boş kritik alanları görüntüden doldurur", "test": 22,
+     "bug": "OCR bir dekonttaki alıcı adı/alıcı IBAN/tutar/işlem no/referans no'yu okuyamayınca EKRANA BOŞ "
+            "geliyordu. YZ değerlendiricisi (yapay_zeka_degerlendirmesi) alanları yeniden okusa bile sonucu "
+            "rapordaki 'extracted' alanına YANSITILMIYORDU (apply_corrections hiç çağrılmıyordu).",
+     "fix": "(1) should_adjudicate genişletildi: alıcı adı/alıcı IBAN/tutar boşsa VEYA hiçbir işlem/referans/"
+            "sıra numarası okunamadıysa YZ'ye eskale edilir (her banka). (2) analyze.py artık YZ'nin görüntüden "
+            "okuduğu düzeltmeleri apply_corrections ile 'extracted'a işler → alıcı adı, alıcı IBAN, tutar, işlem "
+            "no, referans no ekrana BOŞ gelmez. IBAN yalnız mod-97 geçerliyse uygulanır (uydurma engellenir); "
+            "tutar metinden float'a çevrilir. Test #22 kilitler."},
+    {"id": "W", "date": "2026-08-21 11:10", "area": "BANKA-BAZLI NUMARA TEKRARI → sahtecilik + önceki dekont detayı", "test": 21,
+     "bug": "Aynı bankada aynı işlem/sıra/referans numarasını taşıyan FARKLI dekontlar (kopyala-yapıştır "
+            "sahtecilik) yakalanmıyordu: mevcut SEQ_DB_DUPLICATE yalnız TEMİZ kaydedilen 'receipts' tablosuna "
+            "ve yalnız seq_number'a bakıyordu; RECEIVER_BANK_MISMATCH'li (reddedilen) dekontlar hiç kaydedilmediği "
+            "için numaraları karşılaştırılamıyordu (3 VakıfBank dekontu aynı İŞLEM NO'yu taşıyordu).",
+     "fix": "(1) check_number_reuse: HER analizi (sahte dahil) tutan 'analyses' tablosuna bakar; işlem/doküman "
+            "no + sıra/sorgu no + referans no'nun HEPSİNİ karşılaştırır; AYNI banka + FARKLI dosyada tekrar → "
+            "NUMBER_REUSE (kritik). Her banka KENDİ İÇİNDE değerlendirilir. (2) VakıfBank İŞLEM NO çıkarımı "
+            "OCR-etiket bozulmasına dayanıklı (tarih-önekli 14-16 haneli numara). (3) Bulgu, tekrarın hangi "
+            "önceki dekontta yaşandığını GÖNDEREN/ALICI/TUTAR/TARİH detaylarıyla yazar. Test #21 kilitler."},
     {"id": "V", "date": "2026-08-21 10:00", "area": "IBAN OTORİTESİ: banka+rail IBAN kodundan + tarama kaydı", "test": 20,
      "bug": "Ziraat dekontunda web taraması gönderici bankasını 'Enpara' yazdı (IBAN 00010=Ziraat iken "
             "metindeki 'Alan Banka' yanlış tarafa atanmış); TC No'ya adres sızdı; ücret/toplam okunamayıp "
@@ -525,6 +544,60 @@ def _t20_iban_authority_bank_and_rail():
                 f"interbank-rail={r_inter}(fast), samebank-rail={r_same}(havale)")
 
 
+def _t21_bank_scoped_number_reuse():
+    """BANKA-BAZLI NUMARA TEKRARI: aynı bankada daha önce görülmüş işlem/sıra/referans numarası yeni
+    bir dekontta tekrar ederse NUMBER_REUSE (kritik) üretilir. FARKLI bankada aynı numara → TETİKLENMEZ
+    (her banka kendi içinde değerlendirilir). İşlem no (document_no) da kapsanır — sadece seq değil."""
+    import os, tempfile
+    import store as ST
+    _old = os.environ.get("DEKONT_DB_PATH")
+    _tmp = tempfile.mkdtemp()
+    os.environ["DEKONT_DB_PATH"] = os.path.join(_tmp, "sc_reuse.db")
+    try:
+        def _rep(sha, bank, doc, snd="", rcv="", amt=None):
+            return {"file": {"sha256": sha},
+                    "extracted": {"bank": bank, "sender": {"bank": bank, "name": snd},
+                                  "transaction": {"document_no": doc, "ref_no": "", "sequence_number": ""},
+                                  "receiver": {"name": rcv}, "amount": {"value": amt}},
+                    "score": {"authenticity_score": 30}, "classification": {"is_receipt": True},
+                    "findings_en": []}
+        # ilk dekont → numara + taraf/tutar detayları hafızaya
+        ST.log_analysis(_rep("a" * 64, "VAKIFBANK", "2026082120159022", "CITY2 GIDA", "Nalan Töre", 50000.0))
+        same = ST.check_number_reuse(_rep("b" * 64, "VAKIFBANK", "2026082120159022", "CITY2 GIDA", "Atakan Yenici", 18933.0))
+        diff = ST.check_number_reuse(_rep("c" * 64, "GARANTI BBVA", "2026082120159022"))  # farklı banka
+        # bulgu önceki dekontun detaylarını (gönderen/alıcı/tutar) içermeli
+        has_detail = bool(same) and ("Nalan Töre" in same[0]["tr"]) and (same[0].get("onceki_dekont", {}).get("amount") == 50000.0)
+        ok = (any(f["code"] == "NUMBER_REUSE" for f in same) and not diff and has_detail)
+        return ok, f"aynı-banka-tekrar={bool(same)}, farklı-banka-temiz={not diff}, önceki-detay={has_detail}"
+    finally:
+        if _old is None:
+            os.environ.pop("DEKONT_DB_PATH", None)
+        else:
+            os.environ["DEKONT_DB_PATH"] = _old
+
+
+def _t22_ai_fills_blank_fields():
+    """YZ GÖRÜNTÜDEN OKUMA (kullanıcı kuralı): OCR boş bıraktığı kritik alanları (alıcı IBAN, alıcı adı,
+    tutar, işlem no, referans no) YZ değerlendiricisi okuduğunda apply_corrections bunları çıkarım
+    dict'ine işler → ekrana BOŞ gelmez. Geçersiz IBAN (mod-97 tutmayan) UYGULANMAZ (uydurma engellenir)."""
+    import ai_adjudicator as AJ
+    good = _gen_iban("00067")
+    ex = {"sender": {"name": ""}, "receiver": {"name": "", "iban": ""},
+          "amount": {"value": 0}, "transaction": {"document_no": "", "ref_no": ""}}
+    adj = {"corrected_fields": {"receiver.iban": good, "receiver.name": "Nalan Töre",
+                                "amount.value": "50.000,00", "transaction.document_no": "2026082120159022",
+                                "transaction.ref_no": "2869688238"}}
+    out = AJ.apply_corrections(ex, adj)
+    filled = (out["receiver"]["iban"] == good and out["receiver"]["name"] == "Nalan Töre"
+              and out["amount"]["value"] == 50000.0 and out["transaction"]["document_no"] == "2026082120159022"
+              and out["transaction"]["ref_no"] == "2869688238")
+    out2 = AJ.apply_corrections({"receiver": {"iban": ""}},
+                                {"corrected_fields": {"receiver.iban": "TR000000000000000000000000"}})
+    reject = not out2["receiver"]["iban"]
+    ok = filled and reject
+    return ok, f"boş-alanlar-dolduruldu={filled}, geçersiz-IBAN-reddi={reject}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -546,6 +619,8 @@ _CHECKS = [
     (18, "Kapsam: IBAN-kod + Fiş No tarih + üretim/düzenleme app", _t18_coverage_new_items),
     (19, "Kuveyt Türk: Açıklama '(FAST)' → FAST (Senaryo EFT'e rağmen)", _t19_kuveyt_turk_fast),
     (20, "IBAN otoritesi: banka + rail IBAN kodundan (tüm bankalar)", _t20_iban_authority_bank_and_rail),
+    (21, "Banka-bazlı numara tekrarı → NUMBER_REUSE (her banka kendi içinde)", _t21_bank_scoped_number_reuse),
+    (22, "YZ boş kritik alanları görüntüden doldurur (alıcı/IBAN/tutar/no)", _t22_ai_fills_blank_fields),
 ]
 
 

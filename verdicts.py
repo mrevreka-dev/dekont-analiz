@@ -28,7 +28,7 @@ _CONTENT_TAMPER = {"REV_CONTENT_CHANGED", "REV_AMOUNT_CHANGED", "REV_FIELD_CHANG
                    "STATEMENT_BALANCE_BREAK", "STATEMENT_ROW_COUNT_MISMATCH", "AMOUNT_MISMATCH",
                    "RECEIPT_NO_DATE_MISMATCH", "PRODUCER_MISMATCH", "BROWSER_RERENDER",
                    "FONT_BROWSER_RERENDER", "FONT_SET_MISMATCH", "INTERNAL_DATE_MISMATCH", "PDFIUM_PRODUCED",
-                   "IBAN_INVALID", "ISSUER_IBAN_MISMATCH", "RECEIVER_BANK_MISMATCH",
+                   "IBAN_INVALID", "ISSUER_IBAN_MISMATCH", "RECEIVER_BANK_MISMATCH", "NUMBER_REUSE",
                    "AMOUNT_FONT_ANOMALY", "FEE_RAIL_MISMATCH", "RAIL_SAMEBANK_MISMATCH",
                    "DATE_IN_FUTURE", "RECEIPT_BEFORE_TXN", "IMAGE_EDITOR_SOFTWARE",
                    "ID_CHECKSUM_INVALID", "SELF_TRANSFER"}
@@ -245,11 +245,12 @@ def compute_verdicts(*, doc_type: str, input_kind: str, codes: set, cons: dict,
             "Amounts reconcile correctly (Total = Amount + Fee).")
 
     # 5) Numara geçmişiyle çelişki yok mu? (kalıcı veritabanı)
-    if "SEQ_DB_DUPLICATE" in codes:
+    if codes & {"SEQ_DB_DUPLICATE", "NUMBER_REUSE"}:
         add("cross_reference", "Numara geçmişiyle çelişki yok mu?", "No conflict with the number history?",
-            FALSE, "Bu işlem/sıra numarası daha önce FARKLI bir dekontta da kayıtlı — kopyalanmış/"
-            "uydurulmuş numara.",
-            "This transaction/sequence number is already recorded on a DIFFERENT receipt — copied/fabricated.")
+            FALSE, "Bu işlem/sıra/referans numarası (banka bazında) daha önce FARKLI bir dekontta da "
+            "görülmüş — kopyalanmış/uydurulmuş numara.",
+            "This transaction/sequence/reference number was already seen (bank-scoped) on a DIFFERENT "
+            "receipt — copied/fabricated.")
     elif db_checked and seq and db_count > 0:
         add("cross_reference", "Numara geçmişiyle çelişki yok mu?", "No conflict with the number history?",
             TRUE, "İşlem/sıra numarası geçmiş kayıtlarla karşılaştırıldı; çakışma bulunmadı.",
