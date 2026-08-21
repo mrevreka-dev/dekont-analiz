@@ -870,6 +870,8 @@ def check_blocklist(report: dict) -> list[dict]:
             hit_seq = con.execute(
                 "SELECT codes FROM analyses WHERE bank=? AND seq_number=? AND is_fake=1 AND sha256<>? LIMIT 1",
                 (f["bank"], f["seq_number"], f["sha256"])).fetchone()
+        print(f"[blocklist] bank={f['bank']!r} seq={f['seq_number']!r} sha={f['sha256'][:10]} "
+              f"cross_doc_hit={bool(hit_seq)}", flush=True)
         if hit_seq:
             why = (f"aynı banka+sıra numarası ({f['seq_number']}) daha önce sahte işaretlenmiş FARKLI "
                    f"bir belgede görüldü")

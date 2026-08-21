@@ -1105,6 +1105,8 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             _find_dicts = [{"code": f.code, "severity": f.severity, "weight": f.weight, "tr": f.tr}
                            for f in findings]
             _go, _reasons = _aj.should_adjudicate(_find_dicts, _ex_dict, input_kind)
+            print(f"[adjudicator] eskalasyon={_go} input_kind={input_kind} pil_var={locals().get('pil') is not None} "
+                  f"nedenler={_reasons}", flush=True)
             if _go:
                 import authenticity as _auth_aj
                 ai_adjudication = _aj.adjudicate(
@@ -1155,6 +1157,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if ai_adjudication.get("verdict") in ("sahte", "şüpheli", "supheli") and any(k in _blob for k in _font_kw):
                 _gt = [{"alan": "tutar/metin", "aciklama": (ai_adjudication.get("reasoning_tr") or "")[:300], "guven": 60}]
                 ai_adjudication.setdefault("gorsel_tahrifat", _gt)
+        print(f"[adjudicator] gorsel_tahrifat_bulgu={bool(_gt)} adet={len(_gt) if _gt else 0}", flush=True)
         if _gt:
             _alanlar = "; ".join(f"{g.get('alan','')}: {g.get('aciklama','')}" for g in _gt)[:600]
             findings.append(Finding(

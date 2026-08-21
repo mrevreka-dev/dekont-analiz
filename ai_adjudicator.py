@@ -233,8 +233,18 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
         return None
     obj = _parse_json(text)
     if not obj:
+        print(f"[adjudicator] JSON parse edilemedi; ham yanıt başı: {text[:200]!r}", flush=True)
         return None
-    return _sanitize(obj)
+    _san = _sanitize(obj)
+    try:
+        _gt = _san.get("gorsel_tahrifat") or []
+        _rz = (_san.get("reasoning_tr") or "")[:160]
+        print(f"[adjudicator] model={model} verdict={_san.get('verdict')} conf={_san.get('confidence')} "
+              f"gorsel_tahrifat={len(_gt)} corrected={list((_san.get('corrected_fields') or {}).keys())} "
+              f"reasoning={_rz!r}", flush=True)
+    except Exception:
+        pass
+    return _san
 
 
 def _parse_json(text: str) -> dict | None:
