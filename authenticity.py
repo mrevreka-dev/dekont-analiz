@@ -790,53 +790,57 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
 
     rail, conf = "belirsiz", 0
     title_based_eft = False
-    if same_bank and not eft_fee and not fast_label:
-        rail, conf = "havale", 90
-        ev.append("Gönderici ve alıcı IBAN aynı bankaya ait → banka-içi HAVALE.")
-    elif eft_definitive:
-        # GEÇ EFT / GECEFT — kesin EFT; her şeyi yener.
-        rail, conf = "eft", 95
-        ev.append("Ücret kaleminde 'GEÇ EFT / GECEFT' ibaresi geçiyor → KESİN EFT göstergesi.")
-        if interbank:
-            ev.append("IBAN'lar farklı bankalara ait (bankalararası) — EFT ile tutarlı.")
-    elif fast_billing and not eft_billing:
-        # Tutar/ücret açıkça FAST rayıyla faturalanmış ('FAST Ücreti', 'GİDEN FAST TUTARI').
-        rail, conf = "fast", 92
-        ev.append("Tutar/ücret açıkça FAST olarak faturalanmış (ör. 'FAST Ücreti', 'GİDEN FAST TUTARI') → FAST.")
-    elif eft_billing and not fast_billing:
-        # Tutar/ücret açıkça EFT rayıyla faturalanmış ('EFT TUTARI', 'EFT ÜCRETİ'). Belgede sadece
-        # ÇIPLAK '(FAST)' / 'GİDEN FAST' etiketi olsa da bu, FAST teslim-rayıdır (anlık EFT altyapısı);
-        # işlem EFT olarak faturalanmıştır → EFT. (Enpara/QNB 'EFT (FAST)' örneği.)
-        rail, conf = "eft", 90
-        ev.append("Tutar/ücret açıkça EFT olarak faturalanmış ('EFT TUTARI / EFT ÜCRETİ') → EFT.")
+    # ===================== BİRİNCİL KAPI: IBAN BANKA KODU =====================
+    # Kullanıcı kuralı: HAVALE mi yoksa EFT/FAST mi olduğu ÖNCE gönderici↔alıcı IBAN banka koduna
+    # göre belirlenir. Aynı kod → banka-içi HAVALE (EFT/FAST olamaz). Farklı kod → bankalararası;
+    # EFT mi FAST mı ayrımını ise FATURA etiketi (EFT/FAST TUTARI/ÜCRETİ) yapar.
+    def _interbank_rail():
+        """Bankalararası (farklı IBAN kodu) durumda EFT/FAST'ı fatura etiketinden ayırır."""
+        if eft_definitive:
+            return "eft", 95, "Ücret kaleminde 'GEÇ EFT / GECEFT' → KESİN EFT."
+        if fast_billing and not eft_billing:
+            return "fast", 92, "Tutar/ücret FAST olarak faturalanmış ('FAST Ücreti/TUTARI') → FAST."
+        if eft_billing and not fast_billing:
+            return "eft", 90, "Tutar/ücret EFT olarak faturalanmış ('EFT TUTARI/ÜCRETİ') → EFT ('(FAST)' teslim rayıdır)."
+        if fast_billing and eft_billing:
+            return "belirsiz", 40, "Hem FAST hem EFT faturalama etiketi var — çelişki; banka teyidi gerek."
         if fast_tag:
-            ev.append("Belgede '(FAST) / GİDEN FAST' geçse de bu teslim-rayıdır (anlık EFT); faturalama EFT'dir.")
-    elif fast_billing and eft_billing:
-        rail, conf = "belirsiz", 40
-        ev.append("Hem FAST hem EFT FATURALAMA etiketi var — çelişki; banka teyidi gerek.")
-    elif fast_tag:
-        # Faturalama etiketi yok ama açık FAST teslim ibaresi (Papara/VakıfBank/Garanti/Deniz/Alternatif).
-        rail, conf = "fast", 85
-        ev.append("Dekontta açık FAST ibaresi geçiyor (ör. 'GİDEN FAST', 'FAST Para Transferi') → FAST.")
-    elif ("hesaptanhavale" in ns) and not eft_fee and not fast_label and not interbank:
-        # İşlem türü açıkça 'Hesaptan Havale' (banka-içi) ve bankalararası/EFT/FAST işareti yok.
-        # Gönderici IBAN maskeli olsa bile (same_bank IBAN'dan doğrulanamasa da) metin banka-içi
-        # HAVALE der. Alıcı farklı bankaysa (interbank) buraya düşmez; o çelişki ayrıca işaretlenir.
-        rail, conf = "havale", 80
-        ev.append("İşlem türü 'Hesaptan Havale' (banka-içi) ve belgede bankalararası/EFT/FAST işareti yok → HAVALE.")
-    elif eft_in_title and not fast_label and (interbank or interbank_title):
-        # Başlık EFT diyor, işlem bankalararası, ve dekontta HİÇBİR FAST işareti yok → EFT.
-        # Bir FAST işlemi olsaydı 'FAST' ibaresi (Sorgu No / kalem / başlık) bulunurdu.
-        rail, conf = "eft", 75
-        title_based_eft = True
-        ev.append("Dekont başlığında 'EFT BANKALAR ARASI' ibaresi var, işlem bankalararası ve "
-                  "belgede HİÇBİR FAST işareti yok → EFT (başlık temelli tespit).")
+            return "fast", 85, "Açık FAST ibaresi ('GİDEN FAST' / 'FAST Para Transferi') → FAST."
+        if eft_in_title:
+            return "eft", 75, "Başlıkta EFT + bankalararası + FAST işareti yok → EFT (başlık temelli)."
+        return "belirsiz", 45, "Bankalararası ama EFT/FAST ayrımı için açık fatura etiketi yok."
+
+    if same_bank:
+        # IBAN OTORİTESİ: aynı banka kodu → banka-içi HAVALE (kesin). Aynı bankada EFT/FAST olamaz.
+        rail, conf = "havale", 92
+        ev.append("Gönderici ve alıcı IBAN AYNI bankaya ait (banka kodu eşit) → banka-içi HAVALE. "
+                  "Aynı bankadaki iki hesap arasında EFT/FAST YAPILAMAZ.")
+        if eft_definitive or fast_billing or fast_tag or eft_billing:
+            ev.append("NOT: Belge EFT/FAST ibaresi taşıyor ama IBAN'lar aynı bankada — bu bir ÇELİŞKİDİR "
+                      "(ayrıca SAMEBANK_RAIL_CONTRADICTION olarak işaretlenir).")
     elif interbank:
-        rail, conf = "belirsiz", 30
-        ev.append("Bankalararası bir transfer ama ücret kaleminde açık EFT/FAST etiketi yok; "
-                  "başlık genel olduğundan kanal (EFT mi FAST mı) kesinleşmiyor.")
+        # IBAN OTORİTESİ: farklı banka kodu → bankalararası (EFT ya da FAST; asla HAVALE değil).
+        rail, conf, _msg = _interbank_rail()
+        ev.append("Gönderici ve alıcı IBAN FARKLI bankalarda (banka kodu farklı) → bankalararası "
+                  "(EFT ya da FAST; HAVALE olamaz).")
+        ev.append(_msg)
+        title_based_eft = (rail == "eft" and not eft_definitive and not eft_billing)
     else:
-        return None
+        # IBAN kodları eksik/okunamadı → yalnız METİN fatura etiketiyle karar (yedek).
+        if eft_definitive:
+            rail, conf = "eft", 90; ev.append("'GEÇ EFT/GECEFT' → EFT (IBAN kodu okunamadı).")
+        elif fast_billing and not eft_billing:
+            rail, conf = "fast", 88; ev.append("FAST faturalama → FAST (IBAN kodu okunamadı).")
+        elif eft_billing and not fast_billing:
+            rail, conf = "eft", 86; ev.append("EFT faturalama → EFT (IBAN kodu okunamadı).")
+        elif "hesaptanhavale" in ns and not eft_fee and not fast_label:
+            rail, conf = "havale", 78; ev.append("İşlem türü 'Hesaptan Havale' (banka-içi) → HAVALE.")
+        elif fast_tag:
+            rail, conf = "fast", 80; ev.append("Açık FAST ibaresi → FAST (IBAN kodu okunamadı).")
+        elif eft_in_title:
+            rail, conf = "eft", 70; title_based_eft = True; ev.append("Başlıkta EFT → EFT (IBAN kodu okunamadı).")
+        else:
+            return None
 
     _RL = {"eft": "EFT", "fast": "FAST", "havale": "HAVALE", "belirsiz": "BELİRSİZ"}[rail]
     if rail == "eft" and title_based_eft:
@@ -975,8 +979,11 @@ def check_interbank_havale_contradiction(text: str, sender_iban: str, receiver_i
         return None                     # aynı banka → burada çelişki yok (gerçek havale olabilir)
     n = _tr_low(text)
     ns = n.replace(" ", "")
-    # İşlem HAVALE olarak mı sunuluyor? (havale ücret kalemi ya da net 'havale' türü)
-    claims_havale = any(m in ns for m in _HAVALE_FEE_MARKERS)
+    # İşlem HAVALE olarak mı sunuluyor? (a) havale ücret kalemi, (b) 'Hesaptan/Hesaba Havale' TÜRÜ,
+    # (c) net 'havale' işlem türü. Böylece yalnız ücret değil, BAŞLIK/TÜR 'HAVALE' diyorsa da yakalanır.
+    claims_havale = (any(m in ns for m in _HAVALE_FEE_MARKERS)
+                     or "hesaptanhavale" in ns or "hesabahavale" in ns
+                     or "islemturuhavale" in ns or "islemtipihavale" in ns or "islemturu:havale" in ns)
     # EFT/FAST/bankalararası ibaresi VARSA çelişki yok (doğru şekilde bankalararası etiketlenmiş);
     # Akbank 'EFT BANKALAR ARASI HESABA HAVALE' şablonu da bu kapıdan elenir.
     asserts_interbank_rail = ("eft" in ns or "bankalararasi" in ns

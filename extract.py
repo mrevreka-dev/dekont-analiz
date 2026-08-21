@@ -440,8 +440,13 @@ BANK_REGISTRY = [
     {"key": "ziraatdinamik", "label": "Ziraat Dinamik Banka", "iban": {"00160"},
      "sig": lambda c: "ziraatdinamik.com" in c["nlow"] or "ziraat dinamik mobil" in c["zsig"]},
     {"key": "ziraat", "label": "T.C. Ziraat Bankası", "iban": {"00010", "00160", "00209"},
+     # SAĞLAM: 'ziraat' + Ziraat'a özgü başlık/düzen ('HESAPTAN FAST/EFT/HAVALE' ya da 'ŞUBE KODU/ADI')
+     # → OCR 'ZİRAAT MOBİL'/'ziraatbank.com'u kaçırsa bile branch çalışır (İ-güvenli).
      "sig": lambda c: ("ziraatbank.com" in c["low"] or "ziraat mobil" in c["zsig"]
-                       or "ziraat super sube" in c["zsig"] or "ziraat super" in c["zsig"])},
+                       or "ziraat super sube" in c["zsig"] or "ziraat super" in c["zsig"]
+                       or ("ziraat" in c["zsig"] and ("hesaptan fast" in c["zsig"]
+                           or "hesaptan eft" in c["zsig"] or "sube kodu/adi" in c["zsig"]
+                           or "sube kodu" in c["zsig"])))},
     {"key": "isbank", "label": "Türkiye İş Bankası", "iban": {"00064"},
      "sig": lambda c: "isbank.com" in c["low"] or ("e-dekont" in c["low"] and "doküman numarası" in c["low"])},
     {"key": "vakif", "label": "VakıfBank", "iban": {"00015", "00210"},
@@ -962,9 +967,16 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         ex.amount.value = parse_amount(_amt_txt)
         cur = CURRENCY_RE.search(_amt_txt or "")
         ex.amount.currency = (cur.group(1).upper() if cur else "TRY")
-        # Ücret: 'Toplam Masraf' (FAST) ya da 'Komisyon' (havale)
-        ex.amount.fee = parse_amount(_after_label(rt, "Toplam Masraf", _ZS)) \
-            or parse_amount(_after_label(rt, "Komisyon", _ZS))
+        # Ücret: 'Toplam Masraf' (FAST) ya da 'Komisyon' (havale). YEDEK: 'Toplam Masraf' OCR'da
+        # okunamazsa bileşenleri (Komisyon + BSMV + Mesaj Ücreti) TOPLA — aritmetik doğrulanabilsin.
+        _zfee = parse_amount(_after_label(rt, "Toplam Masraf", _ZS))
+        if _zfee is None:
+            _zk = parse_amount(_after_label(rt, "Komisyon", _ZS)) or 0
+            _zb = parse_amount(_after_label(rt, "BSMV", _ZS)) or 0
+            _zm = parse_amount(_after_label(rt, "Mesaj Ücreti", _ZS)) or 0
+            _zsum = round(_zk + _zb + _zm, 2)
+            _zfee = _zsum if _zsum > 0 else None
+        ex.amount.fee = _zfee
         # toplam çekilen ("Hesabınızdan 15.640,00 TL ... Çekilmiştir")
         tm = re.search(r"Hesab[ıi]n[ıi]zdan\s+(" + AMOUNT_RE.pattern + r")", rt)
         if tm:
@@ -983,7 +995,8 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         if ex.sender.branch:
             ex.sender.branch = re.sub(r"\s+SAYIN\b.*$", "", ex.sender.branch, flags=re.I).strip()
         ex.sender.account_no = _find_label(rt, ["HESAP NUMARASI"])
-        ex.sender.tckn = _find_label(rt, ["VERGİ KİMLİK NO", "TC KİMLİK", "VERGI KIMLIK NO"])
+        # Kimlik: 'VERGİ KİMLİK NO' / 'TCKN'. Adres bu alana sızabilir (guard 11 haneye indirir).
+        ex.sender.tckn = _find_label(rt, ["VERGİ KİMLİK NO", "TC KİMLİK", "VERGI KIMLIK NO", "TCKN"])
         # ZİRAAT-ÖZEL: bu formatta 'VERGİ KİMLİK NO' çoğu bireysel dekontta BOŞTUR. Alan boşken
         # _find_label bir sonraki satırı ('İŞLEM TARİHİ ...') ya da sağ sütundaki adresin posta/kapı
         # rakamlarını (ör. 'No:111/1 54100' -> '1114154100') bu alana sızdırabilir. Gerçek kimlik
@@ -998,11 +1011,18 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
                 if not re.fullmatch(r"[0-9*\s]+", _idraw):
                     ex.sender.tckn = ""
             else:
-                # Maskesiz: gerçek kimlik yalnız 10-11 haneli rakamdır. Harf/etiket sızıntısı
-                # ('İŞLEM TARİHİ ...') ya da adres rakamı ('1114154100') sağlama tutmaz -> temizle.
+                # Maskesiz: gerçek kimlik yalnız 10-11 haneli rakamdır. Alan temizse OK.
                 _d = re.sub(r"\s", "", _idraw)
-                if not (_d.isdigit() and len(_d) in (10, 11) and banks.id_valid(_d) is not False):
-                    ex.sender.tckn = ""
+                if _d.isdigit() and len(_d) in (10, 11) and banks.id_valid(_d) is not False:
+                    ex.sender.tckn = _d
+                else:
+                    # Adres/etiket sızıntısı (ör. '19880252454 MEHMET CD. NO:'). BAŞTAKİ geçerli
+                    # 11/10 haneli kimliği AYIKLA (silme yerine temizle); yoksa alanı boşalt.
+                    _lead = re.match(r"\s*(\d{11}|\d{10})(?!\d)", _idraw)
+                    if _lead and banks.id_valid(_lead.group(1)) is not False:
+                        ex.sender.tckn = _lead.group(1)
+                    else:
+                        ex.sender.tckn = ""
         ex.sender.bank = "Ziraat Dinamik Banka" if is_ziraatdinamik else "T.C. Ziraat Bankası"
 
     # =============================================================
@@ -1722,6 +1742,30 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         _rib_bank = banks.bank_label_from_iban(ex.receiver.iban)
         if _rib_bank and _rib_bank != ex.bank:
             ex.receiver.bank = _rib_bank
+
+    # (c) BANKA = IBAN OTORİTESİ (BANKA-GENEL, TÜM DEKONTLAR): gönderici ve alıcı bankaları KENDİ
+    #     IBAN'larının banka kodundan set edilir — metin etiketleri ('Alan Banka' = ALICI bankası)
+    #     yanlış tarafa atanabildiği için. IBAN geçerliyse IBAN kazanır (ör. gönderici IBAN 00010
+    #     iken banka 'Enpara' yazılması engellenir). IBAN yoksa mevcut etiket korunur.
+    if ex.sender.iban and banks.iban_valid(ex.sender.iban) is not False:
+        _sbank = banks.bank_from_iban(ex.sender.iban)
+        if _sbank:
+            ex.sender.bank = _sbank
+            if not ex.bank:
+                ex.bank = _sbank
+    if ex.receiver.iban and banks.iban_valid(ex.receiver.iban) is not False:
+        _rbank = banks.bank_from_iban(ex.receiver.iban)
+        if _rbank:
+            ex.receiver.bank = _rbank
+
+    # (d) TC KİMLİK NO TEMİZLİĞİ: bazı bankalarda (ör. Ziraat) adres/başka metin TCKN alanına sızar
+    #     ('19880252454 MEHMET CD. NO:'). Yalnız 11 haneli TCKN'yi tut; kalanı at.
+    if ex.sender.tckn:
+        _m = re.search(r"\d[\d\s]{9,}\d", ex.sender.tckn)
+        if _m:
+            _digits = re.sub(r"\D", "", _m.group(0))
+            if len(_digits) >= 11:
+                ex.sender.tckn = _digits[:11]
 
     ex.confidence = _confidence(ex)
     return ex

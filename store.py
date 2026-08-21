@@ -90,6 +90,13 @@ def _connect():
     con.execute("""CREATE TABLE IF NOT EXISTS bank_corpus (
         bank_key TEXT, sha256 TEXT, rail TEXT, billing TEXT, amount REAL, created_at TEXT,
         PRIMARY KEY (bank_key, sha256) )""")
+    # TARAMA KAYDI: web/API'de yapılan her taramanın SİSTEMİN VERDİĞİ cevabı (alanlar + risk). Sonra
+    # kullanıcı dekontu yüklediğinde 'web ne demişti vs gerçek ne' karşılaştırması için sorgu/ref ile aranır.
+    con.execute("""CREATE TABLE IF NOT EXISTS scan_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, sha256 TEXT, bank TEXT, sorgu_no TEXT, ref_no TEXT,
+        sender_name TEXT, receiver_name TEXT, sender_bank TEXT, receiver_bank TEXT,
+        amount REAL, fee REAL, total REAL, rail TEXT, risk TEXT, score INTEGER,
+        input_kind TEXT, findings TEXT, created_at TEXT )""")
     con.commit()
     _maybe_unblock(con)
     return con
@@ -234,6 +241,85 @@ def bank_corpus_rows(bank_key: str) -> list:
             cur = con.execute("SELECT rail, billing, amount FROM bank_corpus WHERE bank_key=? "
                               "ORDER BY created_at DESC LIMIT 500", (bank_key,))
             return [{"rail": r[0], "billing": r[1], "amount": r[2]} for r in cur.fetchall()]
+        finally:
+            con.close()
+    except Exception:
+        return []
+
+
+def log_scan(report: dict) -> bool:
+    """Web/API taramasının SİSTEM CEVABINI kaydeder (alanlar + risk). Sonra kullanıcı dekontu
+    yükleyince 'web ne demişti vs gerçek ne' karşılaştırması için sorgu/ref/isim ile aranır."""
+    if not enabled() or not report:
+        return False
+    try:
+        ex = report.get("extracted", {}) or {}
+        tx = ex.get("transaction", {}) or {}
+        amt = ex.get("amount", {}) or {}
+        sc = report.get("score", {}) or {}
+        rail = next((c["code"].replace("RAIL_IS_", "").lower() for c in report.get("findings_tr", [])
+                     if str(c.get("code", "")).startswith("RAIL_IS_")), "")
+        fnd = ",".join(sorted({c.get("code", "") for c in report.get("findings_tr", []) if c.get("weight", 0) > 0}))
+        con = _connect()
+        try:
+            con.execute(
+                "INSERT INTO scan_log (sha256, bank, sorgu_no, ref_no, sender_name, receiver_name, "
+                "sender_bank, receiver_bank, amount, fee, total, rail, risk, score, input_kind, findings, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (report.get("file", {}).get("sha256", ""), ex.get("bank", ""),
+                 tx.get("ref_no", ""), tx.get("document_no", ""),
+                 (ex.get("sender", {}) or {}).get("name", ""), (ex.get("receiver", {}) or {}).get("name", ""),
+                 (ex.get("sender", {}) or {}).get("bank", ""), (ex.get("receiver", {}) or {}).get("bank", ""),
+                 amt.get("value"), amt.get("fee"), amt.get("total"), rail,
+                 sc.get("risk_level", ""), sc.get("authenticity_score"),
+                 report.get("classification", {}).get("input_kind", ""), fnd[:400],
+                 _dt.datetime.utcnow().isoformat()))
+            con.execute("DELETE FROM scan_log WHERE id IN "
+                        "(SELECT id FROM scan_log ORDER BY id DESC LIMIT -1 OFFSET 20000)")
+            con.commit()
+        finally:
+            con.close()
+        return True
+    except Exception:
+        return False
+
+
+def scan_log_search(q: str, limit: int = 20) -> list:
+    """Tarama kaydında arar: sorgu/ref no, gönderici/alıcı adı, banka ya da sha (parça). En yeni önce."""
+    q = (q or "").strip()
+    if not q or not enabled():
+        return []
+    try:
+        like = f"%{q}%"
+        con = _connect()
+        try:
+            cur = con.execute(
+                "SELECT sha256,bank,sorgu_no,ref_no,sender_name,receiver_name,sender_bank,receiver_bank,"
+                "amount,fee,total,rail,risk,score,input_kind,findings,created_at FROM scan_log "
+                "WHERE sorgu_no LIKE ? OR ref_no LIKE ? OR sender_name LIKE ? OR receiver_name LIKE ? "
+                "OR bank LIKE ? OR sha256 LIKE ? ORDER BY id DESC LIMIT ?",
+                (like, like, like, like, like, like, int(limit)))
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        finally:
+            con.close()
+    except Exception:
+        return []
+
+
+def scan_log_recent(limit: int = 20) -> list:
+    """En son yapılan taramalar (en yeni önce)."""
+    if not enabled():
+        return []
+    try:
+        con = _connect()
+        try:
+            cur = con.execute(
+                "SELECT sha256,bank,sorgu_no,ref_no,sender_name,receiver_name,sender_bank,receiver_bank,"
+                "amount,fee,total,rail,risk,score,input_kind,findings,created_at FROM scan_log "
+                "ORDER BY id DESC LIMIT ?", (int(limit),))
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
         finally:
             con.close()
     except Exception:

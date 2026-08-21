@@ -271,6 +271,16 @@ async def health():
             "api_key_required": bool(API_KEYS)}
 
 
+@app.get("/api/v1/scan_log")
+async def scan_log_api(q: str | None = None, limit: int = 20):
+    """Web/API taramalarının kaydı: sorgu/ref no, gönderici/alıcı adı, banka ya da sha (parça) ile ara.
+    q boşsa en son taramalar. Kullanıcı dekontu yükleyince 'web ne demişti vs gerçek ne' karşılaştırması için."""
+    import store as _st
+    limit = max(1, min(int(limit or 20), 100))
+    rows = _st.scan_log_search(q, limit) if q else _st.scan_log_recent(limit)
+    return {"query": q or "", "count": len(rows), "results": rows}
+
+
 @app.get("/api/v1/self_check")
 async def self_check_api():
     """Motorun ÖZ-DENETİMİ: canlı koda karşı tüm değişmez (invariant) testlerini çalıştırır.

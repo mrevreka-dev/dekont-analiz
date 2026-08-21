@@ -34,6 +34,16 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "V", "date": "2026-08-21 10:00", "area": "IBAN OTORİTESİ: banka+rail IBAN kodundan + tarama kaydı", "test": 20,
+     "bug": "Ziraat dekontunda web taraması gönderici bankasını 'Enpara' yazdı (IBAN 00010=Ziraat iken "
+            "metindeki 'Alan Banka' yanlış tarafa atanmış); TC No'ya adres sızdı; ücret/toplam okunamayıp "
+            "'aritmetik doğrulanamadı' dedi. Ayrıca web taramalarının cevabı saklanmıyordu (karşılaştırma yok).",
+     "fix": "(1) TÜM bankalarda gönderici/alıcı bankası KENDİ IBAN'ının banka kodundan set edilir (metin "
+            "etiketi ezmez). (2) classify_rail birincil kapı IBAN kodu: aynı→HAVALE, farklı→bankalararası; "
+            "EFT/FAST'ı fatura etiketi ayırır. (3) TCKN adres-sızması temizlenir (11 hane). (4) Ziraat ücret "
+            "yedeği (Toplam Masraf yoksa Komisyon+BSMV+Mesaj) + imza sağlamlaştırma. (5) TARAMA KAYDI: her "
+            "web/API taraması store'a yazılır, /api/v1/scan_log ile sorgu/ref/isimle aranır → 'web ne demişti "
+            "vs gerçek ne' karşılaştırması. Test #20 kilitler."},
     {"id": "U", "date": "2026-08-21 05:15", "area": "Kuveyt Türk arşive eklendi + kanal (FAST)", "test": 19,
      "bug": "Kuveyt Türk 'IBAN'a Para Transferi' dekontu 'Senaryo/Tip: DEKONT/EFT' yazıyor ama Açıklama "
             "'(FAST)' diyor. Görünen işlem türü yanlış ('DEKONT/EFT') gösteriliyordu; ayrıca banka arşivde yoktu.",
@@ -489,6 +499,32 @@ def _t19_kuveyt_turk_fast():
     return ok, f"rail={rail} (fast), tür-FAST={type_fast}, alıcı={ex.receiver.name!r}, arşivde={archived}"
 
 
+def _t20_iban_authority_bank_and_rail():
+    """IBAN OTORİTESİ (TÜM bankalar): (a) gönderici/alıcı bankası KENDİ IBAN'ının banka kodundan
+    set edilir (metin etiketi yanlış tarafa atanamaz). (b) HAVALE/EFT-FAST ayrımı IBAN kodu
+    karşılaştırmasına bağlıdır: aynı kod→HAVALE, farklı→bankalararası. (c) TCKN'ye adres sızması temizlenir."""
+    from extract import extract_fields
+    import authenticity as A
+    # Ziraat gönderici (00010), Enpara alıcı (00157) — metinde 'Alan Banka: Enpara' göndericiye atanmamalı
+    txt = ("Ziraat Bankası\nHESAPTAN FAST\nŞUBE KODU/ADI : 0404/YALOVA ŞUBESİ\n"
+           "IBAN : TR54 0001 0004 0466 8971 8150 05\nVERGİ KİMLİK NO : 19880252454 MEHMET CD. NO:\n"
+           "Gönderen : TİLBE BİÇEN\nAlan Banka : 0157 - Enpara Bank A.Ş.\n"
+           "Alıcı Hesap : TR52 0015 7000 0000 0205 2632 10 Alıcı : Mustafa YEŞİLMEN\n"
+           "İşlem Tutarı : 255,00 TRY\nKomisyon : 7,62 TRY BSMV : 0,38 TRY Mesaj Ücreti : 0,37 TRY\n"
+           "Toplam Masraf : 8,37 TRY\nHesabınızdan 263,37 TL Çekilmiştir.\n")
+    ex = extract_fields(txt, txt, None)
+    snd_ok = "ziraat" in (ex.sender.bank or "").lower()      # gönderici bankası Ziraat (IBAN 00010)
+    tckn_ok = ex.sender.tckn == "19880252454"                # adres sızması temizlendi
+    fee_ok = ex.amount.fee == 8.37                            # Toplam Masraf / bileşen toplamı
+    # rail: farklı IBAN kodu → bankalararası fast; aynı kod → havale
+    r_inter = (A.classify_rail(txt, ex.sender.iban, ex.receiver.iban, "ziraat") or {}).get("rail")
+    r_same = (A.classify_rail("GİDEN FAST\nFAST Ücreti",
+                              "TR330001000000000000000017", "TR930001000000000000000099", "") or {}).get("rail")
+    ok = (snd_ok and tckn_ok and fee_ok and r_inter == "fast" and r_same == "havale")
+    return ok, (f"gönderici-banka-Ziraat={snd_ok}, tckn-temiz={tckn_ok}, ücret={ex.amount.fee}, "
+                f"interbank-rail={r_inter}(fast), samebank-rail={r_same}(havale)")
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -509,6 +545,7 @@ _CHECKS = [
     (17, "Banka-içi karşılaştırma (her banka kendi normu)", _t17_per_bank_comparison),
     (18, "Kapsam: IBAN-kod + Fiş No tarih + üretim/düzenleme app", _t18_coverage_new_items),
     (19, "Kuveyt Türk: Açıklama '(FAST)' → FAST (Senaryo EFT'e rağmen)", _t19_kuveyt_turk_fast),
+    (20, "IBAN otoritesi: banka + rail IBAN kodundan (tüm bankalar)", _t20_iban_authority_bank_and_rail),
 ]
 
 

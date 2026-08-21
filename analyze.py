@@ -1303,6 +1303,14 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                                           report["extracted"].get("amount", {}).get("value"))
         except Exception:
             pass
+    # TARAMA KAYDI: web/API'de verilen cevabı sakla (sorgu/ref/isim ile aranabilir). Böylece kullanıcı
+    # dekontu yükleyince 'web ne demişti vs gerçek ne' karşılaştırılıp banka-bazlı hata çözümlenir.
+    if use_store:
+        try:
+            import store as _store_sl
+            _store_sl.log_scan(report)
+        except Exception:
+            pass
     # HIZ ÖNBELLEĞİNE YAZ: aynı dosya ikinci kez gelirse tüm hattı atlayıp bunu döndürürüz.
     if use_store:
         try:
