@@ -1584,7 +1584,16 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
         _KS = ["Gönderen Kişi", "Gönderen", "Alıcı Banka", "Alıcı", "Gönderilen IBAN",
                "İşlem Yeri", "Açıklama", "Tutar", "Belge No", "Belge Tarihi", "ETTN",
                "Senaryo", "Müşteri No", "TCKN", "İşlem Ref", "Düzenleyen", "Şube Adı"]
-        ex.transaction.type = _find_label(rt, ["Senaryo/Tip", "Senaryo"])
+        # İşlem türü (KUVEYT TÜRK NORMU): 'Senaryo/Tip: DEKONT/EFT' GENEL bir e-dekont senaryo
+        # etiketidir; GERÇEK kanal Açıklama'daki '(FAST)' / '(EFT)' ibaresinden gelir. Böylece
+        # 'DEKONT/EFT' yazan ama aslında FAST olan işlem doğru gösterilir.
+        _knt = _norm_tr(rt)
+        if "(fast)" in _knt:
+            ex.transaction.type = "IBAN'a Para Transferi (FAST)"
+        elif "(eft)" in _knt:
+            ex.transaction.type = "IBAN'a Para Transferi (EFT)"
+        else:
+            ex.transaction.type = _find_label(rt, ["Senaryo/Tip", "Senaryo"])
         ex.transaction.document_no = _find_label(rt, ["Belge No"])
         ex.transaction.ettn = _find_label(rt, ["ETTN"])
         ex.transaction.ref_no = _find_label(rt, ["İşlem Ref"])

@@ -34,6 +34,12 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "U", "date": "2026-08-21 05:15", "area": "Kuveyt Türk arşive eklendi + kanal (FAST)", "test": 19,
+     "bug": "Kuveyt Türk 'IBAN'a Para Transferi' dekontu 'Senaryo/Tip: DEKONT/EFT' yazıyor ama Açıklama "
+            "'(FAST)' diyor. Görünen işlem türü yanlış ('DEKONT/EFT') gösteriliyordu; ayrıca banka arşivde yoktu.",
+     "fix": "Kuveyt Türk dalı: işlem türü Açıklama'daki '(FAST)'/'(EFT)'den belirlenir ('Senaryo' genel "
+            "etiket). Rail zaten FAST. bank_corpus'a Kuveyt Türk arşiv kaydı + bank_knowledge normu "
+            "(gönderen IBAN basılmaz = eksiklik değil) eklendi. Test #19 kilitler."},
     {"id": "T", "date": "2026-08-21 04:00", "area": "Enpara korpus + kapsam (IBAN-kod/Fiş-tarih/üretim-app)", "test": 18,
      "bug": "13 gerçek Enpara dekontuyla banka-içi analiz istendi. Ayrıca 3 denetim raporda görünmüyordu: "
             "IBAN banka-kodu karşılaştırması (aynı→HAVALE), Enpara Fiş No ilk-8-hane tarih doğrulaması, ve "
@@ -463,6 +469,26 @@ def _t18_coverage_new_items():
     return ok, f"iban-kod={has_code}/havale={havale_ok}, fiş-tarih={has_fis}/uyumlu={fis_ok}, üretim-app={has_prod}"
 
 
+def _t19_kuveyt_turk_fast():
+    """Kuveyt Türk 'IBAN'a Para Transferi': 'Senaryo/Tip: DEKONT/EFT' GENEL etikettir; gerçek kanal
+    Açıklama'daki '(FAST)' → FAST. İşlem türü ve rail FAST olmalı; alıcı adı doğru çıkmalı; arşivde
+    (bank_corpus) kayıtlı olmalı."""
+    import authenticity as A, bank_corpus as BC
+    from extract import extract_fields
+    txt = ("KUVEYTTÜRK\nIBAN'a Para Transferi (Giden)\ne-Dekont\nSenaryo/Tip : DEKONT/EFT\n"
+           "Gönderen Kişi : ŞEBNEM AYLİN DUYAR\nAlıcı : Mustafa YEŞİLMEN\n"
+           "Gönderilen IBAN : TR52 0015 7000 0000 0205 2632 10\nAlıcı Banka : Enpara Bank A.Ş.\n"
+           "Açıklama : Gönderen: ŞEBNEM AYLİN DUYAR , Alıcı: Mustafa YEŞİLMEN , IBAN'a Para Transferi (FAST)\n"
+           "Tutar : 5.000,00 TL\nwww.kuveytturk.com.tr\n")
+    ex = extract_fields(txt, txt, None)
+    rail = (A.classify_rail(txt, "", ex.receiver.iban, "kuveyt") or {}).get("rail")
+    type_fast = "FAST" in (ex.transaction.type or "")
+    recv_ok = "YEŞİLMEN" in (ex.receiver.name or "").upper()   # upper: İ birleşik-nokta üretmez
+    archived = BC.compare_rail("kuveyt", "fast")["durum"] == "yapıldı"
+    ok = (rail == "fast" and type_fast and recv_ok and archived)
+    return ok, f"rail={rail} (fast), tür-FAST={type_fast}, alıcı={ex.receiver.name!r}, arşivde={archived}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -482,6 +508,7 @@ _CHECKS = [
     (16, "Fatura-etiketi kanalı belirler (Enpara EFT(FAST)→EFT)", _t16_enpara_eft_fast_and_receiver),
     (17, "Banka-içi karşılaştırma (her banka kendi normu)", _t17_per_bank_comparison),
     (18, "Kapsam: IBAN-kod + Fiş No tarih + üretim/düzenleme app", _t18_coverage_new_items),
+    (19, "Kuveyt Türk: Açıklama '(FAST)' → FAST (Senaryo EFT'e rağmen)", _t19_kuveyt_turk_fast),
 ]
 
 

@@ -202,8 +202,17 @@ BANK_KNOWLEDGE = {
               "notes": "IBAN kodları 00015/00210. Gönderen IBAN dekontta bazen yer almaz."},
     "ptt": {"label": "PTT (PttBank)", "layout": "", "rail_labeling": "", "fees": {"as_of": "2026-08"},
             "identity": "", "identifiers": [], "tells": [], "notes": "IBAN kodu 00807."},
-    "kuveyt": {"label": "Kuveyt Türk Katılım", "layout": "", "rail_labeling": "", "fees": {"as_of": "2026-08"},
-               "identity": "", "identifiers": [], "tells": [], "notes": "IBAN kodu 00205."},
+    "kuveyt": {"label": "Kuveyt Türk Katılım",
+               "layout": "'IBAN'a Para Transferi (Giden)' e-Dekont. İki blok: sol (Şube/Müşteri No/TCKN/"
+                         "İşlem Ref/Düzenleyen) — sağ (Belge No/Belge Tarihi/ETTN/Senaryo/Tip). Alt blok: "
+                         "Gönderen Kişi, Alıcı, Gönderilen IBAN (=alıcı IBAN), Alıcı Banka, İşlem Yeri, Açıklama, Tutar.",
+               "rail_labeling": "KANAL = Açıklama'daki '(FAST)'/'(EFT)'. 'Senaryo/Tip: DEKONT/EFT' GENEL bir "
+                                "e-dekont etiketidir, tek başına EFT demek DEĞİLDİR. Açıklama '(FAST)' ise FAST.",
+               "fees": {"as_of": "2026-08"},
+               "identity": "TCKN maskeli (26*******62).",
+               "identifiers": ["Belge No 'BZG...' + İşlem Ref 'AMNAK-B-YYYYMMDD...' + ETTN (UUID)."],
+               "tells": ["Gönderen IBAN dekontta BASILMAZ (yalnız 'Gönderilen IBAN' = alıcı) — eksiklik sahtecilik değil."],
+               "notes": "IBAN kodu 00205. Katılım bankası. Web kuveytturk.com.tr, Mersis 0600002681400074."},
     "ing": {"label": "ING Bank A.Ş.", "layout": "", "rail_labeling": "", "fees": {"as_of": "2026-08"},
             "identity": "", "identifiers": [], "tells": [], "notes": "IBAN kodu 00099."},
     "fiba": {"label": "Fibabanka A.Ş.", "layout": "", "rail_labeling": "", "fees": {"as_of": "2026-08"},

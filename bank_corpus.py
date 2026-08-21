@@ -55,6 +55,11 @@ SEED = {
     "alternatif": [
         {"rail": "fast", "billing": "Giden FAST Ödemesi", "amount": 1500.0, "note": "FAST Sorgu Numarası taşır."},
     ],
+    "kuveyt": [
+        {"rail": "fast", "billing": "IBAN'a Para Transferi (FAST) / Senaryo DEKONT/EFT", "amount": 5000.0,
+         "note": "Senaryo/Tip 'DEKONT/EFT' GENEL; gerçek kanal Açıklama'daki '(FAST)' → FAST. "
+                 "Gönderen IBAN basılmaz (yalnız 'Gönderilen IBAN' = alıcı). ŞEBNEM AYLİN DUYAR → Mustafa YEŞİLMEN (Enpara)."},
+    ],
 }
 
 
