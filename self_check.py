@@ -62,7 +62,9 @@ IMPROVEMENTS = [
             "no + sıra/sorgu no + referans no'nun HEPSİNİ karşılaştırır; AYNI banka + FARKLI dosyada tekrar → "
             "NUMBER_REUSE (kritik). Her banka KENDİ İÇİNDE değerlendirilir. (2) VakıfBank İŞLEM NO çıkarımı "
             "OCR-etiket bozulmasına dayanıklı (tarih-önekli 14-16 haneli numara). (3) Bulgu, tekrarın hangi "
-            "önceki dekontta yaşandığını GÖNDEREN/ALICI/TUTAR/TARİH detaylarıyla yazar. Test #21 kilitler."},
+            "önceki dekontta yaşandığını GÖNDEREN/ALICI/TUTAR/TARİH detaylarıyla yazar. (4) YANLIŞ-POZİTİF "
+            "KORUMASI: AYNI dekont tekrar tarandığında (sha256 değişse bile numara+tutar+alıcı aynı) bulgu "
+            "ÜRETİLMEZ; yalnız numara aynı iken tutar/alıcı FARKLIYSA sahtecilik sayılır. Test #21 kilitler."},
     {"id": "V", "date": "2026-08-21 10:00", "area": "IBAN OTORİTESİ: banka+rail IBAN kodundan + tarama kaydı", "test": 20,
      "bug": "Ziraat dekontunda web taraması gönderici bankasını 'Enpara' yazdı (IBAN 00010=Ziraat iken "
             "metindeki 'Alan Banka' yanlış tarafa atanmış); TC No'ya adres sızdı; ücret/toplam okunamayıp "
@@ -564,21 +566,29 @@ def _t21_bank_scoped_number_reuse():
     _tmp = tempfile.mkdtemp()
     os.environ["DEKONT_DB_PATH"] = os.path.join(_tmp, "sc_reuse.db")
     try:
-        def _rep(sha, bank, doc, snd="", rcv="", amt=None):
+        def _rep(sha, bank, doc, snd="", rcv="", amt=None, date="21.08.2026 02:36:06"):
             return {"file": {"sha256": sha},
                     "extracted": {"bank": bank, "sender": {"bank": bank, "name": snd},
-                                  "transaction": {"document_no": doc, "ref_no": "", "sequence_number": ""},
+                                  "transaction": {"document_no": doc, "ref_no": "", "sequence_number": "",
+                                                  "date": date},
                                   "receiver": {"name": rcv}, "amount": {"value": amt}},
                     "score": {"authenticity_score": 30}, "classification": {"is_receipt": True},
                     "findings_en": []}
-        # ilk dekont → numara + taraf/tutar detayları hafızaya
+        # ilk dekont → numara + taraf/tutar/tarih detayları hafızaya
         ST.log_analysis(_rep("a" * 64, "VAKIFBANK", "2026082120159022", "CITY2 GIDA", "Nalan Töre", 50000.0))
+        # (a) FARKLI işlem, aynı numara (farklı tutar+alıcı) → sahtecilik yakalanmalı
         same = ST.check_number_reuse(_rep("b" * 64, "VAKIFBANK", "2026082120159022", "CITY2 GIDA", "Atakan Yenici", 18933.0))
-        diff = ST.check_number_reuse(_rep("c" * 64, "GARANTI BBVA", "2026082120159022"))  # farklı banka
-        # bulgu önceki dekontun detaylarını (gönderen/alıcı/tutar) içermeli
+        # (b) FARKLI banka, aynı numara → tetiklenmemeli (her banka kendi içinde)
+        diff = ST.check_number_reuse(_rep("c" * 64, "GARANTI BBVA", "2026082120159022"))
+        # (c) AYNI dekontun TEKRAR taranması (farklı sha ama tutar+alıcı+tarih aynı) → YANLIŞ-POZİTİF olmamalı
+        rescan = ST.check_number_reuse(_rep("d" * 64, "VAKIFBANK", "2026082120159022", "CITY2 GIDA", "Nalan Töre", 50000.0))
+        # (d) Aynı numara+tutar+alıcı ama İŞLEM TARİHİ farklı → sahtecilik yakalanmalı
+        datef = ST.check_number_reuse(_rep("e" * 64, "VAKIFBANK", "2026082120159022", "CITY2 GIDA", "Nalan Töre", 50000.0,
+                                           date="19.08.2026 02:36:06"))
         has_detail = bool(same) and ("Nalan Töre" in same[0]["tr"]) and (same[0].get("onceki_dekont", {}).get("amount") == 50000.0)
-        ok = (any(f["code"] == "NUMBER_REUSE" for f in same) and not diff and has_detail)
-        return ok, f"aynı-banka-tekrar={bool(same)}, farklı-banka-temiz={not diff}, önceki-detay={has_detail}"
+        ok = (any(f["code"] == "NUMBER_REUSE" for f in same) and not diff and not rescan and bool(datef) and has_detail)
+        return ok, (f"farklı-işlem={bool(same)}, farklı-banka-temiz={not diff}, aynı-dekont-FP-yok={not rescan}, "
+                    f"tarih-farkı-yakalandı={bool(datef)}, önceki-detay={has_detail}")
     finally:
         if _old is None:
             os.environ.pop("DEKONT_DB_PATH", None)

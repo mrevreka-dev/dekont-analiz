@@ -622,7 +622,11 @@ def check_number_reuse(report: dict) -> list[dict]:
     yalnız seq_number'ı karşılaştırır. Bu denetim ise HER analizi (sahte dahil) tutan 'analyses'
     tablosuna bakar ve seq/ref/document alanlarının HEPSİNİ karşılaştırır. Böylece ikisi de
     reddedilmiş (ör. RECEIVER_BANK_MISMATCH'li) iki dekont aynı işlem numarasını taşısa bile,
-    ikinci/üçüncü tekrar burada yakalanır. HER BANKA KENDİ İÇİNDE değerlendirilir (banka zorunlu)."""
+    ikinci/üçüncü tekrar burada yakalanır. HER BANKA KENDİ İÇİNDE değerlendirilir (banka zorunlu).
+
+    YANLIŞ-POZİTİF KORUMASI: AYNI dekont tekrar tarandığında (dosya yeniden kaydedilip sha256 değişse
+    bile) numara + tutar + alıcı AYNI olur → bu aynı işlemdir, bulgu ÜRETİLMEZ. Yalnız numara aynı iken
+    tutar ya da alıcı POZİTİF olarak FARKLIYSA (kopyala-yapıştır) sahtecilik olarak işaretlenir."""
     if not enabled():
         return []
     f = _fields(report)
@@ -649,19 +653,61 @@ def check_number_reuse(report: dict) -> list[dict]:
     except Exception:
         return out
     try:
+        def _round2(a):
+            try:
+                return round(float(a), 2)
+            except Exception:
+                return None
+
+        def _norm_name(s):
+            return re.sub(r"\s+", " ", (s or "").strip()).upper()
+
+        def _daykey(s):
+            # işlem tarihini gün bazında karşılaştır (saat farkı OCR kaynaklı olabilir → günü esas al)
+            dt, _ = parse_content_datetime(s or "")
+            return dt.date().isoformat() if dt else None
+
+        _cur_amt = _round2(f.get("amount"))
+        _cur_riban = re.sub(r"\s+", "", (f.get("receiver_iban") or "")).upper()
+        _cur_rname = _norm_name(f.get("receiver_name"))
+        _cur_day = _daykey(f.get("txn_date"))
+
         seen = set()
         for label_tr, label_en, v in nums:
             if v in seen:
                 continue
-            # AYNI banka, FARKLI dosya; numara seq/ref/document alanlarından herhangi birinde geçiyor mu?
-            # Önceki dekontun taraf/tutar/tarih detaylarını da çekeriz (kullanıcı: "hangi dekontta
-            # yaşandığını, alıcı/gönderen/tutar bilgilerini söyle").
-            r = con.execute(
+            # AYNI banka, FARKLI dosya (sha); numara seq/ref/document alanlarından birinde geçiyor mu?
+            rows = con.execute(
                 "SELECT sha256, amount, txn_date, sender_name, receiver_name, receiver_iban, created_at "
                 "FROM analyses WHERE bank=? AND sha256<>? AND (seq_number=? OR ref_no=? OR document_no=?) "
-                "ORDER BY id ASC LIMIT 1",
-                (bank, sha, v, v, v)).fetchone()
-            if r:
+                "ORDER BY id ASC LIMIT 20",
+                (bank, sha, v, v, v)).fetchall()
+            if not rows:
+                continue
+            # AYNI DEKONTUN TEKRAR TARANMASI yanlış-pozitif üretmesin: numara aynı olsa da tutar, alıcı adı,
+            # alıcı IBAN VE işlem tarihi de aynıysa bu AYNI işlemdir (kopya/tekrar-tarama) → sahtecilik DEĞİL.
+            # Ancak numara aynı iken bu bilgilerden HERHANGİ biri (tutar / alıcı adı / alıcı IBAN / işlem
+            # tarihi) POZİTİF olarak FARKLIYSA → aynı numarayla FARKLI belge üretilmiş = kopyala-yapıştır
+            # sahtecilik. Farkı KANITLAYAMıyorsak (alan okunamadı) bulgu vermeyiz (aynı dekont varsayımı → FP yok).
+            _forgery = None
+            for pr in rows:
+                p_amt = _round2(pr[1])
+                p_riban = re.sub(r"\s+", "", (pr[5] or "")).upper()
+                p_rname = _norm_name(pr[4])
+                p_day = _daykey(pr[2])
+                amt_diff = (_cur_amt is not None and p_amt is not None and _cur_amt != p_amt)
+                riban_diff = bool(_cur_riban and p_riban and _cur_riban != p_riban)
+                rname_diff = bool(_cur_rname and p_rname and _cur_rname != p_rname)
+                date_diff = bool(_cur_day and p_day and _cur_day != p_day)  # işlem tarihi farklı → sahte
+                if amt_diff or riban_diff or rname_diff or date_diff:
+                    _forgery = pr
+                    break
+            if _forgery is None:
+                # tüm önceki kayıtlar AYNI işlemi gösteriyor → aynı dekontun tekrar taranması, bulgu yok
+                seen.add(v)
+                continue
+            r = _forgery
+            if True:
                 seen.add(v)
                 _amt = r[1] if r[1] is not None else "—"
                 _dtx = r[2] or "—"
