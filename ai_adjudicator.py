@@ -139,8 +139,68 @@ _SCHEMA_HINT = (
 )
 
 
+def _deterministic_facts(extraction: dict, findings: list, bank_key: str) -> str:
+    """BANKA/KANAL GERÇEKLERİNİ IBAN kodundan + mod-97'den KESİN hesaplar ve YZ'ye 'değiştirilemez gerçek'
+    olarak sunar. Amaç: YZ'nin banka/kanal/aynı-banka hakkında UYDURMA çıkarım yapmasını KÖKTEN engellemek
+    (ör. tek alıcı IBAN'ını ihraççıya atfedip 'iki IBAN da aynı bankada, EFT çelişkisi' demesi). Kural motoru
+    bu gerçekleri zaten KESİN biliyor; YZ'nin işi kuralın GÖREMEDİĞİ görsel tahrifat/font/tutar/tarihtir."""
+    try:
+        import banks as _b
+    except Exception:
+        return ""
+    _s = (extraction or {}).get("sender", {}) or {}
+    _r = (extraction or {}).get("receiver", {}) or {}
+    s_ib = _b.normalize_iban(_s.get("iban") or "")
+    r_ib = _b.normalize_iban(_r.get("iban") or "")
+    issuer_lbl = (extraction or {}).get("bank") or _s.get("bank") or _s.get("bank_stated") or ""
+
+    def _bank_of(ib):
+        if ib and _b.iban_valid(ib) is True:
+            return _b.bank_from_iban(ib), _b.iban_bank_code(ib)
+        return "", ""
+    s_bank, s_code = _bank_of(s_ib)
+    r_bank, r_code = _bank_of(r_ib)
+    lines = ["--- DETERMİNİSTİK GERÇEKLER (KESİN — DEĞİŞTİRME, AKSİNİ İDDİA ETME) ---"]
+    if issuer_lbl:
+        lines.append(f"• Belge ihraççısı (üst başlık/logo) = GÖNDERİCİNİN bankası: {issuer_lbl}.")
+    if s_ib:
+        lines.append(f"• Gönderici IBAN: {s_ib} → banka kodu {s_code or '?'} = {s_bank or 'belirsiz'}"
+                     + (" (mod-97 GEÇERLİ)." if s_bank else "."))
+    else:
+        lines.append("• Gönderici IBAN belgede YAZILI DEĞİL (gönderici müşteri no ile tanımlı). Bu NORMALDİR.")
+    if r_ib:
+        lines.append(f"• Alıcı IBAN: {r_ib} → banka kodu {r_code or '?'} = {r_bank or 'belirsiz'}"
+                     + (" (mod-97 GEÇERLİ)." if r_bank else "."))
+    # Aynı-banka mı? YALNIZ iki geçerli IBAN varken belirlenebilir.
+    if s_bank and r_bank:
+        if s_code == r_code:
+            lines.append(f"• İki taraf da AYNI banka ({s_bank}, kod {s_code}) → banka-içi HAVALE beklenir.")
+        else:
+            lines.append(f"• Taraf bankaları FARKLI ({s_bank} ≠ {r_bank}) → işlem BANKALARARASIDIR → "
+                         "EFT/FAST NORMALDİR, çelişki DEĞİLDİR.")
+    else:
+        # Tek IBAN durumunda ihraççı (gönderici) bankası ile alıcı IBAN bankasını KIYASLA
+        if issuer_lbl and r_bank:
+            lines.append(f"• Gönderici bankası ({issuer_lbl}) ile alıcı IBAN bankası ({r_bank}) FARKLI ise işlem "
+                         "BANKALARARASIDIR (EFT/FAST NORMAL). Elde TEK IBAN olduğundan 'iki IBAN da aynı bankada' "
+                         "DİYEMEZSİN — aynı-banka çelişkisi İDDİA ETME.")
+        else:
+            lines.append("• Elde tek/eksik IBAN var → 'aynı banka' ya da 'aynı-banka EFT çelişkisi' İDDİA ETME.")
+    _rail = next((f.get("code") for f in (findings or [])
+                  if f.get("code") in ("RAIL_IS_EFT", "RAIL_IS_FAST", "RAIL_IS_HAVALE")), "")
+    _rmap = {"RAIL_IS_EFT": "EFT", "RAIL_IS_FAST": "FAST", "RAIL_IS_HAVALE": "HAVALE"}
+    if _rail:
+        lines.append(f"• İşlem kanalı (kural motoru): {_rmap[_rail]}.")
+    lines.append("Bu gerçekler IBAN banka kodundan ve mod-97'den KESİN belirlendi. Banka adı, banka kodu, "
+                 "aynı-banka/farklı-banka ve kanal hakkında BUNLARA AYKIRI bir çıkarım YAPMA (ör. IBAN kodunu "
+                 "yanlış okuyup başka banka deme; tek IBAN'ı iki tarafa atfetme). SENİN GÖREVİN kuralın "
+                 "GÖREMEDİĞİ şeydir: GÖRSEL TAHRİFAT (font/kalınlık/yapıştırma), tutar aritmetiği, tarih "
+                 "tutarlılığı. Banka/kanal FAKTLARINI yeniden türetme.")
+    return "\n".join(lines)
+
+
 def _build_prompt(extraction: dict, findings: list, bank_ctx: str, input_kind: str,
-                  text_source: str) -> str:
+                  text_source: str, facts: str = "") -> str:
     fields_json = json.dumps(extraction or {}, ensure_ascii=False)[:1800]
     finds = [{"code": f.get("code"), "severity": f.get("severity"), "tr": (f.get("tr") or "")[:300]}
              for f in (findings or []) if f.get("severity") in ("high", "critical", "medium") or f.get("weight", 0) > 0]
@@ -160,6 +220,15 @@ def _build_prompt(extraction: dict, findings: list, bank_ctx: str, input_kind: s
         "sonrası 5 hane) kıyasla; farklıysa (ör. yazan Garanti ama IBAN 00067=Yapı Kredi) finding_reviews'a "
         "'RECEIVER_BANK_MISMATCH'/'SENDER_BANK_MISMATCH' yaz. Kodlar: 00010 Ziraat,00015 Vakıf,00046 Akbank,"
         "00062 Garanti,00064 İş Bankası,00067 Yapı Kredi,00111 QNB,00134 Denizbank,00157 Enpara,00205 Kuveyt Türk.\n"
+        "   IBAN BANKA KODU KESİN KURALI (ÇOK ÖNEMLİ — sık yapılan hatayı önle): Banka kodu, IBAN'daki 'TR' + 2 "
+        "kontrol hanesinden SONRAKİ 5 HANEDİR (5.–9. haneler). Örnek: 'TR65 0001 0002 3962 6085 9650 01' → ilk "
+        "grup '0001', ama BANKA KODU İLK 5 HANE = '00010' = ZİRAAT'tır — Kuveyt Türk DEĞİLDİR. '0001'e bakıp "
+        "banka tahmin ETME; TAM 5 haneyi al. İHRAÇÇI (üstteki logo/başlık, ör. 'KuveytTürk') = GÖNDERİCİNİN "
+        "bankasıdır. Çoğu dekontta SADECE ALICI IBAN'ı yazılıdır (gönderici müşteri no ile tanımlanır, IBAN'ı "
+        "yazmaz) → görünen TEK IBAN'ı otomatik OLARAK gönderici/ihraççı bankasına AİT SANMA; o IBAN genelde "
+        "ALICI'nındır. AYNI-BANKA çelişkisi iddiası için İKİ TARAFIN da IBAN'ı olmalı ve HER İKİSİNİN banka kodu "
+        "AYNI olmalı; elinde TEK IBAN varsa 'aynı banka' DİYEMEZSİN. İhraççı (gönderici) bankası ile alıcı "
+        "IBAN'ının bankası FARKLIYSA işlem BANKALARARASIDIR → EFT/FAST NORMALDİR, çelişki DEĞİLDİR.\n"
         "3) GÖRSEL/YAZI TAHRİFAT DENETİMİ — EN ÖNEMLİ, ZORUNLU. Gerçek dekontta TÜM metin TEK yazı tipinde "
         "basılır. Her kritik alanı (tutar rakam+YAZIYLA, gönderici/alıcı IBAN, işlem/referans no, isimler, "
         "tarih/TC) belgenin geneliyle TEK TEK kıyasla. Bir alanın fontu/kalınlığı/hizası farklıysa ya da "
@@ -197,7 +266,8 @@ def _build_prompt(extraction: dict, findings: list, bank_ctx: str, input_kind: s
         "Yalnız GÖRÜNTÜDE açıkça okunabilen değeri düzelt; emin değilsen alanı KOYMA ve banka teyidi öner. "
         "ASLA uydurma.\n\n"
         f"BELGE TÜRÜ NOTU: {kind_note}\n\n"
-        f"--- BANKA BAĞLAMI ---\n{bank_ctx}\n\n"
+        + (f"{facts}\n\n" if facts else "")
+        + f"--- BANKA BAĞLAMI ---\n{bank_ctx}\n\n"
         f"--- KURALIN ÇIKARDIĞI ALANLAR (JSON) ---\n{fields_json}\n\n"
         f"--- KURALIN BULGULARI (JSON) ---\n{finds_json}\n\n"
         "SADECE şu şemada GEÇERLİ JSON döndür (başka açıklama yazma):\n" + _SCHEMA_HINT
@@ -224,7 +294,11 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
             bank_ctx = (bank_ctx + "\n\n" + _rctx) if bank_ctx else _rctx
     except Exception:
         pass
-    prompt = _build_prompt(extraction, findings, bank_ctx, input_kind, text_source)
+    try:
+        _facts = _deterministic_facts(extraction, findings, bank_key)
+    except Exception:
+        _facts = ""
+    prompt = _build_prompt(extraction, findings, bank_ctx, input_kind, text_source, facts=_facts)
 
     content = []
     if pil_image is not None:

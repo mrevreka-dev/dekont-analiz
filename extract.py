@@ -443,7 +443,11 @@ BANK_REGISTRY = [
     {"key": "ziraat", "label": "T.C. Ziraat Bankası", "iban": {"00010", "00160", "00209"},
      # SAĞLAM: 'ziraat' + Ziraat'a özgü başlık/düzen ('HESAPTAN FAST/EFT/HAVALE' ya da 'ŞUBE KODU/ADI')
      # → OCR 'ZİRAAT MOBİL'/'ziraatbank.com'u kaçırsa bile branch çalışır (İ-güvenli).
-     "sig": lambda c: ("ziraatbank.com" in c["low"] or "ziraat mobil" in c["zsig"]
+     # KARŞI-TARAF KORUMASI: 'ziraat' KELİMESİ dekontta ALICI BANKASI olarak da geçebilir (ör. Kuveyt Türk'ten
+     # Ziraat'a transfer). Bu durumda İHRAÇÇI Ziraat DEĞİLDİR. Başka bankanın İHRAÇÇI markörü (kuveytturk vb.)
+     # varsa Ziraat'ın gevşek ('ziraat'+düzen) dalını ATLA → yanlış 'Ziraat' etiketi önlenir.
+     "sig": lambda c: (not ("kuveytturk" in c["nlow"] or "kuveyt turk katilim" in c["nlow"]))
+                      and ("ziraatbank.com" in c["low"] or "ziraat mobil" in c["zsig"]
                        or "ziraat super sube" in c["zsig"] or "ziraat super" in c["zsig"]
                        or ("ziraat" in c["zsig"] and ("hesaptan fast" in c["zsig"]
                            or "hesaptan eft" in c["zsig"] or "sube kodu/adi" in c["zsig"]
@@ -474,7 +478,9 @@ BANK_REGISTRY = [
      "sig": lambda c: ("pttbank.ptt.gov.tr" in c["low"] or "pttbank internet bankaciligi" in c["nlow"]
                        or "posta ve telgraf teskilati" in c["nlow"])},
     {"key": "kuveyt", "label": "Kuveyt Türk Katılım", "iban": {"00205"},
-     "sig": lambda c: "kuveytturk.com" in c["nlow"]},
+     # SAĞLAM: header logosu 'KuveytTürk' → 'kuveytturk'; footer 'Kuveyt Türk Katılım'; domain
+     # 'kuveytturk.com.tr' → hepsi 'kuveytturk' içerir. OCR domaini kaçırsa bile header/footer yakalar.
+     "sig": lambda c: "kuveytturk" in c["nlow"] or "kuveyt turk katilim" in c["nlow"]},
     {"key": "deniz", "label": "DenizBank", "iban": {"00134"},
      "sig": lambda c: "denizbank.com" in c["low"] or "mobildeniz" in c["nlow"]},
     {"key": "garanti", "label": "Garanti BBVA", "iban": {"00062"},

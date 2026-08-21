@@ -34,6 +34,22 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z7", "date": "2026-08-21 20:45", "area": "İHRAÇÇI ≠ KARŞI-TARAF BANKASI: Kuveyt Türk→Ziraat yanlış 'aynı-banka çelişkisi' giderildi", "test": 30,
+     "bug": "Kuveyt Türk'ten Ziraat'a FAST transfer dekontunda YZ 'gönderici ve alıcı IBAN aynı bankada (Kuveyt "
+            "Türk), EFT/FAST çelişkisi' diyordu — TAMAMEN YANLIŞ. Gerçek: gönderici Kuveyt Türk (00205), alıcı "
+            "IBAN TR65 0001 0002... = ZİRAAT (00010, kod TR+kontrol sonrası 5 hane), farklı bankalar → interbank "
+            "FAST NORMAL. İki kök hata: (1) İHRAÇÇI TESPİTİ: belgede 'ziraat' hem ALICI BANKASI olarak geçtiğinden, "
+            "OCR gürültüsünde Ziraat'ın gevşek ('ziraat'+düzen) imzası tetiklenip banka yanlışlıkla 'Ziraat' "
+            "etiketleniyordu (oysa ihraççı Kuveyt Türk). (2) YZ HALÜSİNASYONU: tek IBAN (alıcı Ziraat) varken YZ "
+            "bunu ihraççıya (Kuveyt) atfedip 'iki IBAN da aynı bankada' diyerek OLMAYAN bir çelişki uyduruyordu; "
+            "IBAN banka kodunu ('00010') 'TR65 0001' diye yanlış okuyordu.",
+     "fix": "(1) extract.py: Kuveyt Türk imzası header/footer varyantlarını kapsar ('kuveytturk'/'kuveyt turk "
+            "katilim'); Ziraat'ın gevşek dalına KARŞI-TARAF KORUMASI — başka ihraççı markörü (kuveytturk) varsa "
+            "Ziraat İHRAÇÇI sayılmaz. (2) ai_adjudicator prompt: IBAN banka kodu = TR+kontrol SONRASI 5 hane "
+            "(TR65 00010=Ziraat, Kuveyt değil); İHRAÇÇI=gönderici bankası; çoğu dekontta yalnız ALICI IBAN'ı "
+            "yazılıdır → tek IBAN'ı ihraççıya atfetme; AYNI-BANKA çelişkisi için İKİ IBAN gerekir; farklı banka "
+            "→ EFT/FAST normal. Test #30 kilitler.",
+     "not": "İhraççı Kuveyt Türk (00205), alıcı Ziraat (00010) — FARKLI banka, geçerli interbank FAST."},
     {"id": "Z6", "date": "2026-08-21 20:15", "area": "BÖLÜNMÜŞ GÖNDERİCİ IBAN ONARIMI: YZ 'alıcı değişmiş' uydurma çelişkisi giderildi", "test": 29,
      "bug": "Ziraat 'Hesaptan Hesaba Havale' dekontunda YZ 'alıcı bilgisi değiştirilmiş (güven %75, şüpheli)' "
             "diyordu. Neden: PDF metninde gönderici IBAN'ı satıra BÖLÜNMÜŞ — ilk 24 karakter ('TR65 ... 9650') "
@@ -928,6 +944,35 @@ def _t29_split_iban_reconstruction():
     return ok, f"onarım={rec_ok}(rec={rec}), iki-taraf-ayrı={two_parties}, tam-iban-güvenli={full_safe}"
 
 
+def _t30_issuer_not_confused_by_counterparty_bank():
+    """İHRAÇÇI ≠ KARŞI-TARAF BANKASI: Kuveyt Türk'ten Ziraat'a transferde belgede hem 'KuveytTürk' (ihraççı)
+    hem 'Ziraat Bankası' (ALICI bankası) geçer. Motor bankayı KUVEYT TÜRK etiketlemeli (ihraççı), Ziraat
+    DEĞİL. Ayrıca kanal: gönderici Kuveyt Türk (00205), alıcı IBAN Ziraat (00010) → FARKLI banka → FAST
+    (interbank), HAVALE/aynı-banka-çelişkisi DEĞİL. (YZ tek IBAN'ı yanlış bankaya atayıp uydurma çelişki
+    üretiyordu; kök neden ihraççı yanlış tespiti + prompt netliği.) Gerçek Ziraat dekontu ise Ziraat kalır."""
+    import extract as _E, authenticity as _a
+    kv = ("KuveytTürk\nIBAN'a Para Transferi (Giden)\ne-Dekont\nŞube Adı : Genel Müdürlük\n"
+          "Senaryo/Tip : DEKONT/EFT\nGönderen Kişi : İSA DEMİRAY\nAlıcı : kasım AKNAY\n"
+          "Gönderilen IBAN : TR65 0001 0002 3962 6085 9650 01\n"
+          "Alıcı Banka : Türkiye Cumhuriyeti Ziraat Bankası A.Ş.\n"
+          "Açıklama : Gönderen: İSA DEMİRAY, Alıcı: kasım AKNAY, IBAN'a Para Transferi (FAST)\n"
+          "Tutar : 5.000,00 TL\nKuveyt Türk Katılım Bankası A.Ş.\nkuveytturk.com.tr")
+    # (a) ihraççı Kuveyt Türk (Ziraat DEĞİL) — karşı-taraf 'Ziraat Bankası' yazsa bile
+    issuer_ok = _E.detect_issuer(kv) == "kuveyt"
+    # (b) gürültülü OCR (ŞUBE KODU + ziraat sızmış) yine Kuveyt
+    kv_noisy = kv.replace("Şube Adı", "ŞUBE KODU/ADI")
+    issuer_noisy_ok = _E.detect_issuer(kv_noisy) == "kuveyt"
+    # (c) rail: açıklamada FAST → FAST (aynı-banka HAVALE değil; tek IBAN Ziraat, gönderici Kuveyt)
+    rl = _a.classify_rail(kv, "", "TR650001000239626085965001", "kuveyt")
+    rail_ok = bool(rl) and rl["rail"] == "fast"
+    # (d) gerçek Ziraat dekontu HÂLÂ Ziraat (regresyon yok)
+    zr = ("T.C. ZİRAAT BANKASI\nHesaptan Hesaba Havale\nŞUBE KODU/ADI : 0239/TOKAT\n"
+          "İŞLEM YERİ : ZİRAAT MOBİL\nwww.ziraatbank.com.tr")
+    ziraat_ok = _E.detect_issuer(zr) == "ziraat"
+    ok = issuer_ok and issuer_noisy_ok and rail_ok and ziraat_ok
+    return ok, f"kuveyt-ihraççı={issuer_ok}, gürültülü-kuveyt={issuer_noisy_ok}, rail-fast={rail_ok}, ziraat-regresyon-yok={ziraat_ok}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -958,6 +1003,7 @@ _CHECKS = [
     (27, "İşlem kanalı: EFT anında geçmez → riskli/güvenilir değil; FAST/HAVALE anında", _t27_eft_settlement_risk),
     (28, "Rail: 'Hesaptan Hesaba Havale' → HAVALE (EFT değil); 'defter' EFT tetiklemez", _t28_havale_not_eft_false_positive),
     (29, "Bölünmüş gönderici IBAN onarımı (Ziraat) → gönderici≠alıcı, sahte-alarmı yok", _t29_split_iban_reconstruction),
+    (30, "İhraççı ≠ karşı-taraf bankası (Kuveyt Türk→Ziraat) → banka=Kuveyt, rail=FAST", _t30_issuer_not_confused_by_counterparty_bank),
 ]
 
 
