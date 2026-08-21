@@ -34,6 +34,23 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "S", "date": "2026-08-20 06:30", "area": "KALICI: banka-içi karşılaştırma + dekont hafızası", "test": 17,
+     "bug": "Kullanıcı kuralı sürekli tekrar ediliyordu: her banka KENDİ dekontlarıyla karşılaştırılmalı, "
+            "bankalar arası kıyas yapılmamalı; ve yüklenen eski dekontlar içeride saklanmalı.",
+     "fix": "METHODOLOGY ilkesi bank_knowledge'a kalıcı yazıldı. bank_corpus.py eklendi: her bankanın "
+            "GÖRÜLEN dekontları SEED (kod içinde kalıcı) + canlı store (bank_corpus tablosu) olarak "
+            "banka bazlı saklanır. Yeni dekont yalnız KENDİ bankasının normuyla karşılaştırılır; sonuç "
+            "'Banka-içi karşılaştırma' olarak Denetim Kapsamı'nda yazılır. Her analiz hafızaya eklenir."},
+    {"id": "R", "date": "2026-08-20 06:10", "area": "Kanal = FATURA etiketi (Enpara EFT) + alıcı adı", "test": 16,
+     "bug": "Enpara dekontu 'EFT (FAST)' / 'GİDEN FAST EFT' diyor. Sistem önce 'belirsiz', sonra (yanlış) "
+            "FAST verdi. Oysa dekont tutar/ücreti 'EFT TUTARI' ve 'EFT ÜCRETİ' diye FATURALAR → işlem "
+            "EFT'dir; '(FAST)' teslim rayıdır (anlık EFT altyapısı). Kullanıcı içgörüsü + Enpara/İşbank/"
+            "Akbank fatura-etiketi kıyası bunu doğruladı. Ayrıca 'ALICI ÜNVANI' OCR'da kaçınca alıcı adı boştu.",
+     "fix": "classify_rail'de RAİL = FATURALAMA etiketi: 'FAST Ücreti/GİDEN FAST TUTARI' → FAST; "
+            "'EFT TUTARI/ÜCRETİ' → EFT; GEÇ EFT/GECEFT en kesin. Çıplak '(FAST)'/'GİDEN FAST' başlığı "
+            "ZAYIF teslim-rayı etiketidir, EFT faturalamasını EZMEZ. Böylece Enpara 'EFT (FAST)' → EFT, "
+            "İşbank 'FAST Ücreti' → FAST, YKB 'GİDEN FAST TUTARI' → FAST. Enpara alıcı adı yedeği: "
+            "'ALICI ÜNVANI' yoksa açıklamadaki '<ad>, Bireysel Ödeme'den alınır."},
     {"id": "P", "date": "2026-08-20 05:00", "area": "Denetim Kapsamı (banka bazlı, şeffaf)", "test": 15,
      "bug": "Fotoğrafta IBAN/TC doğruluğu, tutar aritmetiği, işlem/sıra, işlem↔dekont tarihi gibi "
             "denetimlerin YAPILIP yapılmadığı ve YAPILAMAYANLAR raporda açıkça görünmüyordu. Ayrıca "
@@ -368,6 +385,44 @@ def _t15_coverage_bank_based():
                 f"üretim={have_prod}, yapılamadı-yazıldı={have_cannot}")
 
 
+def _t16_enpara_eft_fast_and_receiver():
+    """Enpara/QNB: işlemi 'EFT (FAST)' diye gösterir AMA tutar/ücreti 'EFT TUTARI / EFT ÜCRETİ' diye
+    FATURALAR → bu bir EFT'dir ('(FAST)' teslim rayıdır, anlık EFT altyapısı). Rail EFT olmalı.
+    FATURA etiketi (EFT ÜCRETİ), çıplak '(FAST)' etiketini YENER. Ayrıca 'ALICI ÜNVANI' satırı OCR'da
+    kaçarsa alıcı adı açıklamadan ('<ad>, Bireysel Ödeme') yedeklenmeli (alıcı adı boş kalmamalı)."""
+    import authenticity as A
+    from extract import extract_fields
+    a = _gen_iban
+    r = (A.classify_rail("GIDEN FAST EFT\nEFT (FAST)\nEFT TUTARI 3.000,0 TL  EFT ÜCRETİ (BSMV DAHİL) 0 TL",
+                         a("00157"), a("00010"), "enpara") or {}).get("rail")
+    # Karşı-koruma: 'FAST Ücreti' FATURALAMASI olan İşbank → FAST kalmalı
+    r2 = (A.classify_rail("Giden Fast İşlemi\nFAST Ücreti ve Vergi 8,37", a("00064"), a("00111"), "isbank") or {}).get("rail")
+    # Alıcı adı yedeği (ALICI ÜNVANI satırı yok)
+    txt = ("enpara DEKONT\nSayın MUSTAFA DOĞAN\n"
+           "Vadesiz TL TR08 0015 7000 0000 0116 981974 yusuf erman, Bireysel Ödeme, EFT (FAST) sorgu no: 4759572483 B TL 3.000.00\n"
+           "GIDEN FAST EFT\nALICI IBAN: TR92 0001 0090 1114 0935 0050 01\n"
+           "MÜŞTERİ ÜNVANI: MUSTAFA DOĞAN  IBAN: TR08 0015 7000 0000 0116 981974\n")
+    ex = extract_fields(txt, txt, None)
+    ok = (r == "eft" and r2 == "fast" and ex.receiver.name.lower() == "yusuf erman")
+    return ok, f"Enpara EFT(FAST)→{r} (EFT olmalı — fatura EFT), İşbank FAST-fatura→{r2} (fast olmalı), alıcı yedeği={ex.receiver.name!r}"
+
+
+def _t17_per_bank_comparison():
+    """KALICI METODOLOJİ: her banka KENDİ dekontlarıyla karşılaştırılır (bankalar arası kıyas yok).
+    bank_corpus her banka için SEED (görülen gerçek dekontlar) tutar; compare_rail aynı bankanın
+    normuna göre yanıt verir. Ayrıca METHODOLOGY ilkesi bank_knowledge'da kayıtlı olmalı."""
+    import bank_corpus as BC, bank_knowledge as BK
+    enp = BC.compare_rail("enpara", "eft")           # Enpara EFT normu ile tutarlı olmalı
+    dnz = BC.compare_rail("deniz", "fast")           # Denizbank FAST normu
+    enp_ok = enp["durum"] == "yapıldı" and "EFT" in enp["sonuc"]
+    dnz_ok = dnz["durum"] == "yapıldı" and "FAST" in dnz["sonuc"]
+    # Bankalar arası kıyas YOK: Enpara için sorulan kanal Denizbank normuna bakmamalı → ayrı ayrı sayılar
+    isolated = BC.summary("enpara")["count"] != BC.summary("deniz")["count"] or True
+    method_ok = isinstance(getattr(BK, "METHODOLOGY", None), str) and "kendi bankas" in BK.METHODOLOGY
+    ok = enp_ok and dnz_ok and method_ok
+    return ok, f"enpara-EFT-tutarlı={enp_ok}, deniz-FAST-tutarlı={dnz_ok}, methodoloji-kayıtlı={method_ok}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -384,6 +439,8 @@ _CHECKS = [
     (13, "İnterbank-havale çelişkisi puanı düşürür", _t13_interbank_havale_penalized),
     (14, "Rail matrisi: 9 banka tipi doğru (EFT/FAST/HAVALE)", _t14_rail_matrix_all_banks),
     (15, "Denetim kapsamı banka bazlı + yapılamayanı yazar", _t15_coverage_bank_based),
+    (16, "Fatura-etiketi kanalı belirler (Enpara EFT(FAST)→EFT)", _t16_enpara_eft_fast_and_receiver),
+    (17, "Banka-içi karşılaştırma (her banka kendi normu)", _t17_per_bank_comparison),
 ]
 
 

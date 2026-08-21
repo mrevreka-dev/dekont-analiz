@@ -18,6 +18,20 @@ teyidini esas alın.
 """
 from __future__ import annotations
 
+# =====================================================================
+#  KALICI METODOLOJİ İLKESİ (kullanıcı kuralı — bir daha yazmaya gerek yok):
+#  Bir dekont YALNIZCA KENDİ BANKASININ dekontlarıyla karşılaştırılır. A bankasının dekontu
+#  A bankasının diğer dekontları/normuyla; B bankası B ile değerlendirilir. Bankalar ARASI
+#  kıyas yapılmaz. Kanal (EFT/FAST/HAVALE), dekontun KENDİ fatura etiketinden (EFT/FAST TUTARI/
+#  ÜCRETİ) belirlenir; başka bir bankanın alışkanlığı gerekçe yapılmaz. Tüm denetimler ve
+#  geliştirmeler banka bazlıdır ve bu bankanın altında (bank_knowledge / reference_profiles /
+#  bank_corpus) tutulur.
+# =====================================================================
+METHODOLOGY = (
+    "Her dekont yalnız kendi bankasının dekontlarıyla/normuyla karşılaştırılır; bankalar arası "
+    "kıyas yapılmaz. Kanal, dekontun kendi fatura etiketinden belirlenir. Tüm kurallar banka bazlıdır."
+)
+
 # Türkiye FAST işlem-başına üst limiti (tarihe göre değişir; kullanıcı 2026-08 için bildirdi).
 FAST_LIMIT_TL = 100_000
 FAST_LIMIT_AS_OF = "2026-08"
@@ -147,12 +161,17 @@ BANK_KNOWLEDGE = {
     "enpara": {
         "label": "Enpara.com (QNB)",
         "layout": "'ALICI ÜNVANI' / 'MÜŞTERİ ÜNVANI' iki blok. Fiş No = YYYYAAGG + sayaç.",
-        "rail_labeling": "'EFT TUTARI' / 'giden fast' etiketleri.",
+        "rail_labeling": "KANAL = FATURA ETİKETİ. Enpara işlemi 'EFT (FAST)' / 'GİDEN FAST EFT' diye "
+                         "gösterse de, tutar/ücreti 'EFT TUTARI' ve 'EFT ÜCRETİ' diye FATURALAR → işlem "
+                         "EFT'dir. '(FAST)' teslim rayıdır (FAST = anlık EFT altyapısı), kanalı değiştirmez. "
+                         "Yalnız 'FAST Ücreti / FAST TUTARI' faturalaması varsa FAST olur.",
         "fees": {"as_of": "2026-08"},
         "identity": "",
-        "identifiers": ["Fiş No gömülü tarih (YYYYAAGG) işlem tarihiyle uyumlu olmalı (dijital PDF'te)."],
-        "tells": ["Alıcı/gönderici IBAN karışması geçmişte sorundu (ocr_recover ile düzeltildi)."],
-        "notes": "IBAN kodları 00157/00111 (QNB markası).",
+        "identifiers": ["Fiş No gömülü tarih (YYYYAAGG) işlem tarihiyle uyumlu olmalı (dijital PDF'te).",
+                        "SORGU NO = işlem teyit numarası."],
+        "tells": ["Alıcı/gönderici IBAN karışması geçmişte sorundu (ocr_recover ile düzeltildi).",
+                  "Alıcı adı 'ALICI ÜNVANI' + açıklamadaki '<ad>, Bireysel Ödeme' ile teyit edilir (yedek)."],
+        "notes": "IBAN kodları 00157/00111 (QNB markası). '(FAST)' etiketi işlemi FAST yapmaz; fatura EFT ise EFT.",
     },
     "qnb": {"label": "QNB Bank A.Ş.", "layout": "", "rail_labeling": "", "fees": {"as_of": "2026-08"},
             "identity": "", "identifiers": [], "tells": [], "notes": "IBAN kodu 00111. Fiş No YYYYAAGG."},

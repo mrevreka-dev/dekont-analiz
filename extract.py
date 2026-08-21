@@ -818,6 +818,16 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
             # Alıcı
             ex.receiver.name = _clean_name(_after_label(rt, "ALICI ÜNVANI", _STOPS)
                                            or _after_label(rt, "ALICI UNVANI", _STOPS))
+            # YEDEK (Enpara/QNB): 'ALICI ÜNVANI' satırı OCR'da kaçarsa, işlem tablosu açıklamasındaki
+            # alıcı adından al: "<alıcı adı>, Bireysel Ödeme, EFT (FAST) sorgu no:...". Böylece alıcı
+            # adı hiç boş kalmaz (kullanıcı: alıcı adı okunamayınca işlem sorunu yaşanıyordu).
+            if not ex.receiver.name:
+                _dm = re.search(r"([A-Za-zÇĞİÖŞÜçğıöşü][A-Za-zÇĞİÖŞÜçğıöşü .'-]{2,40}?)\s*,\s*"
+                                r"(?:Bireysel|Kurumsal|Ticari)\s*Ödeme", rt)
+                if not _dm:
+                    _dm = re.search(r"Açıklama\s*[:：]?\s*([A-Za-zÇĞİÖŞÜçğıöşü][A-Za-zÇĞİÖŞÜçğıöşü .'-]{2,40}?)\s*,", rt)
+                if _dm:
+                    ex.receiver.name = _clean_name(_dm.group(1))
             ex.receiver.iban = banks.normalize_iban(_after_label(rt, "ALICI IBAN", _STOPS))
             # Gönderen (MÜŞTERİ ÜNVANI daha güvenilir; yoksa GÖNDEREN)
             ex.sender.name = _clean_name(_after_label(rt, "MÜŞTERİ ÜNVANI", _STOPS)

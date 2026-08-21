@@ -59,11 +59,22 @@ def build(report: dict) -> dict:
     # 1) Kanal (HAVALE/EFT/FAST) — EFT bulgusu varsa mutlaka yazılır
     rail_code = next((c for c in ("RAIL_IS_EFT", "RAIL_IS_FAST", "RAIL_IS_HAVALE") if c in codes), None)
     rail_map = {"RAIL_IS_EFT": "EFT", "RAIL_IS_FAST": "FAST", "RAIL_IS_HAVALE": "HAVALE"}
+    _rail = None
     if rail_code:
+        _rail = rail_map[rail_code].lower()
         add("Kanal (EFT/FAST/HAVALE)", "yapıldı", f"{rail_map[rail_code]} olarak sınıflandı ({rail_code})")
     else:
         add("Kanal (EFT/FAST/HAVALE)", "kısmi",
             "Kanal kesinleştirilemedi (belirsiz) — açık EFT/FAST işareti ya da IBAN çifti yok")
+    # BANKA-İÇİ KARŞILAŞTIRMA (kullanıcı kuralı: yalnız aynı bankanın dekontlarıyla kıyas)
+    try:
+        import authenticity as _auth, bank_corpus as _bc
+        _bkey = _auth.bank_key(bank)
+        if _bkey and _rail:
+            _cmp = _bc.compare_rail(_bkey, _rail)
+            add("Banka-içi karşılaştırma (aynı banka normu)", _cmp["durum"], _cmp["sonuc"])
+    except Exception:
+        pass
     # Kanal çelişkileri (banka bazlı sahtecilik)
     for c, txt in (("SAMEBANK_RAIL_CONTRADICTION", "aynı banka ama bankalararası/EFT/FAST başlık"),
                    ("INTERBANK_HAVALE_CONTRADICTION", "farklı banka ama HAVALE olarak sunulmuş"),

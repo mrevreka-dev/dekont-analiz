@@ -1288,6 +1288,21 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         report["denetim_kapsami"] = _cov.build(report)
     except Exception:
         pass
+    # BANKA-İÇİ HAFIZA: bu dekontu kendi bankasının geçmişine ekle (kullanıcı: eski dekontları
+    # içeride sakla ve banka bazlı karşılaştır). Yalnız gerçek dekont + store açıkken.
+    if use_store and is_receipt:
+        try:
+            import store as _store_bc, authenticity as _auth_bc
+            _bk = _auth_bc.bank_key(report["extracted"].get("bank", ""))
+            _rc = next((c["code"] for c in report["findings_tr"]
+                        if c["code"] in ("RAIL_IS_EFT", "RAIL_IS_FAST", "RAIL_IS_HAVALE")), "")
+            _rl = {"RAIL_IS_EFT": "eft", "RAIL_IS_FAST": "fast", "RAIL_IS_HAVALE": "havale"}.get(_rc, "")
+            if _bk and _rl:
+                _store_bc.bank_corpus_add(_bk, struct.sha256, _rl,
+                                          report["extracted"].get("doc_kind", ""),
+                                          report["extracted"].get("amount", {}).get("value"))
+        except Exception:
+            pass
     # HIZ ÖNBELLEĞİNE YAZ: aynı dosya ikinci kez gelirse tüm hattı atlayıp bunu döndürürüz.
     if use_store:
         try:

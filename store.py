@@ -86,6 +86,10 @@ def _connect():
     con.execute("""CREATE TABLE IF NOT EXISTS report_cache (
         sha256 TEXT, engine_version TEXT, report_json TEXT, created_at TEXT,
         PRIMARY KEY (sha256, engine_version) )""")
+    # BANKA-İÇİ DEKONT HAFIZASI: her analiz edilen dekontun banka bazlı kanal/etiket özeti.
+    con.execute("""CREATE TABLE IF NOT EXISTS bank_corpus (
+        bank_key TEXT, sha256 TEXT, rail TEXT, billing TEXT, amount REAL, created_at TEXT,
+        PRIMARY KEY (bank_key, sha256) )""")
     con.commit()
     _maybe_unblock(con)
     return con
@@ -197,6 +201,43 @@ def cache_put(sha256: str, engine_version: str, report: dict) -> bool:
         return True
     except Exception:
         return False
+
+
+def bank_corpus_add(bank_key: str, sha256: str, rail: str, billing: str, amount) -> bool:
+    """Analiz edilen dekontu BANKA-İÇİ hafızaya ekler (kanal/etiket özeti). Aynı dosya (sha) bir kez."""
+    bank_key = (bank_key or "").strip().lower()
+    if not bank_key or not sha256 or not enabled():
+        return False
+    try:
+        con = _connect()
+        try:
+            con.execute("INSERT OR IGNORE INTO bank_corpus (bank_key, sha256, rail, billing, amount, created_at) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (bank_key, sha256, (rail or ""), (billing or "")[:120],
+                         float(amount) if amount is not None else None, _dt.datetime.utcnow().isoformat()))
+            con.commit()
+        finally:
+            con.close()
+        return True
+    except Exception:
+        return False
+
+
+def bank_corpus_rows(bank_key: str) -> list:
+    """Bu bankanın hafızadaki (canlı) kayıtlarını döndürür: [{rail, billing, amount}, ...]."""
+    bank_key = (bank_key or "").strip().lower()
+    if not bank_key or not enabled():
+        return []
+    try:
+        con = _connect()
+        try:
+            cur = con.execute("SELECT rail, billing, amount FROM bank_corpus WHERE bank_key=? "
+                              "ORDER BY created_at DESC LIMIT 500", (bank_key,))
+            return [{"rail": r[0], "billing": r[1], "amount": r[2]} for r in cur.fetchall()]
+        finally:
+            con.close()
+    except Exception:
+        return []
 
 
 def record_field_hint(bank: str, field: str, label: str) -> bool:
