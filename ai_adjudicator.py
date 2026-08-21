@@ -205,8 +205,12 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
             pass
     content.append({"type": "text", "text": prompt})
 
-    # Forensic JSON yanıtı için yeterli alan (yanıt max_tokens'a takılıp KESİLMESİN → parse edilemiyor).
-    body = {"model": model, "max_tokens": 4096, "messages": [{"role": "user", "content": content}]}
+    # ÖNEMLİ: Sonnet 5 varsayılan "düşünme (thinking)" modunda tüm token'ları düşünmeye harcayıp METİN
+    # ÜRETMEDEN kesiliyordu (stop_reason=max_tokens, content=['thinking']) → boş yanıt + YÜKSEK MALİYET
+    # (her çağrı 4096 düşünme token'ı). Düşünmeyi KAPATIYORUZ: model doğrudan JSON üretir → hızlı, ucuz,
+    # dolu yanıt. 2048 token forensic JSON için yeterli.
+    body = {"model": model, "max_tokens": 2048, "thinking": {"type": "disabled"},
+            "messages": [{"role": "user", "content": content}]}
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(API_URL, data=data, method="POST")
     req.add_header("x-api-key", api_key)

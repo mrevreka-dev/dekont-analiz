@@ -132,6 +132,10 @@ def extract_from_image(pil_img, timeout: float = 60.0) -> dict | None:
         # full_text (tam metin dökümü) + yapısal alanlar + tahrifat analizi tek yanıtta döner;
         # 1024 yetersizdi (yoğun dekontta yanıt kesilip JSON bozuluyor, vision None düşüyordu).
         "max_tokens": 4096,
+        # ÖNEMLİ: Sonnet 5 varsayılan "düşünme (thinking)" modunda tüm token'ları düşünmeye harcayıp
+        # METİN ÜRETMEDEN kesilebiliyor (stop_reason=max_tokens, content=['thinking']). OCR için düşünme
+        # GEREKSİZDİR → kapatıyoruz; böylece model doğrudan JSON metni üretir (hızlı + boş dönmez).
+        "thinking": {"type": "disabled"},
         "messages": [{
             "role": "user",
             "content": [
