@@ -987,12 +987,34 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
             or IBAN_RE.search(_after_label(rt, "Alıcı Hesap", ["Alıcı", "Alan Banka"]) or "")
         ex.receiver.iban = banks.normalize_iban(r_ib.group(0)) if r_ib else ""
         s_ib = _first_iban_after(rt, ["IBAN"])
+        # ZİRAAT-ÖZEL BÖLÜNMÜŞ GÖNDERİCİ IBAN ONARIMI (FALLBACK'TEN ÖNCE): 'Hesaptan Hesaba Havale'de
+        # gönderici IBAN'ı satıra BÖLÜNEBİLİR — ilk 24 karakter ('TR65 ... 9650') üst satırda, son 2 hane
+        # ('01') 'IBAN :' etiketi sonrası AYRI satırda kalır. IBAN_RE tam 26 haneyi aradığından yakalanamaz;
+        # gönderici IBAN BOŞ kalıp all_ibans[0]=ALICI IBAN'ına düşüyordu → YZ gönderici/alıcıyı karıştırıp
+        # uydurma 'alıcı değişmiş' çelişkisi üretiyordu. Onarımı fallback'ten ÖNCE dene: kısmi IBAN +
+        # yakındaki orphan 2 haneyi birleştirip mod-97 ile DOĞRULA (yanlış birleştirme kabul edilmez).
+        if banks.iban_valid(banks.normalize_iban(s_ib or "")) is not True:
+            _rec = _reconstruct_split_iban(rt, exclude=ex.receiver.iban)
+            if _rec:
+                s_ib = _rec
+                if _rec not in ex.all_ibans:
+                    ex.all_ibans.append(_rec)
         ex.sender.iban = s_ib or (ex.all_ibans[0] if ex.all_ibans else "")
         if ex.sender.iban and ex.sender.iban == ex.receiver.iban:
             for ib in ex.all_ibans:
                 if ib != ex.receiver.iban:
                     ex.sender.iban = ib
                     break
+        # ZİRAAT-ÖZEL GÖNDERİCİ ADI: 'Hesaptan Hesaba Havale'de gönderici adı, gönderici IBAN'ının
+        # BİTİMİNDE aynı satırda durur (ör. 'TR65 ... 9650 KASIM AKNAY'). Ad boşsa, kısmi IBAN satırının
+        # IBAN'dan SONRAKİ kısmını (büyük-harf isim) al.
+        if not ex.sender.name:
+            _im = re.search(r"TR\d{2}(?:[ ]?\d{4}){5}(?:[ ]?\d{2})?[ \t]+"
+                            r"([A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜ.\-']*(?:[ ]+[A-ZÇĞİÖŞÜ.\-']{2,})+)", rt)
+            if _im:
+                _cand = _clean_name(_im.group(1))
+                if _cand and not _cand.upper().startswith("TR"):
+                    ex.sender.name = _cand
         # Tutar: 'İşlem Tutarı' (FAST) ya da 'Havale Tutarı' (havale)
         _amt_txt = _after_label(rt, "İşlem Tutarı", _ZS) or _after_label(rt, "Havale Tutarı", _ZS)
         ex.amount.value = parse_amount(_amt_txt)
@@ -1817,6 +1839,27 @@ def _ocr_fix_iban(s: str) -> str:
     cand = "TR" + body
     m = re.match(r"TR\d{24}", cand)
     return m.group(0) if m else ""
+
+
+def _reconstruct_split_iban(text: str, exclude: str = "") -> str:
+    """SATIRA BÖLÜNMÜŞ TR IBAN'ı onarır (ör. Ziraat 'Hesaptan Hesaba Havale' gönderici IBAN'ı):
+    KISMİ IBAN 'TR + 22 hane' (24 karakter) üst satırda, son 2 hane AYRI satırda kalmış olabilir.
+    Kısmî IBAN + yakındaki AYRI 2 haneyi birleştirir ve YALNIZ mod-97 GEÇERLİ sonucu döndürür
+    (yanlış birleştirme çok düşük olasılıkla geçer → checksum güvencesi). `exclude`: bilinen IBAN atlanır.
+    Zaten TAM IBAN'lar (kısmın hemen ardından 2 hane) DOKUNULMAZ — onları IBAN_RE zaten yakalar."""
+    _ex = banks.normalize_iban(exclude or "")
+    for pm in re.finditer(r"TR\d{2}(?:[ ]?\d{4}){5}", text):
+        partial = banks.normalize_iban(pm.group(0))       # 'TR' + 22 hane = 24 karakter
+        if len(partial) != 24 or partial == _ex:
+            continue
+        tail = text[pm.end(): pm.end() + 160]
+        if re.match(r"\s*\d", tail):                       # kısmın hemen ardı rakam → TAM IBAN parçası, atla
+            continue
+        for dm in re.finditer(r"(?<!\d)(\d{2})(?!\d)", tail):   # yakındaki AYRI 2 hane (orphan tamamlayıcı)
+            cand = partial + dm.group(1)
+            if banks.iban_valid(cand) is True and cand != _ex:
+                return cand
+    return ""
 
 
 def _first_iban_after(text: str, labels: list[str]) -> str:

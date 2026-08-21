@@ -34,6 +34,21 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z6", "date": "2026-08-21 20:15", "area": "BÖLÜNMÜŞ GÖNDERİCİ IBAN ONARIMI: YZ 'alıcı değişmiş' uydurma çelişkisi giderildi", "test": 29,
+     "bug": "Ziraat 'Hesaptan Hesaba Havale' dekontunda YZ 'alıcı bilgisi değiştirilmiş (güven %75, şüpheli)' "
+            "diyordu. Neden: PDF metninde gönderici IBAN'ı satıra BÖLÜNMÜŞ — ilk 24 karakter ('TR65 ... 9650') "
+            "üst satırda, son 2 hane ('01') 'IBAN :' etiketinden sonra AYRI satırda. IBAN_RE tam 26 hane "
+            "aradığından yakalayamıyor; gönderici IBAN BOŞ kalıp all_ibans[0]=ALICI IBAN'ına düşüyordu. "
+            "Böylece rapor sadece alıcıyı gösteriyor, YZ ham metindeki gönderici (KASIM AKNAY/TR65) ile çıkarılan "
+            "alıcıyı (ENES/TR17) karşılaştırıp gönderici/alıcıyı KARIŞTIRIYOR ve uydurma 'alıcı değiştirilmiş' "
+            "çelişkisi üretiyordu. Gerçekte iki IBAN FARKLI (TR65 ≠ TR17), ikisi de Ziraat → geçerli aynı-banka HAVALE.",
+     "fix": "extract.py: (1) _reconstruct_split_iban — kısmi IBAN (TR+22 hane) + yakındaki orphan 2 haneyi "
+            "birleştirir, YALNIZ mod-97 GEÇERLİ sonucu döndürür (yanlış birleştirme checksum'a takılır); tam "
+            "IBAN'lar (ardı 2 hane) dokunulmaz. (2) Ziraat dalında bu onarım all_ibans[0] fallback'inden ÖNCE "
+            "çalışır → gönderici IBAN doğru dolar. (3) Gönderici adı kısmi IBAN satırının sonundan okunur "
+            "(KASIM AKNAY). Sonuç: gönderici KASIM AKNAY/TR65, alıcı ENES/TR17 — İKİSİ AYRI, skor 100, güvenilir; "
+            "YZ artık karışmıyor. Test #29 kilitler.",
+     "not": "PDF'te gönderici ve alıcı IBAN AYNI DEĞİLDİR — kullanıcı sorusu: farklı (TR65 vs TR17, ikisi de Ziraat)."},
     {"id": "Z5", "date": "2026-08-21 19:45", "area": "RAIL YANLIŞ-POZİTİFİ: 'Hesaptan Hesaba Havale' EFT sanılıyordu → HAVALE düzeltildi", "test": 28,
      "bug": "Gerçek Ziraat 'Hesaptan Hesaba Havale' (banka-içi, aynı IBAN kodu 00010) dekontu yeni EFT kuralıyla "
             "yanlışlıkla EFT işaretlenip 'güvenilir değil / riskli' (skor 40) çıkıyordu. İKİ kök hata: (1) "
@@ -878,6 +893,41 @@ def _t28_havale_not_eft_false_positive():
     return ok, f"ziraat-havale={havale_ok}(rail={rz['rail'] if rz else None}), akbank-eft={akbank_eft_ok}, defter≠eft={defter_ok}"
 
 
+def _t29_split_iban_reconstruction():
+    """BÖLÜNMÜŞ GÖNDERİCİ IBAN ONARIMI (Ziraat 'Hesaptan Hesaba Havale'): PDF metninde gönderici IBAN'ı
+    satıra bölünmüş olabilir — ilk 24 karakter ('TR65 ... 9650') bir satırda, son 2 hane ('01') 'IBAN :'
+    etiketi sonrası AYRI satırda. IBAN_RE tam 26 haneyi aradığından yakalanamıyor, gönderici BOŞ kalıp
+    all_ibans[0]=ALICI IBAN'ına düşüyor → YZ gönderici/alıcıyı karıştırıp uydurma 'alıcı değişmiş' çelişkisi
+    üretiyordu. Kural: kısmi IBAN + yakındaki orphan 2 hane mod-97 doğrulamasıyla birleştirilir; alıcı IBAN
+    dokunulmaz. Sonuç: iki taraf da AYRI ve geçerli okunur (sahte-alarmı önlenir)."""
+    import extract as _E, banks as _b
+    txt = ("Hesaptan Hesaba Havale\n"
+           "      ŞUBE KODU/ADI : 0239/TOKAT ŞUBESİ     SAYIN\n"
+           "                    TR65 0001 0002 3962 6085 9650 KASIM AKNAY\n"
+           "      IBAN         :\n"
+           "                    01\n"
+           "      HESAP NUMARASI : 0239/62608596-5001\n"
+           "      İŞLEM YERİ : ZİRAAT MOBİL\n"
+           "      Alacaklı IBAN : TR17 0001 0024 5259 1457 4150 02\n"
+           "      Alacaklı Adı Soyadı : ENES TİLKİCİ\n"
+           "      Havale Tutarı : 10.000,00 TRY\n"
+           "      T.C. ZİRAAT BANKASI A.Ş.  www.ziraatbank.com.tr\n")
+    rec = _E._reconstruct_split_iban(txt, exclude="TR170001002452591457415002")
+    # (a) onarılan IBAN mod-97 geçerli + alıcıdan FARKLI + doğru gönderici
+    rec_ok = (_b.iban_valid(rec) is True and rec == "TR650001000239626085965001"
+              and rec != "TR170001002452591457415002")
+    # (b) tam extract: gönderici KASIM AKNAY / TR65, alıcı ENES / TR17 — İKİSİ AYRI
+    ex = _E.extract_fields(txt, pdf_bytes=None)
+    two_parties = (_b.normalize_iban(ex.sender.iban) == "TR650001000239626085965001"
+                   and _b.normalize_iban(ex.receiver.iban) == "TR170001002452591457415002"
+                   and ex.sender.iban != ex.receiver.iban)
+    # (c) TAM IBAN'lar (alıcı) yanlışlıkla 'kısmi' sanılıp bozulmamalı
+    only_full = _E._reconstruct_split_iban("Alacaklı IBAN : TR17 0001 0024 5259 1457 4150 02", exclude="")
+    full_safe = (only_full == "")   # tam IBAN'ın ardı '02' zaten → onarım tetiklenmez
+    ok = rec_ok and two_parties and full_safe
+    return ok, f"onarım={rec_ok}(rec={rec}), iki-taraf-ayrı={two_parties}, tam-iban-güvenli={full_safe}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -907,6 +957,7 @@ _CHECKS = [
     (26, "Enpara ↔ QNB ayrı banka + yanlış 'banka çelişkisi' yok (marka önceliği)", _t26_enpara_qnb_separate_no_false_mismatch),
     (27, "İşlem kanalı: EFT anında geçmez → riskli/güvenilir değil; FAST/HAVALE anında", _t27_eft_settlement_risk),
     (28, "Rail: 'Hesaptan Hesaba Havale' → HAVALE (EFT değil); 'defter' EFT tetiklemez", _t28_havale_not_eft_false_positive),
+    (29, "Bölünmüş gönderici IBAN onarımı (Ziraat) → gönderici≠alıcı, sahte-alarmı yok", _t29_split_iban_reconstruction),
 ]
 
 
