@@ -20,9 +20,31 @@ import ocr
 from image_forensics import analyze_image, ImageForensics
 from scoring import compute_score
 
-ENGINE_VERSION = "1.0.0"
-
 import re as _re
+
+
+def _engine_code_hash() -> str:
+    """Motor kaynak dosyalarının içerik hash'i (kısa). Kod her DEĞİŞTİĞİNDE (yeni deploy) bu hash
+    değişir → report_cache anahtarı (sha256+ENGINE_VERSION) otomatik geçersizleşir. Böylece bir hata
+    düzeltilip aynı dekont TEKRAR tarandığında ESKİ (hatalı) cache sonucu DÖNMEZ, taze analiz yapılır.
+    (Önceden ENGINE_VERSION sabit '1.0.0' olduğundan aynı PDF düzeltmeden sonra da eski sonucu veriyordu.)"""
+    import hashlib as _hl, os as _os, glob as _glob
+    try:
+        _d = _os.path.dirname(_os.path.abspath(__file__))
+        _h = _hl.sha256()
+        for _fn in sorted(_glob.glob(_os.path.join(_d, "*.py"))):
+            try:
+                with open(_fn, "rb") as _f:
+                    _h.update(_f.read())
+            except Exception:
+                continue
+        return _h.hexdigest()[:10]
+    except Exception:
+        return ""
+
+
+# Görünen sürüm + kod hash'i. Hash sayesinde her kod değişikliği cache'i otomatik tazeler.
+ENGINE_VERSION = "1.0.1+" + _engine_code_hash()
 
 _MONEY_TOK = r"-?\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|-?\d+[.,]\d{1,2}"
 
