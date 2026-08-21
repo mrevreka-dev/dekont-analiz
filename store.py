@@ -1032,12 +1032,16 @@ def check_blocklist(report: dict) -> list[dict]:
                 p_riban = re.sub(r"\s+", "", (_pr[1] or "")).upper()
                 p_rname = re.sub(r"\s+", " ", (_pr[2] or "").strip()).upper()
                 p_day = _daykey(_pr[3])
-                amt_diff = (_cur_amt is not None and p_amt is not None and _cur_amt != p_amt)
+                # KİRLİ/EKSİK kayıtları YOK SAY: önceki sahte kaydın tutarı ve alıcısı okunmamışsa
+                # (bozuk dönem taramaları) güvenilir bir 'farklı belge' kanıtı değildir → atla (FP önler).
+                if p_amt is None or (not p_riban and not p_rname):
+                    continue
+                amt_diff = (_cur_amt is not None and _cur_amt != p_amt)
                 riban_diff = bool(_cur_riban and p_riban and _cur_riban != p_riban)
                 rname_diff = bool(_cur_rname and p_rname and _cur_rname != p_rname)
                 date_diff = bool(_cur_day and p_day and _cur_day != p_day)
                 if amt_diff or riban_diff or rname_diff or date_diff:
-                    hit_seq = _pr   # gerçekten FARKLI bir belge → kara-liste göstergesi
+                    hit_seq = _pr   # TAM kayıtlı + gerçekten FARKLI bir belge → kara-liste göstergesi
                     break
         print(f"[blocklist] bank={f['bank']!r} seq={f['seq_number']!r} sha={f['sha256'][:10]} "
               f"cross_doc_hit={bool(hit_seq)}", flush=True)
