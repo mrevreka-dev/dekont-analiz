@@ -83,6 +83,7 @@ class Party:
     tckn: str = ""
     branch: str = ""
     bank: str = ""
+    bank_stated: str = ""   # DEKONTTA YAZAN banka adı (IBAN-otorite guard'ı 'bank'ı ezmeden önce saklanır)
 
 
 @dataclass
@@ -1758,6 +1759,11 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
     #     IBAN'larının banka kodundan set edilir — metin etiketleri ('Alan Banka' = ALICI bankası)
     #     yanlış tarafa atanabildiği için. IBAN geçerliyse IBAN kazanır (ör. gönderici IBAN 00010
     #     iken banka 'Enpara' yazılması engellenir). IBAN yoksa mevcut etiket korunur.
+    # DEKONTTA YAZAN banka adını, IBAN-türetilenle ezmeden ÖNCE sakla (banka-adı vs IBAN-kodu kontrolü için).
+    if not ex.sender.bank_stated and ex.sender.bank:
+        ex.sender.bank_stated = ex.sender.bank
+    if not ex.receiver.bank_stated and ex.receiver.bank:
+        ex.receiver.bank_stated = ex.receiver.bank
     if ex.sender.iban and banks.iban_valid(ex.sender.iban) is not False:
         _sbank = banks.bank_from_iban(ex.sender.iban)
         if _sbank:

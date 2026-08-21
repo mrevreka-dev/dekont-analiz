@@ -1141,19 +1141,19 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     # 7.95) YZ GÖRSEL TAHRİFAT → BULGU: Fotoğraf/görüntü dekontta yazı tipi/yapıştırma uyuşmazlığı
     # (ör. yazıyla yazılan tutarın farklı fontta olması) kural motoruyla GÖRÜLEMEZ; YZ görüntüden
     # gördüyse bunu GERÇEK bir bulguya çevirir ve skoru + kesin kararı YENİDEN hesaplarız.
+    _post_ai = []   # AI sonrası eklenecek bulgular (tek seferde skor yenilenir)
+
+    # (a) GÖRSEL TAHRİFAT: Yalnız YZ'nin GÖRÜNTÜDE AÇIKÇA görüp yapılandırılmış 'gorsel_tahrifat' alanına
+    #     yazdığı font/yapıştırma bulguları kullanılır (reasoning'de 'font' kelimesi arayan kaba yedek yok).
     if ai_adjudication:
         try:
             _gt = [g for g in (ai_adjudication.get("gorsel_tahrifat") or []) if int(g.get("guven") or 0) >= 50]
         except Exception:
             _gt = []
-        # NOT: Yalnız YZ'nin GÖRÜNTÜDE AÇIKÇA gördüğü ve yapılandırılmış 'gorsel_tahrifat' alanına yazdığı
-        # bulguları kullanırız. reasoning metninde 'font' kelimesi arayan kaba yedek KALDIRILDI — 'font farkı
-        # TESPİT EDİLEMEDİ' gibi OLUMSUZ cümlelerde yanlış-pozitif üretiyordu (ör. İşbank). Thinking kapalı
-        # olduğundan yanıt tam gelir ve bu alan güvenilirdir.
         print(f"[adjudicator] gorsel_tahrifat_bulgu={bool(_gt)} adet={len(_gt) if _gt else 0}", flush=True)
         if _gt:
             _alanlar = "; ".join(f"{g.get('alan','')}: {g.get('aciklama','')}" for g in _gt)[:600]
-            findings.append(Finding(
+            _post_ai.append(Finding(
                 "AI_VISUAL_TAMPER", "high", "image", 30,
                 tr=("GÖRSEL TAHRİFAT (YZ görüntü incelemesi): belgede yazı tipi/kalınlık uyuşmazlığı — bir "
                     "alan belgenin genel yazı tipinden FARKLI, sonradan yapıştırılmış/değiştirilmiş görünüyor. "
@@ -1161,19 +1161,55 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 en=("VISUAL TAMPER (AI image review): font/weight inconsistency — a field is in a DIFFERENT "
                     "font than the document and appears pasted/altered. " + _alanlar),
                 detail="ai_gorsel_tahrifat"))
-            # bulgu eklendi → kesin kararı, skoru, alt-skorları ve tahrifat karşılaştırmasını yenile
-            verdicts = _vd.compute_verdicts(
-                doc_type=doc_type, input_kind=input_kind,
-                codes={f.code for f in findings}, cons=cons,
-                has_pdf_dates=struct.creation_dt is not None,
-                txn_date=_txn_ref, seq=ex.transaction.sequence_number,
-                db_checked=bool(use_store and is_receipt), db_count=_db_count, is_receipt=is_receipt,
-                doc_kind=doc_kind, balance_state=_bal_state, timing=timing)
-            _untrusted = verdicts["overall"]["state"] == "false"
-            score = compute_score(findings, doc_type, manip, ai, verdict_untrusted=_untrusted)
-            subscores = _compute_subscores(struct, rev, cons, xml, qr_check, findings, doc_type)
-            tamper_comparison = _build_tamper_comparison(
-                {f.code for f in findings}, rev, timing, stmt if is_statement else None)
+
+    # (b) BANKA ADI ↔ IBAN KODU (GÖNDERİCİ ve ALICI, KATI KURAL): Dekontta YAZAN banka adı ile IBAN'ın banka
+    #     kodu farklı bankaları gösteriyorsa çelişki. AI IBAN'ları düzelttikten SONRA, GEÇERLİ IBAN üzerinden
+    #     çalışır → fotoğrafta da güvenilir (OCR ham okumasına değil, AI-doğrulanmış IBAN'a bakar).
+    try:
+        import banks as _bnk_bm, authenticity as _auth_bm
+        _exist_codes = {f.code for f in findings}
+        for _who, _pk, _code in (("Gönderici", "sender", "SENDER_BANK_MISMATCH"),
+                                  ("Alıcı", "receiver", "RECEIVER_BANK_MISMATCH")):
+            if _code in _exist_codes:
+                continue
+            _party = _extracted_dict.get(_pk, {}) or {}
+            _stated = (_party.get("bank_stated") or "").strip()
+            _iban_n = _bnk_bm.normalize_iban(_party.get("iban") or "")
+            if _stated and _iban_n and _bnk_bm.iban_valid(_iban_n) is True:
+                _ibank = _bnk_bm.bank_from_iban(_iban_n)
+                _cs = _auth_bm._canon_bank(_stated)
+                _ci = _auth_bm._canon_bank(_ibank)
+                if _cs and _ci and _cs != _ci:
+                    _post_ai.append(Finding(
+                        _code, "high", "content", 36,
+                        tr=(f"{_who.upper()} BANKASI ÇELİŞKİSİ: Dekontta {_who.lower()} bankası '{_stated}' "
+                            f"yazıyor, ancak {_who.lower()} IBAN'ının banka kodu {_ibank}'a ait. İsim ile IBAN "
+                            f"FARKLI bankaları gösteriyor — {_who.lower()} adı/bankası ya da IBAN sonradan "
+                            f"değiştirilmiş olabilir (olası SAHTE)."),
+                        en=(f"{_who} BANK CONTRADICTION: stated {_who.lower()} bank '{_stated}' but the "
+                            f"{_who.lower()} IBAN's bank code belongs to {_ibank} — different banks (possible forgery)."),
+                        detail=f"stated={_cs} iban_bank={_ci}"))
+    except Exception:
+        pass
+
+    # AI sonrası bulgu eklendiyse: kesin kararı, skoru, alt-skorları ve tahrifat karşılaştırmasını YENİLE.
+    if _post_ai:
+        _exist_codes = {f.code for f in findings}
+        for _f in _post_ai:
+            if _f.code not in _exist_codes:
+                findings.append(_f)
+        verdicts = _vd.compute_verdicts(
+            doc_type=doc_type, input_kind=input_kind,
+            codes={f.code for f in findings}, cons=cons,
+            has_pdf_dates=struct.creation_dt is not None,
+            txn_date=_txn_ref, seq=ex.transaction.sequence_number,
+            db_checked=bool(use_store and is_receipt), db_count=_db_count, is_receipt=is_receipt,
+            doc_kind=doc_kind, balance_state=_bal_state, timing=timing)
+        _untrusted = verdicts["overall"]["state"] == "false"
+        score = compute_score(findings, doc_type, manip, ai, verdict_untrusted=_untrusted)
+        subscores = _compute_subscores(struct, rev, cons, xml, qr_check, findings, doc_type)
+        tamper_comparison = _build_tamper_comparison(
+            {f.code for f in findings}, rev, timing, stmt if is_statement else None)
 
     # 7.97) KARA-LİSTE GÜRÜLTÜSÜNÜ AZALT: Belge ZATEN kendi bulgularıyla (kesin tahrifat, AI görsel
     # tahrifat, AI 'sahte/şüpheli' hükmü ya da GÜVENİLİR-DEĞİL skoru) işaretlendiyse, "daha önce sahte

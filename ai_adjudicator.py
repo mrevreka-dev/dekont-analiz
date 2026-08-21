@@ -88,7 +88,7 @@ def should_adjudicate(findings: list, extraction: dict, input_kind: str = "pdf")
         reasons.append("Görüntü/fotoğraf dekont: görsel tahrifat (font/hizalama/montaj) incelemesi şart.")
     # KRİTİK alanlar boşsa YZ görüntüden okuyup DOLDURUR (kullanıcı kuralı: alıcı adı, alıcı IBAN,
     # tutar, işlem no, referans no ekrana ASLA boş gelmemeli). Bu alanlardan HERHANGİ biri boşsa eskale.
-    _core = [f for f in ("sender.name", "receiver.name", "receiver.iban", "amount.value")
+    _core = [f for f in ("sender.name", "sender.iban", "receiver.name", "receiver.iban", "amount.value")
              if not _get(extraction or {}, f)]
     if _core:
         reasons.append("Kritik alan boş: " + ", ".join(_core))
@@ -150,8 +150,17 @@ def _build_prompt(extraction: dict, findings: list, bank_ctx: str, input_kind: s
         "aşağıdaki ALANLARI ve BULGULARI üretti. Şimdi GÖRSELİ (varsa) DOĞRUDAN incele ve şu işleri yap:\n"
         "1) Her BULGUYU değerlendir: gerçek bir tahrifat/uyuşmazlık mı, yoksa kuralın/OCR'ın HATASI mı? "
         "Gerekçelendir.\n"
-        "2) Kuralın YANLIŞ okuduğu ya da BOŞ bıraktığı alanları GÖRÜNTÜDEN yeniden oku ve düzelt "
-        "(özellikle IBAN'lar, isimler, tutar). İsim yanlış yerden alınmışsa doğru yerden al.\n"
+        "2) OCR'ın okuduğu TÜM alanları GÖRÜNTÜYLE karşılaştırıp DOĞRULA. Boş, eksik, yanlış ya da hatalı "
+        "okunan HER alanı görüntüden yeniden oku ve corrected_fields'a DOĞRU değeri yaz — özellikle: "
+        "GÖNDERİCİ IBAN, ALICI IBAN (her koşulda oku; dekontta varsa MUTLAKA yaz, gerçekten yoksa boş bırak), "
+        "gönderici adı, alıcı adı, tutar (rakam+yazı), işlem/referans/sorgu no, tarih, TC. Kural doğru okuduysa "
+        "tekrar yazmana gerek yok; en ufak farkta bile DOĞRUSUNU yaz. Değer görüntüde okunuyorsa ASLA boş bırakma.\n"
+        "   BANKA ADI ↔ IBAN KODU (KATI KURAL, HER İKİ TARAF): Dekontta gönderici ve alıcı için YAZAN banka "
+        "adını (ör. 'Alıcı Banka: Garanti') o tarafın IBAN'ının banka koduyla (TR + 2 kontrol hanesinden "
+        "sonraki 5 hane) KARŞILAŞTIR. Farklı bankaları gösteriyorlarsa (ör. yazan 'Garanti' ama IBAN kodu "
+        "Yapı Kredi) bu bir ÇELİŞKİDİR → finding_reviews'a 'RECEIVER_BANK_MISMATCH'/'SENDER_BANK_MISMATCH' "
+        "olarak yaz ve reasoning'de belirt. Türk banka kodları: 00010 Ziraat, 00015 Vakıf, 00046 Akbank, "
+        "00062 Garanti, 00064 İş Bankası, 00067 Yapı Kredi, 00111 QNB, 00134 Denizbank, 00157 Enpara, 00205 Kuveyt Türk.\n"
         "3) GÖRSEL/YAZI TAHRİFAT DENETİMİ — EN ÖNEMLİ ADIM, HER BANKA ve HER ANALİZ için ZORUNLU. "
         "Gerçek bir dekontta TÜM metin TEK ve tutarlı bir yazı tipinde/kalınlıkta/taban çizgisinde basılır. "
         "Aşağıdaki KRİTİK ALANLARIN HER BİRİNİ TEK TEK, belgenin genel yazı tipiyle KARŞILAŞTIRARAK incele "
@@ -440,13 +449,12 @@ def apply_corrections(extraction: dict, adjudication: dict, hard_proof_codes=Non
                 ok = False
                 break
             cur = cur[p]
-        if ok and cur.get(parts[-1]) in (None, "", 0):
+        # AI OTORİTESİ (kullanıcı kuralı): OCR'ın okuduğu TÜM alanlar AI ile yeniden doğrulanır; AI'ın
+        # GÖRÜNTÜDEN okuduğu değer alan BOŞ da olsa, DOLU ama YANLIŞ da olsa YAZILIR. (IBAN yukarıda mod-97
+        # ile doğrulandı; tutarlar float'a çevrildi → uydurma engellenir.) 'bank_stated' KORUNUR: dekonttaki
+        # YAZILI banka adıdır, banka-adı↔IBAN-kodu çelişki kontrolü buna dayanır, AI ezmemeli.
+        if ok and parts[-1] != "bank_stated" and cur.get(parts[-1]) != val:
             cur[parts[-1]] = val
             applied[dotted] = val
-        elif ok and cur.get(parts[-1]) != val:
-            # dolu ama farklı: yalnız IBAN gibi doğrulanabilir alanlarda güncelle
-            if dotted.endswith(".iban"):
-                cur[parts[-1]] = val
-                applied[dotted] = val
     ex["_ai_applied_corrections"] = applied
     return ex
