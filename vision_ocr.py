@@ -63,7 +63,16 @@ _PROMPT = (
     "çevreden farklıysa; harflerin kenarında hâle/leke/artefakt varsa. ÖZELLİKLE alıcı adı, "
     "gönderici adı, TUTAR ve IBAN alanlarını incele. Şüphe varsa tamper_suspected=true yap, "
     "hangi alanların şüpheli olduğunu tamper_fields'a yaz ve güveni ver. Emin değilsen düşük "
-    "güven ver ama yine de bildir.\n\n"
+    "güven ver ama yine de bildir.\n"
+    "   ÇOK ÖNEMLİ AYRIM: Bir alanın DEĞER olarak tutarlı olması (ör. rakamla 75.000,00 ile yazıyla "
+    "'YetmişBeşBin'in aynı meblağ olması) YAZI TİPİ tutarlılığı DEĞİLDİR ve tahrifatı DIŞLAMAZ. DEĞERE "
+    "değil HARFLERİN BİÇİMİNE bak: yazıyla yazılan tutar satırının font ailesini/kalınlığını belgenin "
+    "geneliyle kıyasla. Belge geneli ince/monospace iken yazıyla tutar KALIN/oransal (Arial Bold gibi) "
+    "ise → değer eşleşse bile TAHRİFATtır, tamper_suspected=true. Her kritik alanı (tutar rakam+yazı, "
+    "gönderici/alıcı IBAN, işlem/referans no, isimler) TEK TEK belgenin geneliyle karşılaştır.\n"
+    "   BANKA ADI ↔ IBAN KODU: Gönderici ve alıcı için YAZAN banka adını, o tarafın IBAN'ının banka "
+    "koduyla (TR+2 kontrol hanesinden sonraki 5 hane) karşılaştır; farklıysa (ör. yazan 'Garanti' ama "
+    "IBAN kodu 00067=Yapı Kredi) tamper_suspected=true, tamper_fields'a 'receiver_bank'/'sender_bank' yaz.\n\n"
     "SADIK METİN DÖKÜMÜ (full_text) — ÇOK ÖNEMLİ: Dekonttaki GÖRÜNEN TÜM yazıyı, "
     "OLDUĞU GİBİ ve ETİKET:DEĞER yapısını KORUYARAK dök. Her 'Etiket : Değer' kendi satırında "
     "olsun. Belge İKİ SÜTUNLU/İKİ BLOKLU ise (ör. solda gönderen/hesap bilgisi, sağda alıcı; ya da "
@@ -103,7 +112,11 @@ def extract_from_image(pil_img, timeout: float = 60.0) -> dict | None:
     if not is_configured():
         return None
     api_key = os.environ["ANTHROPIC_API_KEY"]
-    model = os.environ.get("DEKONT_VISION_MODEL", DEFAULT_MODEL)
+    # BİRLEŞİK OKUYUCU: fotoğrafta TEK Sonnet çağrısı hem okur hem font/adli inceleme yapar (ayrı
+    # adjudicator turu kaldırıldı). Bu yüzden GÜÇLÜ modeli tercih ederiz: önce adjudicator modeli
+    # (Sonnet), yoksa vision modeli, yoksa varsayılan. Font tahrifatı için güçlü model şart.
+    model = (os.environ.get("DEKONT_ADJUDICATOR_MODEL")
+             or os.environ.get("DEKONT_VISION_MODEL") or DEFAULT_MODEL)
     try:
         b64, media = _img_to_b64_jpeg(pil_img)
     except Exception:
