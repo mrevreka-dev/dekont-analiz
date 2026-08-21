@@ -34,6 +34,16 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "T", "date": "2026-08-21 04:00", "area": "Enpara korpus + kapsam (IBAN-kod/Fiş-tarih/üretim-app)", "test": 18,
+     "bug": "13 gerçek Enpara dekontuyla banka-içi analiz istendi. Ayrıca 3 denetim raporda görünmüyordu: "
+            "IBAN banka-kodu karşılaştırması (aynı→HAVALE), Enpara Fiş No ilk-8-hane tarih doğrulaması, ve "
+            "fotoğrafın hangi uygulamada yapıldığı / Photoshop-Canva-AI ile değiştirilip değiştirilmediği.",
+     "fix": "Denetim Kapsamı'na 3 madde eklendi: (a) IBAN banka kodu karşılaştırması — aynı kod→HAVALE, "
+            "farklı→EFT/FAST (TÜM bankalar). (b) Fiş No tarih doğrulaması (Enpara/QNB: ilk 8 hane=YYYYAAGG, "
+            "işlem tarihiyle karşılaştırılır; sahtede RECEIPT_NO_DATE_MISMATCH). (c) Üretim uygulaması/düzenleme: "
+            "EXIF/producer'dan AI (DALL-E/Midjourney/Firefly), düzenleyici (Photoshop/Canva/GIMP…) ve tarayıcı "
+            "(pdfium/Skia) tespiti. Enpara normu: interbank=EFT, aynı-banka=HAVALE, gerçek üretici iText/Ibtech, "
+            "sahte pdfium. bank_corpus SEED ve bank_knowledge güncellendi."},
     {"id": "S", "date": "2026-08-20 06:30", "area": "KALICI: banka-içi karşılaştırma + dekont hafızası", "test": 17,
      "bug": "Kullanıcı kuralı sürekli tekrar ediliyordu: her banka KENDİ dekontlarıyla karşılaştırılmalı, "
             "bankalar arası kıyas yapılmamalı; ve yüklenen eski dekontlar içeride saklanmalı.",
@@ -423,6 +433,36 @@ def _t17_per_bank_comparison():
     return ok, f"enpara-EFT-tutarlı={enp_ok}, deniz-FAST-tutarlı={dnz_ok}, methodoloji-kayıtlı={method_ok}"
 
 
+def _t18_coverage_new_items():
+    """Denetim Kapsamı: (a) IBAN banka-kodu karşılaştırması (aynı→havale/farklı→eft-fast),
+    (b) Enpara Fiş No tarih doğrulaması (ilk 8 hane YYYYAAGG), (c) üretim uygulaması/düzenleme
+    (Photoshop/Canva/AI/tarayıcı) maddeleri her raporda üretilmeli."""
+    import coverage
+    rep = {
+        "classification": {"input_kind": "pdf", "text_source": "digital"},
+        "extracted": {
+            "bank": "Enpara.com (QNB)",
+            "sender": {"name": "NURULLAH ONAT", "iban": "TR080015700000000116981974", "tckn": ""},
+            "receiver": {"name": "UĞUR ERDAL", "iban": "TR080015700000000118637085"},
+            "amount": {"value": 35000.0, "fee": 0.0, "total": 35000.0},
+            "transaction": {"date": "12.08.2026 22:47", "document_no": "202608128141611", "sequence_number": "4739474052"},
+        },
+        "findings_tr": [{"code": "RAIL_IS_HAVALE"}],
+        "metadata": {"producer": "iText 2.1.7 by 1T3XT", "creator": "Ibtech"},
+        "image_forensics": {},
+        "cross_db": {"checked": False},
+    }
+    cov = coverage.build(rep)
+    al = {m["alan"]: m for m in cov["maddeler"]}
+    has_code = any("IBAN banka kodu" in a for a in al)
+    havale_ok = any("IBAN banka kodu" in a and "HAVALE" in m["sonuc"] for a, m in al.items())
+    has_fis = any("Fiş No tarih" in a for a in al)
+    fis_ok = any("Fiş No tarih" in a and ("12.08.2026" in m["sonuc"]) for a, m in al.items())
+    has_prod = any("Üretim uygulaması" in a for a in al)
+    ok = has_code and havale_ok and has_fis and fis_ok and has_prod
+    return ok, f"iban-kod={has_code}/havale={havale_ok}, fiş-tarih={has_fis}/uyumlu={fis_ok}, üretim-app={has_prod}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -441,6 +481,7 @@ _CHECKS = [
     (15, "Denetim kapsamı banka bazlı + yapılamayanı yazar", _t15_coverage_bank_based),
     (16, "Fatura-etiketi kanalı belirler (Enpara EFT(FAST)→EFT)", _t16_enpara_eft_fast_and_receiver),
     (17, "Banka-içi karşılaştırma (her banka kendi normu)", _t17_per_bank_comparison),
+    (18, "Kapsam: IBAN-kod + Fiş No tarih + üretim/düzenleme app", _t18_coverage_new_items),
 ]
 
 

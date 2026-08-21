@@ -15,8 +15,14 @@ from __future__ import annotations
 # Her kayıt: {rail, billing, amount, note}. Aynı bankadan birden çok örnek = o bankanın normu.
 SEED = {
     "enpara": [
-        {"rail": "eft", "billing": "EFT TUTARI / EFT ÜCRETİ", "amount": 3000.0,
-         "note": "'EFT (FAST)' gösterimli; fatura EFT → EFT (teslim rayı FAST)."},
+        # 13 gerçek Enpara dekontundan çıkarılan norm: interbank olanların TAMAMI EFT; aynı banka
+        # kodu (00157→00157) HAVALE. Gerçek üretici iText/Ibtech; sahteler pdfium/browser (rerender).
+        {"rail": "eft", "billing": "EFT TUTARI / EFT ÜCRETİ (0 TL)", "amount": 56900.0,
+         "note": "Interbank Enpara → hep EFT ('(FAST)' teslim rayı). Üretici iText/Ibtech."},
+        {"rail": "eft", "billing": "EFT TUTARI / EFT ÜCRETİ (0 TL)", "amount": 100000.0, "note": "Interbank → EFT."},
+        {"rail": "eft", "billing": "EFT TUTARI / EFT ÜCRETİ (0 TL)", "amount": 3000.0, "note": "Interbank → EFT."},
+        {"rail": "havale", "billing": "Enpara→Enpara (00157→00157)", "amount": 35000.0,
+         "note": "Aynı banka kodu → HAVALE (banka-içi). Fiş No ilk 8 hane = işlem tarihi."},
     ],
     "akbank": [
         {"rail": "eft", "billing": "GECEFT KOMİSYON / GEC EFT BSMV", "amount": 75000.0, "note": "GEÇ EFT (kesin EFT)."},

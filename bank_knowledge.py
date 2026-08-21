@@ -171,7 +171,10 @@ BANK_KNOWLEDGE = {
                         "SORGU NO = işlem teyit numarası."],
         "tells": ["Alıcı/gönderici IBAN karışması geçmişte sorundu (ocr_recover ile düzeltildi).",
                   "Alıcı adı 'ALICI ÜNVANI' + açıklamadaki '<ad>, Bireysel Ödeme' ile teyit edilir (yedek)."],
-        "notes": "IBAN kodları 00157/00111 (QNB markası). '(FAST)' etiketi işlemi FAST yapmaz; fatura EFT ise EFT.",
+        "notes": "IBAN kodları 00157/00111 (QNB markası). '(FAST)' etiketi işlemi FAST yapmaz; fatura EFT ise EFT. "
+                 "BANKA-İÇİ NORM (13 gerçek dekont): interbank Enpara işlemlerinin TAMAMI EFT; aynı banka kodu "
+                 "(00157→00157) HAVALE. Fiş No ilk 8 hane = işlem tarihi (YYYYAAGG). GERÇEK üretici 'iText/Ibtech'; "
+                 "SAHTELER pdfium/Skia (tarayıcıdan 'yazdır→PDF' ile yeniden üretilmiş) + fiş-tarih çelişkisi.",
     },
     "qnb": {"label": "QNB Bank A.Ş.", "layout": "", "rail_labeling": "", "fees": {"as_of": "2026-08"},
             "identity": "", "identifiers": [], "tells": [], "notes": "IBAN kodu 00111. Fiş No YYYYAAGG."},

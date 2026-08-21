@@ -87,6 +87,28 @@ def build(report: dict) -> dict:
     add("Gönderici IBAN doğruluğu (mod-97)", ds, ss)
     dr, sr = _party_iban_status(rcv.get("iban", ""))
     add("Alıcı IBAN doğruluğu (mod-97)", dr, sr)
+    # 2b) IBAN BANKA KODU KARŞILAŞTIRMASI (kullanıcı kuralı, TÜM bankalar): iki IBAN'ın banka kodu
+    # AYNI ise işlem banka-içi HAVALE'dir; FARKLI ise bankalararası (EFT ya da FAST).
+    try:
+        import banks as _bk2
+        _sc = _bk2.iban_bank_code(snd.get("iban", "")) if snd.get("iban") else ""
+        _rc = _bk2.iban_bank_code(rcv.get("iban", "")) if rcv.get("iban") else ""
+        if _sc and _rc:
+            if _sc == _rc:
+                add("IBAN banka kodu karşılaştırması", "yapıldı",
+                    f"Gönderici ve alıcı AYNI bankada (kod {_sc}) → işlem banka-içi HAVALE olmalı."
+                    + (" Kanal HAVALE ile tutarlı." if _rail == "havale"
+                       else f" DİKKAT: kanal '{(_rail or 'belirsiz').upper()}' — aynı bankada EFT/FAST olamaz (çelişki)."))
+            else:
+                add("IBAN banka kodu karşılaştırması", "yapıldı",
+                    f"Gönderici (kod {_sc}) ve alıcı (kod {_rc}) FARKLI bankalarda → bankalararası "
+                    f"(EFT ya da FAST). Kanal: {(_rail or 'belirsiz').upper()}."
+                    + (" DİKKAT: farklı bankada HAVALE olamaz." if _rail == "havale" else ""))
+        else:
+            add("IBAN banka kodu karşılaştırması", "kısmi",
+                "İki tarafın IBAN'ı okunamadığından banka kodu karşılaştırması yapılamadı.")
+    except Exception:
+        pass
 
     # 3) Kimlik (TC/VKN) doğruluğu + çapraz tutarlılık
     d1, s1 = _tc_status(snd.get("tckn", ""), "Gönderici/işlem TCKN")
@@ -128,22 +150,91 @@ def build(report: dict) -> dict:
                    ("VALUE_DATE_ANOMALY", "valör tarihi aykırı")):
         if c in codes:
             add("Tarih tutarlılığı", "kusur", f"{txt} ({c})")
+    # 6b) FİŞ/BELGE NUMARASI TARİH DOĞRULAMASI (banka bazlı: Enpara/QNB Fiş No ilk 8 hane = YYYYAAGG).
+    # Fiş numarası bankanın verdiği DEĞİŞTİRİLEMEZ tarihtir; işlem tarihiyle uyuşmalı.
+    try:
+        import authenticity as _auth3
+        _bk3 = _auth3.bank_key(bank)
+        _docno = tx.get("document_no", "") or ""
+        _emb = _auth3._embedded_date(_docno) if _bk3 in ("enpara", "qnb") else None
+        if "RECEIPT_NO_DATE_MISMATCH" in codes:
+            add("Fiş No tarih doğrulaması (banka bazlı)", "kusur",
+                "Fiş No'nun gömülü tarihi (ilk 8 hane) işlem tarihiyle UYUŞMUYOR → tarih değiştirilmiş "
+                "olabilir (güçlü sahtecilik işareti) — RECEIPT_NO_DATE_MISMATCH.")
+        elif _emb is not None:
+            add("Fiş No tarih doğrulaması (banka bazlı)", "yapıldı",
+                f"Fiş No {_docno} → gömülü tarih {_emb.strftime('%d.%m.%Y')}, işlem tarihiyle uyumlu ✓.")
+        elif _bk3 in ("enpara", "qnb") and _docno:
+            add("Fiş No tarih doğrulaması (banka bazlı)", "kısmi",
+                f"Fiş No ({_docno}) ilk 8 hanesinden geçerli tarih çözülemedi.")
+    except Exception:
+        pass
 
-    # 7) Üretim / sahtecilik analizi (görsel) — banka bazlı şablon + görsel adli
-    if is_image:
-        imf = report.get("image_forensics", {}) or {}
-        soft = imf.get("exif_software") or ""
-        vis = [f for f in findings if f.get("code") in ("VISION_TEXT_TAMPER", "PIXEL_FIELD_ANOMALY",
-                                                        "IMAGE_EDIT_SIGNATURE", "IMAGE_EDITOR_SOFTWARE")]
-        if vis:
-            add("Fotoğraf üretim/tahrifat analizi", "kusur",
-                "görsel tahrifat/düzenleyici izi: " + ", ".join(f["code"] for f in vis))
-        else:
-            add("Fotoğraf üretim/tahrifat analizi", "yapıldı",
-                f"ELA + piksel-alan + Vision + AI-imza tarandı; belirgin iz yok"
-                + (f" (EXIF yazılım: {soft})" if soft else ""))
+    # 7) ÜRETİM UYGULAMASI + DÜZENLEME TESPİTİ (hangi uygulamada yapıldı; AI/Photoshop/Canva ile
+    #    değiştirilip yeniden kaydedilmiş mi). Hem fotoğraf (EXIF/XMP) hem PDF (producer/creator) için.
+    imf = report.get("image_forensics", {}) or {}
+    meta = report.get("metadata", {}) or {}
+    soft = (imf.get("exif_software") or "").strip()
+    make = (imf.get("exif_make") or "").strip()
+    producer = (meta.get("producer") or "").strip()
+    creator = (meta.get("creator") or "").strip()
+    edit_hits = imf.get("edit_signature_hits") or []
+    ai_hits = imf.get("ai_signature_hits") or []
+    c2pa = imf.get("c2pa_present")
+    _blob = " / ".join(x for x in (soft, make, producer, creator) if x)
+
+    def _classify(s):
+        s = (s or "").lower()
+        EDIT = ["photoshop", "canva", "gimp", "lightroom", "affinity", "pixelmator", "paint.net",
+                "figma", "illustrator", "snapseed", "picsart"]
+        AI = ["stable diffusion", "stablediffusion", "dall", "midjourney", "firefly", "generative",
+              "stylegan", "biggan", "diffusion", "openai"]
+        BROWSER = ["skia", "chromium", "chrome", "headless", "puppeteer", "wkhtml", "pdfium"]
+        for k in AI:
+            if k in s:
+                return "ai", k
+        for k in EDIT:
+            if k in s:
+                return "editor", k
+        for k in BROWSER:
+            if k in s:
+                return "browser", k
+        return None, None
+
+    kind, hitname = _classify(_blob)
+    editor_finding = any(f.get("code") in ("IMAGE_EDITOR_SOFTWARE", "IMAGE_EDIT_SIGNATURE") for f in findings)
+    rerender_finding = any(f.get("code") in ("PDFIUM_PRODUCED", "BROWSER_RERENDER", "FONT_BROWSER_RERENDER") for f in findings)
+
+    if ai_hits or kind == "ai":
+        add("Üretim uygulaması / düzenleme (AI/Photoshop/Canva)", "kusur",
+            f"YAPAY ZEKA üretimi/işlemi izi: {', '.join(ai_hits) or hitname}. Belge yapay zekayla üretilmiş/değiştirilmiş olabilir.")
+    elif edit_hits or kind == "editor" or editor_finding:
+        _who = ", ".join(edit_hits) or hitname or "görsel düzenleyici"
+        add("Üretim uygulaması / düzenleme (AI/Photoshop/Canva)", "kusur",
+            f"DÜZENLEYİCİ yazılım izi: {_who} (ör. Photoshop/Canva). Fotoğraf bir düzenleyicide açılıp "
+            f"yeniden kaydedilmiş → içerik değiştirilmiş olabilir.")
+    elif kind == "browser" or rerender_finding:
+        add("Üretim uygulaması / düzenleme", "kusur",
+            f"TARAYICIDAN YENİDEN ÜRETİLMİŞ ({hitname or 'Skia/Chromium/pdfium'}). Gerçek banka PDF'i değil; "
+            f"'yazdır→PDF' ile yeniden basılmış → sahtecilik şüphesi.")
+    elif c2pa:
+        add("Üretim uygulaması / düzenleme", "kısmi",
+            "C2PA/ContentCredentials içerik-kimlik verisi var; kaynağı bu veriden doğrulayın.")
+    elif _blob:
+        add("Üretim uygulaması / düzenleme", "yapıldı",
+            f"Üretici/yazılım: {_blob}. Bilinen düzenleyici (Photoshop/Canva/GIMP…) ya da AI izi YOK.")
+    elif is_image:
+        add("Üretim uygulaması / düzenleme", "kısmi",
+            "Görselde EXIF yazılım/üretici bilgisi yok (silinmiş olabilir); ELA + Vision ile içerik tarandı.")
     else:
-        add("Fotoğraf üretim analizi", "yapılamadı", "belge görüntü değil (PDF); görsel adli analiz uygulanmaz")
+        add("Üretim uygulaması / düzenleme", "yapıldı", "Üretici/düzenleyici bilgisinde düzenleyici/AI izi yok.")
+
+    # Görsel içerik tahrifatı (yalnız fotoğraf): ELA/Vision alan-bazlı
+    if is_image:
+        vis = [f["code"] for f in findings if f.get("code") in ("VISION_TEXT_TAMPER", "PIXEL_FIELD_ANOMALY")]
+        add("Fotoğraf içerik tahrifatı (ELA/Vision)", "kusur" if vis else "yapıldı",
+            ("görsel yazı/alan tahrifatı: " + ", ".join(vis)) if vis
+            else "ELA + piksel-alan + Vision ile tarandı; belirgin iz yok.")
 
     # 8) İşlem numarası / sıra analizi
     seq = tx.get("sequence_number") or tx.get("ref_no") or ""
