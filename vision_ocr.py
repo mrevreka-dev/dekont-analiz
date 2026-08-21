@@ -25,7 +25,7 @@ import urllib.request
 import urllib.error
 
 API_URL = "https://api.anthropic.com/v1/messages"
-DEFAULT_MODEL = "claude-3-5-sonnet-latest"
+DEFAULT_MODEL = "claude-sonnet-5"
 
 _PROMPT = (
     "Bu bir Türk bankası dekontu (havale/EFT/FAST makbuzu) fotoğrafı olabilir. Görseli dikkatle "

@@ -39,7 +39,7 @@ import urllib.request
 import urllib.error
 
 API_URL = "https://api.anthropic.com/v1/messages"
-DEFAULT_MODEL = "claude-3-5-sonnet-latest"
+DEFAULT_MODEL = "claude-sonnet-5"
 
 # Deterministik olarak KESİN kabul edilen bulgu kodları — YZ bunları EZEMEZ (yalnız açıklar).
 _HARD_PROOF_CODES = {
