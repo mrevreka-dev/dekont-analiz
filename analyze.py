@@ -1182,6 +1182,20 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             tamper_comparison = _build_tamper_comparison(
                 {f.code for f in findings}, rev, timing, stmt if is_statement else None)
 
+    # 7.97) KARA-LİSTE GÜRÜLTÜSÜNÜ AZALT: Belge ZATEN kendi bulgularıyla (kesin tahrifat, AI görsel
+    # tahrifat, AI 'sahte/şüpheli' hükmü ya da GÜVENİLİR-DEĞİL skoru) işaretlendiyse, "daha önce sahte
+    # görülmüştü" (KNOWN_FAKE) notu GEREKSİZDİR → kaldırılır. Böylece aynı sahte dekont tekrar tarandığında
+    # kara-liste uyarısı ÇIKMAZ (kendi bulgusu zaten var); yalnız KENDİ bulgusu olmayan, temiz görünen YENİ
+    # bir dosya bilinen-sahte bir numarayı taşıyorsa kara-liste BİLGİ olarak kalır.
+    _self_flagged = (
+        (verdicts.get("overall", {}).get("state") == "false")
+        or (str((ai_adjudication or {}).get("verdict") or "").lower() in ("sahte", "şüpheli", "supheli"))
+        or any(f.code in ("AI_VISUAL_TAMPER",) for f in findings)
+        or any(f.severity == "critical" and f.code != "KNOWN_FAKE" for f in findings)
+    )
+    if _self_flagged:
+        findings = [f for f in findings if f.code != "KNOWN_FAKE"]
+
     # 8) Rapor derle
     lang_findings = [f.as_dict("tr") for f in findings]
     lang_findings_en = [f.as_dict("en") for f in findings]
