@@ -1146,17 +1146,10 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             _gt = [g for g in (ai_adjudication.get("gorsel_tahrifat") or []) if int(g.get("guven") or 0) >= 50]
         except Exception:
             _gt = []
-        # YEDEK TETİK: YZ gorsel_tahrifat alanını doldurmasa bile, hükmü sahte/şüpheli VE gerekçesinde
-        # yazı tipi/font/yapıştırma geçiyorsa görsel tahrifat bulgusu üret (yapılandırılmamış olsa da yakala).
-        if not _gt:
-            _rz = (ai_adjudication.get("reasoning_tr") or "").lower()
-            _fr_txt = " ".join((x.get("aciklama") or "") for x in (ai_adjudication.get("finding_reviews") or [])).lower()
-            _blob = _rz + " " + _fr_txt
-            _font_kw = ("yazı tipi", "yazi tipi", "font", "yapıştır", "yapistir", "kalınlık", "kalinlik",
-                        "farklı fontta", "farkli fontta", "karakter")
-            if ai_adjudication.get("verdict") in ("sahte", "şüpheli", "supheli") and any(k in _blob for k in _font_kw):
-                _gt = [{"alan": "tutar/metin", "aciklama": (ai_adjudication.get("reasoning_tr") or "")[:300], "guven": 60}]
-                ai_adjudication.setdefault("gorsel_tahrifat", _gt)
+        # NOT: Yalnız YZ'nin GÖRÜNTÜDE AÇIKÇA gördüğü ve yapılandırılmış 'gorsel_tahrifat' alanına yazdığı
+        # bulguları kullanırız. reasoning metninde 'font' kelimesi arayan kaba yedek KALDIRILDI — 'font farkı
+        # TESPİT EDİLEMEDİ' gibi OLUMSUZ cümlelerde yanlış-pozitif üretiyordu (ör. İşbank). Thinking kapalı
+        # olduğundan yanıt tam gelir ve bu alan güvenilirdir.
         print(f"[adjudicator] gorsel_tahrifat_bulgu={bool(_gt)} adet={len(_gt) if _gt else 0}", flush=True)
         if _gt:
             _alanlar = "; ".join(f"{g.get('alan','')}: {g.get('aciklama','')}" for g in _gt)[:600]
