@@ -27,6 +27,15 @@ import datetime as _dt
 
 from timing import parse_content_datetime
 
+
+def _iban_valid_safe(ib: str):
+    """banks.iban_valid'e güvenli erişim (dairesel import'a karşı lazy)."""
+    try:
+        from banks import iban_valid as _iv
+        return _iv(ib)
+    except Exception:
+        return None
+
 _DEF_PATHS = ["/data/dekont.db", os.path.join(os.path.dirname(__file__), "..", "dekont_store.db")]
 
 
@@ -824,22 +833,21 @@ def check_number_reuse(report: dict) -> list[dict]:
                 (bank, sha, v, v, v)).fetchall()
             if not rows:
                 continue
-            # AYNI DEKONTUN TEKRAR TARANMASI yanlış-pozitif üretmesin: numara aynı olsa da tutar, alıcı adı,
-            # alıcı IBAN VE işlem tarihi de aynıysa bu AYNI işlemdir (kopya/tekrar-tarama) → sahtecilik DEĞİL.
-            # Ancak numara aynı iken bu bilgilerden HERHANGİ biri (tutar / alıcı adı / alıcı IBAN / işlem
-            # tarihi) POZİTİF olarak FARKLIYSA → aynı numarayla FARKLI belge üretilmiş = kopyala-yapıştır
-            # sahtecilik. Farkı KANITLAYAMıyorsak (alan okunamadı) bulgu vermeyiz (aynı dekont varsayımı → FP yok).
+            # AYNI DEKONTUN TEKRAR TARANMASI yanlış-pozitif üretmesin. Farklılık kararı YALNIZCA EN KARARLI
+            # tanımlayıcılara dayanır: (1) TUTAR (re-taramada hep aynıdır; sahtecilikte hemen hemen her zaman
+            # farklıdır), (2) kesin GEÇERLİ (mod-97) ve farklı ALICI IBAN. İşlem TARİHİ ve alıcı ADI FARK
+            # KRİTERİNDEN ÇIKARILDI: bunlar re-taramalar arasında değişebiliyor (OCR/AI okuma farkı, valör↔
+            # işlem tarihi karışması, isim maskeleme) ve aynı dekontta YANLIŞ 'sahte' üretiyordu. Yani numara
+            # aynı iken TUTAR pozitif farklıysa YA DA iki taraf da geçerli-IBAN olup farklıysa → kopyala-yapıştır
+            # sahteciliği; aksi halde AYNI işlem varsayılır ve bulgu verilmez.
             _forgery = None
             for pr in rows:
                 p_amt = _round2(pr[1])
                 p_riban = re.sub(r"\s+", "", (pr[5] or "")).upper()
-                p_rname = _norm_name(pr[4])
-                p_day = _daykey(pr[2])
                 amt_diff = (_cur_amt is not None and p_amt is not None and _cur_amt != p_amt)
-                riban_diff = bool(_cur_riban and p_riban and _cur_riban != p_riban)
-                rname_diff = bool(_cur_rname and p_rname and _cur_rname != p_rname)
-                date_diff = bool(_cur_day and p_day and _cur_day != p_day)  # işlem tarihi farklı → sahte
-                if amt_diff or riban_diff or rname_diff or date_diff:
+                riban_diff = bool(_cur_riban and p_riban and _cur_riban != p_riban
+                                  and _iban_valid_safe(_cur_riban) is True and _iban_valid_safe(p_riban) is True)
+                if amt_diff or riban_diff:
                     _forgery = pr
                     break
             if _forgery is None:
@@ -1030,18 +1038,18 @@ def check_blocklist(report: dict) -> list[dict]:
             for _pr in _rows:
                 p_amt = _round2(_pr[0])
                 p_riban = re.sub(r"\s+", "", (_pr[1] or "")).upper()
-                p_rname = re.sub(r"\s+", " ", (_pr[2] or "").strip()).upper()
-                p_day = _daykey(_pr[3])
-                # KİRLİ/EKSİK kayıtları YOK SAY: önceki sahte kaydın tutarı ve alıcısı okunmamışsa
-                # (bozuk dönem taramaları) güvenilir bir 'farklı belge' kanıtı değildir → atla (FP önler).
-                if p_amt is None or (not p_riban and not p_rname):
+                # KİRLİ/EKSİK kayıtları YOK SAY: önceki sahte kaydın tutarı okunmamışsa güvenilir bir
+                # 'farklı belge' kanıtı değildir → atla (FP önler).
+                if p_amt is None:
                     continue
+                # Farklılık YALNIZCA en kararlı alanlardan: TUTAR ya da kesin geçerli+farklı ALICI IBAN.
+                # (Tarih ve isim FARK KRİTERİNDEN ÇIKARILDI — re-taramada değişip aynı dekonta yanlış
+                # kara-liste üretiyorlardı.)
                 amt_diff = (_cur_amt is not None and _cur_amt != p_amt)
-                riban_diff = bool(_cur_riban and p_riban and _cur_riban != p_riban)
-                rname_diff = bool(_cur_rname and p_rname and _cur_rname != p_rname)
-                date_diff = bool(_cur_day and p_day and _cur_day != p_day)
-                if amt_diff or riban_diff or rname_diff or date_diff:
-                    hit_seq = _pr   # TAM kayıtlı + gerçekten FARKLI bir belge → kara-liste göstergesi
+                riban_diff = bool(_cur_riban and p_riban and _cur_riban != p_riban
+                                  and _iban_valid_safe(_cur_riban) is True and _iban_valid_safe(p_riban) is True)
+                if amt_diff or riban_diff:
+                    hit_seq = _pr   # gerçekten FARKLI bir belge → kara-liste göstergesi
                     break
         print(f"[blocklist] bank={f['bank']!r} seq={f['seq_number']!r} sha={f['sha256'][:10]} "
               f"cross_doc_hit={bool(hit_seq)}", flush=True)

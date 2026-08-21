@@ -1196,8 +1196,61 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     except Exception:
         pass
 
-    # AI sonrası bulgu eklendiyse: kesin kararı, skoru, alt-skorları ve tahrifat karşılaştırmasını YENİLE.
-    if _post_ai:
+    # (c) İŞLEM TÜRÜ ↔ TARAF BANKALARI ÇELİŞKİSİ (AI-DÜZELTİLMİŞ IBAN'lar üzerinden, KATI KURAL):
+    #     Deterministik kontrol (bkz. yukarıda satır ~882) HAM OCR/tesseract IBAN'larına bakar; fotoğrafta
+    #     tesseract iki IBAN'ı çoğu kez AYNI/bozuk okur (s==r) → çelişki YAKALANAMAZ. AI, gönderici ve alıcı
+    #     IBAN'larını GERÇEĞE göre düzeltir (ör. ikisi de Akbank 00046 ama FARKLI hesap). Bu yüzden çelişkiyi
+    #     AI-doğrulanmış IBAN'lar üzerinden TEKRAR sınarız: aynı banka + 'BANKALAR ARASI/EFT/FAST' başlığı =
+    #     mantıksal çelişki (banka-içi işlem EFT/FAST olamaz) → SAHTECİLİK. Bu, kullanıcının açık kuralıdır:
+    #     böyle bir çelişki taşıyan dekont %50 altında tutulur, "güvenilir" işaretlenemez.
+    try:
+        import banks as _bnk_rc, authenticity as _auth_rc
+        _exist_codes_rc = {f.code for f in findings}
+        _s_iban_ai = _bnk_rc.normalize_iban((_extracted_dict.get("sender", {}) or {}).get("iban") or "")
+        _r_iban_ai = _bnk_rc.normalize_iban((_extracted_dict.get("receiver", {}) or {}).get("iban") or "")
+        if "SAMEBANK_RAIL_CONTRADICTION" not in _exist_codes_rc:
+            _sbc2 = _auth_rc.check_samebank_rail_contradiction(text_layout, _s_iban_ai, _r_iban_ai)
+            if _sbc2:
+                _post_ai.append(Finding(_sbc2["code"], _sbc2["severity"], "content", _sbc2["weight"],
+                                        tr=_sbc2["tr"], en=_sbc2["en"], detail=_sbc2.get("detail", "")))
+        if "INTERBANK_HAVALE_CONTRADICTION" not in _exist_codes_rc:
+            _ihc2 = _auth_rc.check_interbank_havale_contradiction(text_layout, _s_iban_ai, _r_iban_ai)
+            if _ihc2:
+                _post_ai.append(Finding(_ihc2["code"], _ihc2["severity"], "content", _ihc2["weight"],
+                                        tr=_ihc2["tr"], en=_ihc2["en"], detail=_ihc2.get("detail", "")))
+    except Exception:
+        pass
+
+    # (d) 'DEKONT DEĞİL' YANLIŞ-POZİTİFİNİ GİDER: NOT_A_RECEIPT, tesseract HAM okuması boş/başarısız
+    #     olduğunda eklenir (fotoğrafta metin çıkmazsa). Ancak Vision/YZ görüntüyü OKUYUP kritik dekont
+    #     alanlarını (geçerli IBAN, tutar, işlem/referans no, taraf adları) DOLDURDUYSA belge AÇIKÇA bir
+    #     dekonttur → NOT_A_RECEIPT bir OKUMA-HATASI artığıdır, KALDIRILIR. Böylece YZ 'gerçek/sorunsuz'
+    #     derken skor kartı 'dekont değil (5 puan)' DEMEZ (katman çelişkisi giderilir). Gerçekten dekont
+    #     olmayan dosyada YZ bu alanları dolduramayacağından NOT_A_RECEIPT yerinde kalır.
+    _remove_codes = set()
+    if any(f.code == "NOT_A_RECEIPT" for f in findings):
+        try:
+            import banks as _bnk_nr
+            _sd = _extracted_dict.get("sender", {}) or {}
+            _rd = _extracted_dict.get("receiver", {}) or {}
+            _amt = (_extracted_dict.get("amount", {}) or {}).get("value")
+            _tx = _extracted_dict.get("transaction", {}) or {}
+            _txn_id = (_tx.get("ref_no") or _tx.get("document_no") or _tx.get("sequence_number") or "").strip()
+            _has_valid_iban = any(_bnk_nr.iban_valid(_bnk_nr.normalize_iban(p.get("iban") or "")) is True
+                                  for p in (_sd, _rd))
+            _has_names = bool((_sd.get("name") or "").strip()) and bool((_rd.get("name") or "").strip())
+            # AÇIK dekont kanıtı: geçerli IBAN VAR, ya da (tutar VAR ve işlem/ref no VAR), ya da her iki taraf adı VAR
+            _receipt_proven = _has_valid_iban or (_amt is not None and bool(_txn_id)) or _has_names
+            if _receipt_proven:
+                _remove_codes.add("NOT_A_RECEIPT")
+        except Exception:
+            pass
+
+    # AI sonrası bulgu eklendiyse VEYA yanlış bulgu kaldırıldıysa: kesin kararı, skoru, alt-skorları ve
+    # tahrifat karşılaştırmasını YENİLE.
+    if _post_ai or _remove_codes:
+        if _remove_codes:
+            findings = [f for f in findings if f.code not in _remove_codes]
         _exist_codes = {f.code for f in findings}
         for _f in _post_ai:
             if _f.code not in _exist_codes:

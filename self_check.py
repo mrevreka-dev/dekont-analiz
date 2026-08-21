@@ -34,6 +34,33 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z2", "date": "2026-08-21 13:00", "area": "'DEKONT DEĞİL' YANLIŞ-POZİTİFİ: YZ/Vision alan doldurduysa NOT_A_RECEIPT kalkar", "test": 25,
+     "bug": "Gerçek Enpara dekontu (Ahmet Özkul → Serhat, 40.000 TL, GİDEN FAST EFT) webde tarandığında YZ "
+            "'sorunsuz/gerçek' diyordu, AMA skor kartı 'sahte (5 puan)' diyordu — KATMAN ÇELİŞKİSİ. Neden: "
+            "fotoğrafta tesseract HAM okuma boş kaldığından (text_source='none') NOT_A_RECEIPT (kritik) bulgusu "
+            "ekleniyor ve skoru 5'e kırıyordu. Sonra Vision/YZ görüntüyü OKUYUP tüm alanları (gönderici/alıcı "
+            "IBAN, tutar, işlem no) doğru dolduruyor — ama NOT_A_RECEIPT bulgusu KALDIRILMADAN kalıyor, skor 5'te "
+            "kilitli kalıyordu. Kullanıcı haklı olarak 'AI sorunsuz diyor ama farklı alanlar sahte diyor' dedi.",
+     "fix": "analyze.py post-AI blok (d): NOT_A_RECEIPT bulgusu varsa VE _extracted_dict (Vision+YZ sonrası) "
+            "AÇIK dekont kanıtı taşıyorsa (geçerli mod-97 IBAN, ya da tutar+işlem/ref no, ya da her iki taraf "
+            "adı) → NOT_A_RECEIPT KALDIRILIR, skor+karar YENİDEN hesaplanır. Gerçekten dekont olmayan dosyada YZ "
+            "bu alanları dolduramayacağından bulgu YERİNDE kalır (skor 5). Böylece YZ ile skor kartı ARTIK "
+            "çelişmez. Test #25 iki yönlü kilitler (gerçek dekont→kalkar; dekont-değil→kalır)."},
+    {"id": "Z", "date": "2026-08-21 12:30", "area": "MANTIKSAL ÇELİŞKİ: aynı banka ↔ 'BANKALAR ARASI/EFT' başlığı → %50 altı", "test": 24,
+     "bug": "Akbank dekontunda gönderici ve alıcı IBAN'ların İKİSİ de Akbank (00046) koduna ait (banka-içi "
+            "işlem), ama başlıkta 'EFT BANKALAR ARASI HESABA HAVALE' yazıyor. Bu MANTIKSAL bir çelişkidir "
+            "(aynı bankadaki iki hesap arası EFT/FAST YAPILAMAZ). Belge 72 puan alıp 'güvenilir' işaretleniyordu. "
+            "Neden: (1) deterministik çelişki kontrolü (check_samebank_rail_contradiction) yalnız HAM OCR "
+            "IBAN'larına bakıyordu; fotoğrafta tesseract iki IBAN'ı çoğu kez aynı/bozuk okuyor (s==r) → çelişki "
+            "yakalanamıyor. (2) SAMEBANK_RAIL_CONTRADICTION içerik-tahrifat listesinde (verdicts) değildi → kesin "
+            "karar 'güvenilir değil'e dönmüyordu.",
+     "fix": "(1) analyze.py: AI gönderici/alıcı IBAN'larını düzelttikten SONRA çelişki AI-doğrulanmış IBAN'lar "
+            "üzerinden TEKRAR sınanır (post-AI blok, c). İki IBAN da mod-97 geçerli + aynı banka kodu + FARKLI "
+            "hesap + 'BANKALAR ARASI/EFT/FAST' başlığı → SAMEBANK_RAIL_CONTRADICTION (kritik). (2) verdicts.py: "
+            "SAMEBANK_RAIL_CONTRADICTION ve INTERBANK_HAVALE_CONTRADICTION _CONTENT_TAMPER'a eklendi → kesin karar "
+            "'GÜVENİLİR DEĞİL'. (3) scoring: SAMEBANK_RAIL_CONTRADICTION skoru ≤6'ya çeker. Sonuç: skor <50, "
+            "güvenilir değil. Kullanıcı kuralı: 'böyle bir mantıksal çelişkinin olduğu dekontu %50 nin altında "
+            "tutmalısın.' Test #24 kilitler."},
     {"id": "Y", "date": "2026-08-21 11:55", "area": "GÖRSEL TAHRİFAT: YZ font/yapıştırma incelemesi (fotoğraf her zaman)", "test": 23,
      "bug": "Garanti dekontunda yazıyla yazılan tutar ('YetmişBeşBinTL.') belgenin monospace fontundan "
             "FARKLI bir kalın/proporsiyonel fontta — çıplak gözle görülen yapıştırma. Kural motoru rasterize "
@@ -582,13 +609,15 @@ def _t21_bank_scoped_number_reuse():
         diff = ST.check_number_reuse(_rep("c" * 64, "GARANTI BBVA", "2026082120159022"))
         # (c) AYNI dekontun TEKRAR taranması (farklı sha ama tutar+alıcı+tarih aynı) → YANLIŞ-POZİTİF olmamalı
         rescan = ST.check_number_reuse(_rep("d" * 64, "VAKIFBANK", "2026082120159022", "CITY2 GIDA", "Nalan Töre", 50000.0))
-        # (d) Aynı numara+tutar+alıcı ama İŞLEM TARİHİ farklı → sahtecilik yakalanmalı
+        # (d) Aynı numara+tutar+alıcı ama İŞLEM TARİHİ farklı okunmuş → TETİKLENMEMELİ. Tarih re-taramalar
+        # arası değişebilir (valör↔işlem, OCR/AI farkı); aynı dekonta yanlış 'sahte' üretmesin. Fark kararı
+        # yalnız TUTAR (ve geçerli-farklı IBAN) üzerinden verilir.
         datef = ST.check_number_reuse(_rep("e" * 64, "VAKIFBANK", "2026082120159022", "CITY2 GIDA", "Nalan Töre", 50000.0,
                                            date="19.08.2026 02:36:06"))
         has_detail = bool(same) and ("Nalan Töre" in same[0]["tr"]) and (same[0].get("onceki_dekont", {}).get("amount") == 50000.0)
-        ok = (any(f["code"] == "NUMBER_REUSE" for f in same) and not diff and not rescan and bool(datef) and has_detail)
-        return ok, (f"farklı-işlem={bool(same)}, farklı-banka-temiz={not diff}, aynı-dekont-FP-yok={not rescan}, "
-                    f"tarih-farkı-yakalandı={bool(datef)}, önceki-detay={has_detail}")
+        ok = (any(f["code"] == "NUMBER_REUSE" for f in same) and not diff and not rescan and not datef and has_detail)
+        return ok, (f"farklı-tutar-yakalandı={bool(same)}, farklı-banka-temiz={not diff}, aynı-dekont-FP-yok={not rescan}, "
+                    f"tarih-farkı-tetiklemez={not datef}, önceki-detay={has_detail}")
     finally:
         if _old is None:
             os.environ.pop("DEKONT_DB_PATH", None)
@@ -634,6 +663,87 @@ def _t23_ai_visual_tamper_escalation():
     return ok, f"görüntü-eskalasyon={esc}, görsel-tahrifat-sanitize={gt_ok}"
 
 
+def _t24_samebank_rail_contradiction():
+    """MANTIKSAL ÇELİŞKİ (AYNI BANKA ↔ 'BANKALAR ARASI/EFT/FAST' BAŞLIĞI) → %50 ALTINDA + GÜVENİLİR DEĞİL.
+    Gönderici ve alıcı IBAN AYNI bankaya (ör. Akbank 00046) ait, iki hesap FARKLI ve her ikisi de mod-97
+    geçerli; ama dekont başlığı 'EFT BANKALAR ARASI' diyorsa bu İMKÂNSIZDIR (banka-içi işlem EFT/FAST olamaz)
+    → SAMEBANK_RAIL_CONTRADICTION. Kural: (a) çelişki yakalanır, (b) skor <50, (c) kesin karar 'güvenilir değil'.
+    Kullanıcı kuralı: 'böyle bir mantıksal çelişkinin olduğu dekontu %50 nin altında tutmalısın.'"""
+    import banks as _b, authenticity as _a, scoring as _sc, verdicts as _v
+    from forensics import Finding
+
+    def _valid_iban(body22):
+        for kk in range(0, 100):
+            cand = "TR%02d%s" % (kk, body22)
+            if _b.iban_valid(cand) is True:
+                return cand
+        return None
+    i1 = _valid_iban("0004600232888000321907")   # Akbank 00046
+    i2 = _valid_iban("0004600232888000399999")   # Akbank 00046 (farklı hesap)
+    txt = "AKBANK\nEFT BANKALAR ARASI HESABA HAVALE\n%s\n%s" % (i1, i2)
+    _r = _a.check_samebank_rail_contradiction(txt, i1, i2)
+    fired = bool(_r) and _r["code"] == "SAMEBANK_RAIL_CONTRADICTION"
+    findings = [Finding(code="SAMEBANK_RAIL_CONTRADICTION", severity="critical", category="content",
+                        weight=46, tr="x", en="x")]
+    codes = {f.code for f in findings}
+    vd = _v.compute_verdicts(doc_type="image_only", input_kind="image", codes=codes, cons=None,
+                             has_pdf_dates=False, txn_date="2026-08-20", seq="123", db_checked=False,
+                             db_count=0, is_receipt=True, doc_kind="dekont", balance_state=None, timing=None)
+    untrusted = vd["overall"]["state"] == "false"
+    sc = _sc.compute_score(findings, "image_only", 0.0, 0.0, verdict_untrusted=untrusted)
+    below = sc.authenticity_score < 50
+    in_tamper = "SAMEBANK_RAIL_CONTRADICTION" in _v._CONTENT_TAMPER
+    ok = fired and below and untrusted and in_tamper
+    return ok, f"çelişki={fired}, skor={sc.authenticity_score}(<50={below}), güvenilir-değil={untrusted}, tamper-listesinde={in_tamper}"
+
+
+def _t25_not_a_receipt_false_positive():
+    """'DEKONT DEĞİL' YANLIŞ-POZİTİFİ: NOT_A_RECEIPT, tesseract ham okuması boş kalınca eklenir. Vision/YZ
+    görüntüyü okuyup geçerli IBAN/tutar/işlem-no doldurduysa belge AÇIKÇA dekonttur → NOT_A_RECEIPT KALKAR,
+    skor 'dekont değil (5)' OLMAZ. Gerçekten dekont olmayan (hiçbir alan dolmaz) dosyada bulgu KALIR (skor 5).
+    Kök sorun: YZ 'gerçek/sorunsuz' derken skor kartı 'sahte' diyordu (katman çelişkisi)."""
+    import scoring as _sc, verdicts as _v, banks as _b
+    from forensics import Finding
+
+    def _recompute(findings, extracted):
+        remove = set()
+        if any(f.code == "NOT_A_RECEIPT" for f in findings):
+            sd = extracted.get("sender", {}) or {}
+            rd = extracted.get("receiver", {}) or {}
+            amt = (extracted.get("amount", {}) or {}).get("value")
+            tx = extracted.get("transaction", {}) or {}
+            txn = (tx.get("ref_no") or tx.get("document_no") or tx.get("sequence_number") or "").strip()
+            hvi = any(_b.iban_valid(_b.normalize_iban(p.get("iban") or "")) is True for p in (sd, rd))
+            hn = bool((sd.get("name") or "").strip()) and bool((rd.get("name") or "").strip())
+            if hvi or (amt is not None and txn) or hn:
+                remove.add("NOT_A_RECEIPT")
+        fnd = [f for f in findings if f.code not in remove]
+        codes = {f.code for f in fnd}
+        vd = _v.compute_verdicts(doc_type="image_only", input_kind="image", codes=codes, cons=None,
+                                 has_pdf_dates=False, txn_date="2026-08-16", seq="", db_checked=False,
+                                 db_count=0, is_receipt=True, doc_kind="dekont", balance_state=None, timing=None)
+        unt = vd["overall"]["state"] == "false"
+        sc = _sc.compute_score(fnd, "image_only", 0.0, 0.0, verdict_untrusted=unt)
+        return remove, sc.authenticity_score
+
+    def _F(c, s):
+        return Finding(code=c, severity=s, category="content", weight=0, tr="x", en="x")
+    base = [_F("IMAGE_ONLY_DOC", "info"), _F("NOT_A_RECEIPT", "critical")]
+    # (a) GERÇEK dekont — YZ geçerli IBAN'ları doldurdu → NOT_A_RECEIPT kalkar, skor 5'ten YUKARI
+    real = {"sender": {"name": "Ahmet", "iban": "TR180015700000000083817494"},
+            "receiver": {"name": "Serhat", "iban": "TR560004600812888000148652"},
+            "amount": {"value": 40000.0}, "transaction": {"ref_no": "4747783370"}}
+    rem_a, sc_a = _recompute(list(base), real)
+    ok_a = ("NOT_A_RECEIPT" in rem_a) and sc_a > 5
+    # (b) GERÇEKTEN dekont değil — hiçbir alan yok → NOT_A_RECEIPT KALIR, skor 5
+    cat = {"sender": {"name": "", "iban": ""}, "receiver": {"name": "", "iban": ""},
+           "amount": {"value": None}, "transaction": {}}
+    rem_b, sc_b = _recompute(list(base), cat)
+    ok_b = (not rem_b) and sc_b <= 5
+    ok = ok_a and ok_b
+    return ok, f"gerçek-dekont(kalktı={('NOT_A_RECEIPT' in rem_a)},skor={sc_a}), dekont-değil(kaldı={not rem_b},skor={sc_b})"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -658,6 +768,8 @@ _CHECKS = [
     (21, "Banka-bazlı numara tekrarı → NUMBER_REUSE (her banka kendi içinde)", _t21_bank_scoped_number_reuse),
     (22, "YZ boş kritik alanları görüntüden doldurur (alıcı/IBAN/tutar/no)", _t22_ai_fills_blank_fields),
     (23, "Görsel tahrifat: fotoğraf her zaman YZ'ye + font uyuşmazlığı bulgusu", _t23_ai_visual_tamper_escalation),
+    (24, "Mantıksal çelişki (aynı banka ↔ EFT başlığı) → %50 altı + güvenilir değil", _t24_samebank_rail_contradiction),
+    (25, "'Dekont değil' yanlış-pozitifi: YZ alanları okuduysa NOT_A_RECEIPT kalkar", _t25_not_a_receipt_false_positive),
 ]
 
 
