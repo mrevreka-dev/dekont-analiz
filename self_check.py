@@ -34,6 +34,17 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z8", "date": "2026-08-21 22:00", "area": "VISION SONRASI IBAN ONARIMI: tek-rakam yanlış okunan IBAN artık onarılıyor", "test": 31,
+     "bug": "Kuveyt Türk ekran görüntüsünde alıcı IBAN'ı 'TR65...6085 9650 01' iken sistem '...9850 01' (geçersiz, "
+            "6↔8 OCR karışması) gösteriyordu. Kök neden: IBAN OCR-onarımı 'if vision_result is None' ile YALNIZ "
+            "Vision HİÇ çalışmadıysa yapılıyordu. Ekran görüntüsünde tesseract başarısız olup Vision devreye "
+            "girince, Vision'ın tek-rakam IBAN hatası onarılMADAN ekranda kalıyordu (apply_corrections da geçersiz "
+            "IBAN'ı uygulamadığı için düzelmiyordu).",
+     "fix": "analyze.py: IBAN OCR-onarımı (_repair_party_ibans) artık Vision ÇALIŞSA DA yapılır. GÜVENLİDİR — "
+            "yalnız mod-97 GEÇERSİZ IBAN'a dokunur, yalnız TEK benzersiz geçerli adayı uygular, BANKA KODU'nu "
+            "korur, dijital PDF'de çalışmaz ve iban_ocr_onarim ile şeffaf loglanır; geçerli IBAN'a ASLA dokunmaz. "
+            "Böylece Vision'ın '9850'→doğru '9650' onarılır. Test #31 kilitler.",
+     "not": "'TR65 ... 9850 01' mod-97 GEÇERSİZ; doğrusu '...9650 01' (tek hane: 8→6)."},
     {"id": "Z7", "date": "2026-08-21 20:45", "area": "İHRAÇÇI ≠ KARŞI-TARAF BANKASI: Kuveyt Türk→Ziraat yanlış 'aynı-banka çelişkisi' giderildi", "test": 30,
      "bug": "Kuveyt Türk'ten Ziraat'a FAST transfer dekontunda YZ 'gönderici ve alıcı IBAN aynı bankada (Kuveyt "
             "Türk), EFT/FAST çelişkisi' diyordu — TAMAMEN YANLIŞ. Gerçek: gönderici Kuveyt Türk (00205), alıcı "
@@ -973,6 +984,35 @@ def _t30_issuer_not_confused_by_counterparty_bank():
     return ok, f"kuveyt-ihraççı={issuer_ok}, gürültülü-kuveyt={issuer_noisy_ok}, rail-fast={rail_ok}, ziraat-regresyon-yok={ziraat_ok}"
 
 
+def _t31_vision_iban_repaired():
+    """VISION SONRASI IBAN ONARIMI: Vision de IBAN'da tek-rakam hatası yapabilir (ör. ekran görüntüsünde
+    '...9650'→'...9850', 6↔8 karışması). Önceden onarım YALNIZ Vision HİÇ çalışmadıysa yapılıyordu →
+    Vision'ın hatalı IBAN'ı ekranda yanlış kalıyordu. Artık onarım Vision ÇALIŞSA DA yapılır (yalnız
+    GEÇERSİZ IBAN'a, banka kodu korunarak, TEK benzersiz geçerli adaya). Test: Vision geçersiz alıcı IBAN
+    döndürür → çıktı ONARILMIŞ (mod-97 geçerli) olmalı."""
+    import analyze, ocr, vision_ocr, banks
+    from PIL import Image
+    bad_iban = "TR65 0001 0002 3962 6085 9850 01"          # geçersiz (gerçek: ...9650...)
+    good = "TR650001000239626085965001"
+    ocr_text = (f"KuveytTürk e-Dekont\nAlıcı : kasım AKNAY\nGönderilen IBAN : {bad_iban}\n"
+                "Tutar : 5.000,00 TL\n")
+    o = (vision_ocr.is_configured, vision_ocr.extract_from_image, ocr.ocr_pdf_candidates,
+         ocr.ocr_available, ocr.render_page_to_image)
+    vision_ocr.is_configured = lambda: True
+    vision_ocr.extract_from_image = lambda *a, **k: {"receiver_iban": bad_iban, "receiver_name": "kasım AKNAY"}
+    ocr.ocr_available = lambda: True
+    ocr.ocr_pdf_candidates = lambda *a, **k: [ocr_text]
+    ocr.render_page_to_image = lambda *a, **k: Image.new("RGB", (400, 400), "white")
+    try:
+        rep = analyze.analyze_document(_blank_pdf(), "x.png", input_kind="image", use_store=False)
+    finally:
+        (vision_ocr.is_configured, vision_ocr.extract_from_image, ocr.ocr_pdf_candidates,
+         ocr.ocr_available, ocr.render_page_to_image) = o
+    r_iban = banks.normalize_iban((rep.get("extracted", {}).get("receiver", {}) or {}).get("iban") or "")
+    ok = (r_iban == good and banks.iban_valid(r_iban) is True)
+    return ok, f"alıcı_iban={r_iban} (geçerli={banks.iban_valid(r_iban)}), onarım_kaydı={len(rep.get('iban_ocr_onarim', []))}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1004,6 +1044,7 @@ _CHECKS = [
     (28, "Rail: 'Hesaptan Hesaba Havale' → HAVALE (EFT değil); 'defter' EFT tetiklemez", _t28_havale_not_eft_false_positive),
     (29, "Bölünmüş gönderici IBAN onarımı (Ziraat) → gönderici≠alıcı, sahte-alarmı yok", _t29_split_iban_reconstruction),
     (30, "İhraççı ≠ karşı-taraf bankası (Kuveyt Türk→Ziraat) → banka=Kuveyt, rail=FAST", _t30_issuer_not_confused_by_counterparty_bank),
+    (31, "Vision sonrası IBAN OCR onarımı (tek-rakam '9850'→'9650') çalışır", _t31_vision_iban_repaired),
 ]
 
 

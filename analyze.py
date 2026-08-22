@@ -480,12 +480,13 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         except Exception:
             pass
 
-    # IBAN OCR-ONARIMI (YEDEK — yalnızca Vision HİÇ ÇALIŞMADIYSA): Vision kapalı/hatalıysa ve OCR
-    # tek rakam yanlış okuduysa, BENZERSİZ geçerli adaya onar (banka kodu korunur, dijital PDF'de
-    # çalışmaz, iban_ocr_onarim ile şeffaf). Vision çalıştıysa DOKUNMA — onun okuması esastır ve
-    # denetimi zayıflatacak sessiz düzeltme yapılmaz.
-    if vision_result is None:
-        _iban_fixes += _repair_party_ibans(extraction, input_kind)
+    # IBAN OCR-ONARIMI (FOTOĞRAF/OCR/VISION): Bir taraf IBAN'ı mod-97 TUTMUYORSA (tek rakam yanlış
+    # okunmuş) BENZERSİZ geçerli adaya onar. ÖNEMLİ DÜZELTME: Vision de IBAN'da hane hatası yapabilir
+    # (ör. ekran görüntüsünde '...9650'→'...9850', 6↔8 karışması) — bu yüzden onarım Vision ÇALIŞSA DA
+    # yapılır. GÜVENLİDİR: yalnız GEÇERSİZ IBAN'a dokunulur (geçerli IBAN'a ASLA), yalnız TEK benzersiz
+    # geçerli aday uygulanır, BANKA KODU korunur, dijital PDF'de çalışmaz ve iban_ocr_onarim ile şeffaf
+    # loglanır. Böylece Vision'ın tek-rakam IBAN hatası ekranda yanlış IBAN olarak kalmaz.
+    _iban_fixes += _repair_party_ibans(extraction, input_kind)
 
     # Sıra/işlem numarası (banka bazlı) — sıra analizi için
     from extract import derive_sequence_number
