@@ -1344,6 +1344,74 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         except Exception:
             pass
 
+    # (e) DÜZELTİLMİŞ VERİYLE IBAN-BAĞIMLI YENİDEN DEĞERLENDİRME (KULLANICI KURALI: 'YZ değerlendirmesini ve
+    #     kontrolleri VERİLER DÜZELTİLDİKTEN SONRA yap'). YZ taraf IBAN'larını düzelttikten sonra, DÜZELTMEDEN
+    #     ÖNCE yanlış IBAN'larla üretilmiş bulgular (aynı-banka çelişkisi, banka-adı uyumsuzluğu, yanlış
+    #     rail=HAVALE) ARTIK GEÇERSİZ olabilir → düzeltilmiş IBAN + ihraççı ile YENİDEN türetip bayatları KALDIR.
+    #     Ayrıca taraf banka etiketleri düzeltilmiş IBAN'dan yeniden yazılır (ör. alıcı IBAN Ziraat ise 'QNB'
+    #     yazmaz). Böylece rapor kendi içinde tutarlı olur.
+    try:
+        import banks as _bnk_rec, authenticity as _auth_rec
+        _sd2 = _extracted_dict.get("sender", {}) or {}
+        _rd2 = _extracted_dict.get("receiver", {}) or {}
+        _s2 = _bnk_rec.normalize_iban(_sd2.get("iban") or "")
+        _r2 = _bnk_rec.normalize_iban(_rd2.get("iban") or "")
+        _bkey2 = _auth_rec.bank_key(_extracted_dict.get("bank") or "")
+        _iss2 = _auth_rec.issuer_iban_codes(_bkey2)
+        # TARAF BANKA ETİKETLERİNİ DÜZELTİLMİŞ IBAN'DAN YENİDEN TÜRET — HER ZAMAN, IBAN'ın banka koduna göre.
+        # (Banka kodu = IBAN'ın ilk 5 hanesi; mod-97 tam tutmasa bile OKUNABİLİR ve bankayı KESİN belirler.)
+        # Böylece gönderici QNB (00111) ve alıcı Ziraat (00010) FARKLI yazılır; 'her ikisi de QNB' hatası biter.
+        # Her taraf KENDİ IBAN'ının bankasını gösterir; ihraççıdan/karşı taraftan KOPYALANMAZ.
+        _rb2 = _bnk_rec.bank_from_iban(_r2) if _r2 else ""
+        if _rb2:
+            _rd2["bank"] = _rb2
+        _sb2 = _bnk_rec.bank_from_iban(_s2) if _s2 else ""
+        if _sb2:
+            _sd2["bank"] = _sb2
+        # DÜZELTİLMİŞ VERİYİ ex'E GERİ YAZ: Raporun TAMAMI (bulgular, kapsam, özet, downstream 'ex' kullanan
+        # her yer) NİHAİ düzeltilmiş veriyle üretilsin; hiçbir bölüm düzeltme-öncesi ('ex') değerle KALMASIN.
+        try:
+            ex.sender.iban = _sd2.get("iban", ex.sender.iban) or ex.sender.iban
+            ex.receiver.iban = _rd2.get("iban", ex.receiver.iban) or ex.receiver.iban
+            if _sd2.get("name"):
+                ex.sender.name = _sd2["name"]
+            if _rd2.get("name"):
+                ex.receiver.name = _rd2["name"]
+            if _sb2:
+                ex.sender.bank = _sb2
+            if _rb2:
+                ex.receiver.bank = _rb2
+        except Exception:
+            pass
+        _codes_now = {f.code for f in findings} | {f.code for f in _post_ai}
+        # 1) SAMEBANK çelişkisi: düzeltilmiş IBAN+ihraççı ile artık geçerli değilse KALDIR (pre-AI yanlış fire)
+        if "SAMEBANK_RAIL_CONTRADICTION" in _codes_now:
+            if not _auth_rec.check_samebank_rail_contradiction(text_layout, _s2, _r2, issuer_codes=_iss2):
+                _remove_codes.add("SAMEBANK_RAIL_CONTRADICTION")
+        # 2) RAIL: düzeltilmiş IBAN'larla yeniden sınıfla; yanlış HAVALE firelanmışsa (aslında EFT/FAST) düzelt
+        _rl_now = _auth_rec.classify_rail(text_layout, _s2, _r2, _bkey2)
+        _rail_now = (_rl_now or {}).get("rail")
+        if _rail_now in ("eft", "fast", "havale"):
+            _want = {"eft": "RAIL_IS_EFT", "fast": "RAIL_IS_FAST", "havale": "RAIL_IS_HAVALE"}[_rail_now]
+            _cur_rail = _codes_now & {"RAIL_IS_EFT", "RAIL_IS_FAST", "RAIL_IS_HAVALE"}
+            if _cur_rail and _want not in _cur_rail:
+                _remove_codes |= _cur_rail            # yanlış rail kod(lar)ını kaldır
+                # HAVALE yanlış firelendiyse EFT riski de yanlış eklenmiş olabilir → EFT değilse kaldır
+                if _rail_now != "eft":
+                    _remove_codes.add("EFT_SETTLEMENT_RISK")
+                _post_ai.append(Finding(_want, "info", "content", 0,
+                                        tr=_rl_now.get("notice_tr", ""), en=_rl_now.get("notice_en", ""),
+                                        detail=f"rail={_rail_now} source=reconciled"))
+                if _rail_now == "eft" and "EFT_SETTLEMENT_RISK" not in _codes_now:
+                    _post_ai.append(Finding(
+                        "EFT_SETTLEMENT_RISK", "high", "content", 0,
+                        tr=("İŞLEM TÜRÜ EFT — PARA ANINDA GEÇMEZ (RİSKLİ): EFT'de para alıcı hesabına ANINDA "
+                            "yansımaz; anlık teslimatta bakiye yüklemeden önce paranın geçtiğini teyit edin."),
+                        en="TRANSACTION IS EFT — NOT INSTANT (RISKY): confirm the money landed before crediting.",
+                        detail="rail=eft source=reconciled"))
+    except Exception:
+        pass
+
     # AI sonrası bulgu eklendiyse VEYA yanlış bulgu kaldırıldıysa: kesin kararı, skoru, alt-skorları ve
     # tahrifat karşılaştırmasını YENİLE.
     if _post_ai or _remove_codes:
@@ -1365,6 +1433,29 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         subscores = _compute_subscores(struct, rev, cons, xml, qr_check, findings, doc_type)
         tamper_comparison = _build_tamper_comparison(
             {f.code for f in findings}, rev, timing, stmt if is_statement else None)
+
+    # 7.96) HÜKÜM KAPISI (TEMEL MİMARİ KURAL — 'YZ değerlendirmesi TAM ve DÜZELTİLMİŞ veriyle yapılmalı'):
+    # YZ değerlendirmesi tek geçişte hem alanları düzeltir hem hüküm verir; bu yüzden hükmü BAZEN düzeltmeden
+    # ÖNCEKİ (yanlış) okumaya dayanır (ör. tabloda her satırda göndericinin IBAN'ı görünüp 'iki IBAN aynı →
+    # aynı-banka → sahte' denmesi). ÇÖZÜM: YZ hükmü, alanlar düzeltildikten SONRAKİ NİHAİ bulgularla
+    # DOĞRULANIR. YZ 'sahte/şüpheli' dediği hâlde düzeltilmiş veride SOMUT tahrifat kanıtı (içerik-tahrifatı
+    # bulgusu ya da YZ görsel-tahrifatı) YOKSA → hüküm eski veriye dayanıyordur, 'belirsiz'e çekilir ve
+    # gerekçeye şeffaf bir düzeltme notu eklenir. Böylece 'düzeltilmiş alanlar' ile 'YZ hükmü' ASLA çelişmez.
+    try:
+        _forgery_codes = {f.code for f in findings} & (set(_vd._CONTENT_TAMPER) | {"AI_VISUAL_TAMPER"})
+        _ai_gt = bool((ai_adjudication or {}).get("gorsel_tahrifat"))
+        _ai_v = str((ai_adjudication or {}).get("verdict") or "").lower()
+        if ai_adjudication and _ai_v in ("sahte", "şüpheli", "supheli") and not _forgery_codes and not _ai_gt:
+            ai_adjudication["verdict_ham"] = _ai_v          # şeffaflık: YZ'nin ilk (ham) hükmü
+            ai_adjudication["verdict"] = "belirsiz"
+            _rec_note = (f"[DÜZELTME SONRASI UZLAŞTIRMA] YZ'nin ilk hükmü ('{_ai_v}') alanlar düzeltilmeden "
+                         "önceki okumaya dayanıyordu. Düzeltilmiş TAM veriyle (gönderici ve alıcı IBAN'ları "
+                         "AYRI okundu; banka kodları ve işlem kanalı yeniden türetildi) SOMUT bir çelişki ya da "
+                         "tahrifat kanıtı BULUNAMADI → hüküm 'belirsiz'e güncellendi. Özgünlük ayrı, işlem "
+                         "kanalı riski (EFT ise) ayrı değerlendirilir. — ")
+            ai_adjudication["reasoning_tr"] = _rec_note + str(ai_adjudication.get("reasoning_tr") or "")
+    except Exception:
+        pass
 
     # 7.97) KARA-LİSTE GÜRÜLTÜSÜNÜ AZALT: Belge ZATEN kendi bulgularıyla (kesin tahrifat, AI görsel
     # tahrifat, AI 'sahte/şüpheli' hükmü ya da GÜVENİLİR-DEĞİL skoru) işaretlendiyse, "daha önce sahte

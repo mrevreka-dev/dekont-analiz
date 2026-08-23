@@ -34,6 +34,24 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z10", "date": "2026-08-22 03:00", "area": "TEMEL MİMARİ KURAL: YZ hükmü DÜZELTİLMİŞ TAM veriyle uzlaştırılır (düzeltme-sonrası yeniden değerlendirme)", "test": 33,
+     "bug": "QNB→Ziraat interbank FAST/EFT dekontunda YZ 'SAHTE %88' diyordu: gerekçe 'gönderici ve alıcı IBAN "
+            "aynı (00111=QNB) → aynı-banka HAVALE olmalı ama FAST/EFT → çelişki'. Oysa YZ'nin KENDİ düzelttiği "
+            "alanlarda alıcı IBAN TR19...=ZİRAAT (00010), gönderici QNB (00111) — FARKLI banka, geçerli interbank "
+            "işlem. Sorun MİMARİ: YZ tek geçişte hem alanları düzeltir hem hüküm verir; hükmü DÜZELTMEDEN ÖNCEKİ "
+            "yanlış okumaya (tabloda her satırda göndericinin IBAN'ı görünür) dayanıyor → 'düzeltilmiş alanlar' "
+            "ile 'YZ hükmü' BİRBİRİYLE ÇELİŞİYOR. Ayrıca alıcı banka etiketi düzeltilmiş IBAN'dan türetilmediği "
+            "için 'her ikisi de QNB' yazıyordu.",
+     "fix": "İŞ AKIŞI YENİDEN DÜZENLENDİ — YZ değerlendirmesi artık NİHAİ (düzeltilmiş) veriyle uzlaştırılır: "
+            "(1) reconcile (blok e): YZ alanları düzelttikten sonra taraf banka etiketleri düzeltilmiş IBAN'dan "
+            "YENİDEN türetilir; düzeltmeden önce yanlış IBAN'la firelanan IBAN-bağımlı bulgular (SAMEBANK "
+            "çelişkisi, yanlış rail=HAVALE) düzeltilmiş IBAN+ihraççı ile yeniden sınanıp GEÇERSİZSE KALDIRILIR, "
+            "doğru rail eklenir. (2) HÜKÜM KAPISI (7.96): YZ 'sahte/şüpheli' dediği hâlde düzeltilmiş NİHAİ veride "
+            "SOMUT tahrifat kanıtı (içerik-tahrifatı bulgusu ya da YZ görsel-tahrifatı) YOKSA hüküm 'belirsiz'e "
+            "çekilir, verdict_ham'da ham hüküm saklanır, gerekçeye şeffaf düzeltme notu eklenir. Böylece rapor "
+            "kendi içinde ASLA çelişmez. Kullanıcı kuralı: 'YZ yorumu TAM ve DÜZELTİLMİŞ veriyle yapılmalı.' "
+            "Test #33 kilitler.",
+     "not": "İhraççı QNB (00111) ≠ alıcı Ziraat (00010) → geçerli interbank işlem; 'aynı-banka çelişkisi' YOK."},
     {"id": "Z9", "date": "2026-08-22 02:30", "area": "İHRAÇÇI GÜVENCESİ: yanlış-atanan gönderici IBAN → sahte 'aynı-banka çelişkisi' + yanlış HAVALE giderildi", "test": 32,
      "bug": "Kuveyt Türk'ten Ziraat'a FAST dekontunda (ekran görüntüsü, vision) skor 6/kritik + "
             "SAMEBANK_RAIL_CONTRADICTION + RAIL_IS_HAVALE çıkıyordu. Gerçek: gönderici Kuveyt Türk (00205), "
@@ -1060,6 +1078,60 @@ def _t32_issuer_guard_no_false_samebank():
     return ok, f"samebank-yok={no_samebank}, havale-değil={not_havale}, gönderici-iban-temiz={sender_cleared}"
 
 
+def _t33_ai_verdict_reconciled_after_correction():
+    """TEMEL MİMARİ KURAL: YZ hükmü, alanlar DÜZELTİLDİKTEN sonraki TAM veriyle TUTARLI olmalı. Senaryo:
+    QNB→Ziraat interbank FAST/EFT; YZ (mock) 'sahte' der (eski/yanlış okumaya dayanan 'iki IBAN aynı' gibi bir
+    gerekçeyle) ama düzeltilmiş veride gönderici QNB, alıcı Ziraat (FARKLI banka, geçerli). Düzeltme sonrası:
+    (a) alıcı banka etiketi düzeltilmiş IBAN'dan Ziraat türetilir (yanlış 'QNB' düzelir), (b) SAMEBANK çelişkisi
+    OLUŞMAZ, (c) YZ hükmü 'belirsiz'e çekilir ve verdict_ham='sahte' şeffaflık için saklanır. Rapor çelişmez."""
+    import analyze, ai_adjudicator, banks, ocr, vision_ocr
+    from PIL import Image
+    def vi(body):
+        for kk in range(100):
+            c = "TR%02d%s" % (kk, body)
+            if banks.iban_valid(c) is True:
+                return c
+    qnb = vi("0011100000000120439443")      # QNB 00111
+    ziraat = vi("0001000239626085965001")   # Ziraat 00010 (gerçek alıcı)
+    ocr_text = "QNB Bank A.Ş. www.qnb.com.tr\nGIDEN FAST EFT  EFT TUTARI  EFT ÜCRETİ\nMOBİL BANKACILIK\n"
+    o_ai = (ai_adjudicator.is_enabled, ai_adjudicator.should_adjudicate, ai_adjudicator.adjudicate)
+    o_v = (vision_ocr.is_configured, vision_ocr.extract_from_image, ocr.ocr_pdf_candidates,
+           ocr.ocr_available, ocr.render_page_to_image)
+    ai_adjudicator.is_enabled = lambda: True
+    ai_adjudicator.should_adjudicate = lambda *a, **k: (True, ["test"])
+    ai_adjudicator.adjudicate = lambda *a, **k: {
+        "verdict": "sahte", "confidence": 88,
+        "reasoning_tr": "Gönderici ve alıcı IBAN aynı → aynı-banka HAVALE olmalı ama FAST/EFT → sahte.",
+        "corrected_fields": {"sender.iban": qnb, "receiver.iban": ziraat,
+                             "sender.name": "KEREM YAVUZ", "receiver.name": "Remzi Koç"},
+        "gorsel_tahrifat": []}
+    vision_ocr.is_configured = lambda: True
+    vision_ocr.extract_from_image = lambda *a, **k: {
+        "bank": "QNB Bank A.Ş.", "sender_iban": qnb, "receiver_iban": ziraat,
+        "receiver_bank": "QNB Finansbank",       # YANLIŞ etiket → düzeltilmeli (Ziraat)
+        "sender_name": "KEREM YAVUZ", "receiver_name": "Remzi Koç"}
+    ocr.ocr_available = lambda: True
+    ocr.ocr_pdf_candidates = lambda *a, **k: [ocr_text]
+    ocr.render_page_to_image = lambda *a, **k: Image.new("RGB", (500, 400), "white")
+    try:
+        rep = analyze.analyze_document(_blank_pdf(), "x.png", input_kind="image", use_store=False)
+    finally:
+        (ai_adjudicator.is_enabled, ai_adjudicator.should_adjudicate, ai_adjudicator.adjudicate) = o_ai
+        (vision_ocr.is_configured, vision_ocr.extract_from_image, ocr.ocr_pdf_candidates,
+         ocr.ocr_available, ocr.render_page_to_image) = o_v
+    ex = rep.get("extracted", {})
+    codes = [f.get("code") for f in rep.get("findings_tr", [])]
+    aj = rep.get("yapay_zeka_degerlendirmesi") or {}
+    r_bank = (ex.get("receiver", {}) or {}).get("bank", "")
+    s_bank = (ex.get("sender", {}) or {}).get("bank", "")
+    no_samebank = "SAMEBANK_RAIL_CONTRADICTION" not in codes
+    verdict_fixed = (aj.get("verdict") == "belirsiz" and aj.get("verdict_ham") == "sahte")
+    # Banka etiketleri düzeltilmiş IBAN'dan: alıcı Ziraat, gönderici QNB — FARKLI olmalı (ikisi de QNB DEĞİL)
+    banks_distinct = ("Ziraat" in r_bank and "QNB" in s_bank and r_bank != s_bank)
+    ok = no_samebank and verdict_fixed and banks_distinct
+    return ok, f"samebank-yok={no_samebank}, hüküm-uzlaştı={verdict_fixed}, gönderici-banka={s_bank!r}, alıcı-banka={r_bank!r}, farklı={banks_distinct}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1093,6 +1165,7 @@ _CHECKS = [
     (30, "İhraççı ≠ karşı-taraf bankası (Kuveyt Türk→Ziraat) → banka=Kuveyt, rail=FAST", _t30_issuer_not_confused_by_counterparty_bank),
     (31, "Vision sonrası IBAN OCR onarımı (tek-rakam '9850'→'9650') çalışır", _t31_vision_iban_repaired),
     (32, "İhraççı güvencesi: yanlış-atanan gönderici IBAN → sahte 'aynı-banka çelişkisi' yok", _t32_issuer_guard_no_false_samebank),
+    (33, "YZ hükmü düzeltilmiş TAM veriyle uzlaştırılır (sahte→belirsiz, banka etiketi düzelir)", _t33_ai_verdict_reconciled_after_correction),
 ]
 
 
