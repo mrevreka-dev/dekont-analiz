@@ -34,6 +34,19 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z9", "date": "2026-08-22 02:30", "area": "İHRAÇÇI GÜVENCESİ: yanlış-atanan gönderici IBAN → sahte 'aynı-banka çelişkisi' + yanlış HAVALE giderildi", "test": 32,
+     "bug": "Kuveyt Türk'ten Ziraat'a FAST dekontunda (ekran görüntüsü, vision) skor 6/kritik + "
+            "SAMEBANK_RAIL_CONTRADICTION + RAIL_IS_HAVALE çıkıyordu. Gerçek: gönderici Kuveyt Türk (00205), "
+            "alıcı IBAN Ziraat (00010) → interbank FAST. Kök neden: belgede 'Gönderilen IBAN' (= ALICI IBAN'ı) "
+            "gibi etiketler vision'da göndericiye yanlış atanıp gönderici IBAN'ı Ziraat sanılıyor; iki 'Ziraat "
+            "IBAN' görülünce hem rail HAVALE (aynı banka) hem SAMEBANK çelişkisi YANLIŞ tetikleniyordu.",
+     "fix": "(1) analyze.py: GÖNDERİCİ IBAN ↔ İHRAÇÇI tutarlılık guard'ı — göndericinin bankası = ihraççıdır; "
+            "gönderici IBAN'ının banka kodu ihraççıya ait değilse yanlış-atamadır → alıcı boşsa oraya taşınır, "
+            "doluysa gönderici IBAN'ı TEMİZLENİR (tüm rail/samebank kontrollerinden ÖNCE). (2) "
+            "check_samebank_rail_contradiction artık issuer_codes alır: aynı-banka kararını yanlış-atanabilen "
+            "gönderici IBAN'ına değil, İHRAÇÇI ↔ ALICI IBAN bankası kıyasına dayandırır (ihraççı≠alıcı → çelişki "
+            "yok). Gerçek Akbank aynı-banka+EFT vakası korunur (test #24/#30). Test #32 kilitler.",
+     "not": "İhraççı Kuveyt Türk (00205) ≠ alıcı Ziraat (00010) → interbank FAST, çelişki YOK."},
     {"id": "Z8", "date": "2026-08-21 22:00", "area": "VISION SONRASI IBAN ONARIMI: tek-rakam yanlış okunan IBAN artık onarılıyor", "test": 31,
      "bug": "Kuveyt Türk ekran görüntüsünde alıcı IBAN'ı 'TR65...6085 9650 01' iken sistem '...9850 01' (geçersiz, "
             "6↔8 OCR karışması) gösteriyordu. Kök neden: IBAN OCR-onarımı 'if vision_result is None' ile YALNIZ "
@@ -1013,6 +1026,40 @@ def _t31_vision_iban_repaired():
     return ok, f"alıcı_iban={r_iban} (geçerli={banks.iban_valid(r_iban)}), onarım_kaydı={len(rep.get('iban_ocr_onarim', []))}"
 
 
+def _t32_issuer_guard_no_false_samebank():
+    """İHRAÇÇI GÜVENCESİ: Kuveyt Türk'ten Ziraat'a FAST'te, vision gönderici IBAN'ını YANLIŞLIKLA bir Ziraat
+    IBAN'ı olarak atasa bile (2 farklı Ziraat IBAN) → (a) gönderici IBAN'ı TEMİZLENİR (ihraççı Kuveyt≠Ziraat),
+    (b) SAMEBANK_RAIL_CONTRADICTION tetiklenMEZ, (c) rail HAVALE'ye düşMEZ (metinde FAST). Böylece gerçek bir
+    interbank FAST, yanlış-atanan gönderici IBAN yüzünden 'sahte aynı-banka çelişkisi' üretmez."""
+    import analyze, ocr, vision_ocr
+    from PIL import Image
+    z1 = "TR650001000239626085965001"      # Ziraat
+    z2 = "TR170001002452591457415002"      # farklı Ziraat
+    ocr_text = "KuveytTürk e-Dekont\nIBAN'a Para Transferi (Giden) FAST\nkuveytturk.com.tr\n"
+    o = (vision_ocr.is_configured, vision_ocr.extract_from_image, ocr.ocr_pdf_candidates,
+         ocr.ocr_available, ocr.render_page_to_image)
+    vision_ocr.is_configured = lambda: True
+    vision_ocr.extract_from_image = lambda *a, **k: {
+        "bank": "Kuveyt Türk Katılım", "sender_iban": z1, "receiver_iban": z2,
+        "sender_name": "İSA DEMİRAY", "receiver_name": "kasım AKNAY"}
+    ocr.ocr_available = lambda: True
+    ocr.ocr_pdf_candidates = lambda *a, **k: [ocr_text]
+    ocr.render_page_to_image = lambda *a, **k: Image.new("RGB", (400, 400), "white")
+    try:
+        rep = analyze.analyze_document(_blank_pdf(), "x.png", input_kind="image", use_store=False)
+    finally:
+        (vision_ocr.is_configured, vision_ocr.extract_from_image, ocr.ocr_pdf_candidates,
+         ocr.ocr_available, ocr.render_page_to_image) = o
+    codes = [f.get("code") for f in rep.get("findings_tr", [])]
+    ex = rep.get("extracted", {})
+    s_iban = (ex.get("sender", {}) or {}).get("iban", "")
+    no_samebank = "SAMEBANK_RAIL_CONTRADICTION" not in codes
+    not_havale = "RAIL_IS_HAVALE" not in codes
+    sender_cleared = not s_iban
+    ok = no_samebank and not_havale and sender_cleared
+    return ok, f"samebank-yok={no_samebank}, havale-değil={not_havale}, gönderici-iban-temiz={sender_cleared}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1045,6 +1092,7 @@ _CHECKS = [
     (29, "Bölünmüş gönderici IBAN onarımı (Ziraat) → gönderici≠alıcı, sahte-alarmı yok", _t29_split_iban_reconstruction),
     (30, "İhraççı ≠ karşı-taraf bankası (Kuveyt Türk→Ziraat) → banka=Kuveyt, rail=FAST", _t30_issuer_not_confused_by_counterparty_bank),
     (31, "Vision sonrası IBAN OCR onarımı (tek-rakam '9850'→'9650') çalışır", _t31_vision_iban_repaired),
+    (32, "İhraççı güvencesi: yanlış-atanan gönderici IBAN → sahte 'aynı-banka çelişkisi' yok", _t32_issuer_guard_no_false_samebank),
 ]
 
 

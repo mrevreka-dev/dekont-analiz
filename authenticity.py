@@ -920,44 +920,65 @@ def check_amount_currency_consistency(text: str, bkey: str = "") -> dict | None:
     return None
 
 
-def check_samebank_rail_contradiction(text: str, sender_iban: str, receiver_iban: str) -> dict | None:
+def issuer_iban_codes(bkey: str) -> set:
+    """İhraççı bankanın (bkey) IBAN banka kodları kümesi (ör. 'kuveyt'→{'00205'}). Boşsa boş küme."""
+    return set(_ISSUER_IBAN_CODES.get(bkey) or set())
+
+
+def check_samebank_rail_contradiction(text: str, sender_iban: str, receiver_iban: str,
+                                      issuer_codes: set | None = None) -> dict | None:
     """AYNI-BANKA ↔ 'BANKALARARASI/EFT/FAST' BAŞLIK ÇELİŞKİSİ (sahtecilik).
-    Gönderici ve alıcı IBAN AYNI bankaya aitse işlem banka-içidir; ama dekont başlığı/
-    türü 'bankalar arası' / EFT / FAST diyorsa bu İMKÂNSIZDIR — işlem türü uydurulmuş.
-    (Gerçek banka-içi Akbank transferi 'ÖDEME EMİRLERİ GİRİŞİ' başlığı taşır, 'EFT
-    BANKALAR ARASI' değil.) IBAN'a dayalı olduğundan iki IBAN da mod-97 GEÇERLİ ve FARKLI
-    olmalı — böylece fotoğraf/OCR okuma hatası yanlış-pozitif üretmez."""
+    Gönderici ve alıcı AYNI bankadaysa işlem banka-içidir; ama dekont başlığı/türü 'bankalar arası' /
+    EFT / FAST diyorsa bu İMKÂNSIZDIR — işlem türü uydurulmuş.
+    GÜVENİLİR TARAF BELİRLEME: Göndericinin bankası = belge İHRAÇÇISIDIR (üst başlık/logo). Gönderici
+    IBAN'ı çoğu dekontta YAZILI DEĞİLDİR ya da OCR/vision onu yanlış okuyup/atayıp KARŞI-TARAF (alıcı)
+    IBAN'ıyla karıştırabilir. Bu yüzden 'aynı banka mı' kararı ÖNCELİKLE İHRAÇÇI (issuer_codes) ile ALICI
+    IBAN bankası KODU kıyaslanarak verilir: ihraççı ≠ alıcı bankası ise işlem BANKALARARASIDIR → çelişki
+    YOKTUR (ör. Kuveyt Türk'ten Ziraat'a FAST — gönderici IBAN'ı yanlış Ziraat okunsa bile). issuer_codes
+    bilinmiyorsa ESKİ davranışa (gönderici IBAN'ı vs alıcı IBAN, ikisi de geçerli+aynı banka+farklı) düşülür."""
     if not text:
         return None
     import banks as _b
-    s = _b.normalize_iban(sender_iban or "")
-    r = _b.normalize_iban(receiver_iban or "")
-    if not s or not r or s == r:
-        return None
-    if _b.iban_valid(s) is False or _b.iban_valid(r) is False:
-        return None                     # geçersiz IBAN = okuma hatası; burada karışma
-    sc, rc = _b.iban_bank_code(s), _b.iban_bank_code(r)
-    if not sc or not rc or sc != rc:
-        return None                     # farklı banka → çelişki yok (gerçek bankalararası)
     ns = _tr_low(text).replace(" ", "")
     asserts_interbank = ("bankalararasi" in ns or "eftbankalar" in ns or "dekont/eft" in ns
                          or "eftucreti" in ns or "geceft" in ns
                          or bool(re.search(r"(?<![a-z])fast(?![a-z])", _tr_low(text))))
     if not asserts_interbank:
         return None                     # banka-içi başlık (ör. ÖDEME EMİRLERİ) → sorun yok
-    bank_lbl = _b.bank_label_from_iban(s) or f"kod {sc}"
+    r = _b.normalize_iban(receiver_iban or "")
+    rc = _b.iban_bank_code(r) if (_b.iban_valid(r) is True) else ""
+
+    # ÖNCELİK: İHRAÇÇI (gönderici bankası) ↔ ALICI IBAN bankası. Gönderici IBAN'ına GÜVENME.
+    if issuer_codes:
+        if not rc:
+            return None                 # alıcı IBAN geçerli okunamadı → iddia etme
+        if rc not in issuer_codes:
+            return None                 # ihraççı (gönderici) ≠ alıcı bankası → BANKALARARASI, çelişki YOK
+        # rc ihraççı kodlarında → alıcı da göndericiyle AYNI bankada; başlık interbank → ÇELİŞKİ
+        sc = rc
+    else:
+        # İhraççı bilinmiyor → eski, IBAN-çifti temelli kesin kontrol (yanlış-pozitife karşı katı)
+        s = _b.normalize_iban(sender_iban or "")
+        if not s or not r or s == r:
+            return None
+        if _b.iban_valid(s) is False or _b.iban_valid(r) is False:
+            return None
+        sc = _b.iban_bank_code(s)
+        if not sc or not rc or sc != rc:
+            return None
+    bank_lbl = _b.bank_label_from_iban(r) or f"kod {sc}"
     return {
         "code": "SAMEBANK_RAIL_CONTRADICTION", "severity": "critical", "weight": 46,
-        "tr": f"İŞLEM TÜRÜ ÇELİŞKİSİ (SAHTECİLİK): Gönderici ve alıcı IBAN AYNI bankaya ait "
+        "tr": f"İŞLEM TÜRÜ ÇELİŞKİSİ (SAHTECİLİK): Gönderici (ihraççı) ve alıcı AYNI bankaya ait "
               f"({bank_lbl}, banka kodu {sc}); yani bu banka-içi bir transferdir. Ancak dekont "
               f"kendini 'BANKALAR ARASI / EFT / FAST' olarak gösteriyor — aynı bankadaki iki hesap "
               f"arasında bankalararası (EFT/FAST) işlem YAPILAMAZ. İşlem türü/başlık uydurulmuş; "
               f"güçlü sahtecilik işareti. (Gerçek banka-içi transfer farklı bir başlık taşır.)",
-        "en": f"RAIL CONTRADICTION (FORGERY): sender and receiver IBANs are at the SAME bank "
+        "en": f"RAIL CONTRADICTION (FORGERY): sender (issuer) and receiver are at the SAME bank "
               f"({bank_lbl}, code {sc}) — an intra-bank transfer — yet the receipt labels itself "
               f"'INTERBANK / EFT / FAST'. A same-bank transfer cannot be EFT/FAST; the type was "
               f"fabricated. Strong forgery signal.",
-        "detail": f"sender_code={sc} receiver_code={rc}"}
+        "detail": f"issuer/sender_code={sc} receiver_code={rc}"}
 
 
 # HAVALE'ye ÖZGÜ (banka-içi) ücret/işlem etiketleri — İ-güvenli, boşluk-duyarsız.

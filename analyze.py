@@ -782,6 +782,25 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         try:
             import authenticity as _auth
             _bkey = _auth.bank_key(ex.bank)
+            # GÖNDERİCİ IBAN ↔ İHRAÇÇI TUTARLILIĞI (yanlış-atama düzeltmesi): Göndericinin bankası =
+            # belge İHRAÇÇISIDIR. Bir dekontta çoğu kez gönderici IBAN'ı YAZILMAZ; OCR/vision 'Gönderilen
+            # IBAN' (= ALICI IBAN'ı) gibi etiketleri yanlışlıkla göndericiye atayabilir. Böyle olunca
+            # gönderici IBAN'ı ihraççıdan FARKLI bankaya ait çıkar ve hem rail'i (yanlış aynı-banka→HAVALE)
+            # hem SAMEBANK çelişkisini yanlış tetikler. Kural: gönderici IBAN'ının banka kodu ihraççıya AİT
+            # DEĞİLSE bu bir yanlış-atamadır → alıcı boşsa oraya taşı, doluysa gönderici IBAN'ını TEMİZLE.
+            # (Yalnız ihraççı biliniyorsa; dijital-metin güveni değişmez.)
+            try:
+                import banks as _bkv0
+                _iss_codes0 = _auth.issuer_iban_codes(_bkey)
+                _s_n0 = _bkv0.normalize_iban(ex.sender.iban or "")
+                if _iss_codes0 and _s_n0 and _bkv0.iban_valid(_s_n0) is True:
+                    _s_code0 = _bkv0.iban_bank_code(_s_n0)
+                    if _s_code0 and _s_code0 not in _iss_codes0:
+                        if not _bkv0.normalize_iban(ex.receiver.iban or ""):
+                            ex.receiver.iban = _s_n0      # aslında ALICI IBAN'ıydı → alıcıya taşı
+                        ex.sender.iban = ""               # gönderici IBAN'ı güvenilmez → temizle
+            except Exception:
+                pass
             _txn_dt, _ = _tim.parse_content_datetime(ex.transaction.date or "")
             # GLOBAL kural (banka bağımsız): PDFium ile üretilmiş dekont = SAHTE
             _pf = _auth.check_pdfium(struct.producer)
@@ -921,9 +940,12 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                     ex.doc_kind = {"eft": "EFT", "fast": "FAST"}.get(_rail_kind, "Bankalararası transfer (EFT/FAST)")
             except Exception:
                 pass
-            # AYNI-BANKA ↔ 'BANKALARARASI/EFT/FAST' başlık çelişkisi (sahtecilik). IBAN'lar mod-97
-            # geçerli+aynı banka olduğundan fotoğrafta da güvenilir; okuma hatası bastırılır.
-            _sbc = _auth.check_samebank_rail_contradiction(text_layout, ex.sender.iban, ex.receiver.iban)
+            # AYNI-BANKA ↔ 'BANKALARARASI/EFT/FAST' başlık çelişkisi (sahtecilik). Gönderici bankası =
+            # İHRAÇÇI olduğundan, karar ihraççı kodları ile ALICI IBAN bankası kıyaslanarak verilir
+            # (yanlış-atanan gönderici IBAN'ına GÜVENİLMEZ → Kuveyt Türk→Ziraat gibi vakalarda yanlış-pozitif yok).
+            _sbc = _auth.check_samebank_rail_contradiction(
+                text_layout, ex.sender.iban, ex.receiver.iban,
+                issuer_codes=_auth.issuer_iban_codes(_bkey))
             if _sbc:
                 findings.append(Finding(_sbc["code"], _sbc["severity"], "content", _sbc["weight"],
                                         tr=_sbc["tr"], en=_sbc["en"], detail=_sbc.get("detail", "")))
@@ -1252,8 +1274,10 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         _exist_codes_rc = {f.code for f in findings}
         _s_iban_ai = _bnk_rc.normalize_iban((_extracted_dict.get("sender", {}) or {}).get("iban") or "")
         _r_iban_ai = _bnk_rc.normalize_iban((_extracted_dict.get("receiver", {}) or {}).get("iban") or "")
+        _iss_codes_rc = _auth_rc.issuer_iban_codes(_auth_rc.bank_key((_extracted_dict.get("bank") or "")))
         if "SAMEBANK_RAIL_CONTRADICTION" not in _exist_codes_rc:
-            _sbc2 = _auth_rc.check_samebank_rail_contradiction(text_layout, _s_iban_ai, _r_iban_ai)
+            _sbc2 = _auth_rc.check_samebank_rail_contradiction(
+                text_layout, _s_iban_ai, _r_iban_ai, issuer_codes=_iss_codes_rc)
             if _sbc2:
                 _post_ai.append(Finding(_sbc2["code"], _sbc2["severity"], "content", _sbc2["weight"],
                                         tr=_sbc2["tr"], en=_sbc2["en"], detail=_sbc2.get("detail", "")))
