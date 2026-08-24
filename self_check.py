@@ -34,6 +34,21 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z18", "date": "2026-08-24 04:25", "area": "BANKA-BAZLI İYİLEŞTİRMELER + DOUBLE-CHECK: skor %100'de bile AI teyidi; QNB vision rail eskalasyonu; REF-no ±1 tolerans", "test": 42,
+     "bug": "Son taramaların banka-bazlı teşhisi: (1) Kullanıcı, skor %100 olsa da AI'ın çift-kontrol yapmasını "
+            "istedi — should_adjudicate temiz dijital PDF'lerde AI'ı çağırmıyordu (Garanti PDF'lerde ai_ok=0). "
+            "(2) QNB fotoğraflarında tesseract 'GİDEN FAST EFT'/'GİDEN EFT' ücret/rail etiketini okuyamayınca "
+            "kural motoru rail'i kaçırıyor; AI görüntüden okusa bile çapraz-kontrol yalnız EFT ekliyordu, FAST/"
+            "HAVALE eklenmiyordu → işlem türü ekrana boş geliyordu. (3) 03:37 QNB PDF'inde REF_ID_LENGTH_MISMATCH "
+            "yanlış-pozitifi: profil sadece 3 örnekten türetildiği için tek-değerli (sorgu_no={10}) ve gerçek "
+            "dekont 1 hane oynayınca sapma sanılıyordu.",
+     "fix": "(1) should_adjudicate artık HER dekontta True (double-check); güvenlik: AI çelişki yaratamaz, "
+            "7.96 kapısı kanıtsız 'sahte'yi 'belirsiz'e çevirir, skor/kararı DÜŞÜRMEZ. (2) c2-b bloğu: kural "
+            "motoru rail'i HİÇ üretmediğinde AI'ın okuduğu FAST/HAVALE de RAIL_IS_* olarak eklenir (yalnız "
+            "hiçbir rail kodu yokken; kural motoru rail'i OTORİTER). (3) REF-no uzunluğuna ±1 hane toleransı — "
+            "yalnız 2+ hane sapma yakalanır. Test #41 (double-check) + #42 (±1 tolerans) kilitler. Ziraat "
+            "CONSISTENCY_FAIL incelendi: fotoğrafta zaten info (weight 0), skoru düşürmüyor → düzeltme gerekmedi.",
+     "not": "Kullanıcı kuralı: 'skor %100 olsa da AI çağır, double-check olsun' + banka-bazlı teşhis iyileştirmeleri."},
     {"id": "Z17", "date": "2026-08-24 04:05", "area": "BÜTÜNSEL KONTROL-ÇAKIŞMASI DENETİMİ: bir kontrolün diğerini ezdiği 4 yol kapatıldı (alt-ajan analizi)", "test": 40,
      "bug": "Tüm pipeline 'bir kontrol diğerini eziyor mu' diye denetlendi. Bulunan gerçek çakışmalar: "
             "(1) KRİTİK: _remove_codes yalnız 'findings'e uygulanıyordu; _post_ai ekleme döngüsü kaldırılan kodu "
@@ -1415,6 +1430,40 @@ def _t40_definitive_eft_fee_protection():
     return ok, f"gec-eft={a}, eft-tutari={b}, fast-degil={c}, defter-tuzagi-yok={d}"
 
 
+def _t41_ai_always_double_checks():
+    """DOUBLE-CHECK (kullanıcı kuralı): skor %100 / dekont tertemiz olsa BİLE her dekont YZ'ye gitmeli.
+    should_adjudicate her durumda True dönmeli. Testler: (a) tertemiz dijital PDF (bulgu yok, tüm alanlar
+    dolu) → True; (b) neden listesinde 'double-check' geçmeli; (c) tetikli durum (kritik bulgu) → yine True."""
+    import ai_adjudicator as _aj
+    clean = {"sender": {"name": "AHMET", "iban": "TR330006100519786457841326"},
+             "receiver": {"name": "MEHMET", "iban": "TR190001009011147534405001"},
+             "amount": {"value": 100.0},
+             "transaction": {"document_no": "123456", "ref_no": "789012", "sequence_number": "1"}}
+    go1, r1 = _aj.should_adjudicate([], clean, "pdf")           # tertemiz dijital PDF
+    go2, r2 = _aj.should_adjudicate([{"code": "AMOUNT_MISMATCH", "severity": "critical"}], clean, "pdf")
+    a = go1 is True
+    b = any("double-check" in x.lower() or "çift-kontrol" in x.lower() for x in r1)
+    c = go2 is True
+    ok = a and b and c
+    return ok, f"temiz-pdf-de-cagrilir={a}, double-check-nedeni={b}, tetikli-de-cagrilir={c}"
+
+
+def _t42_ref_id_length_tolerance():
+    """REFERANS NUMARA UZUNLUĞU ±1 HANE TOLERANSI (yanlış-pozitif azaltma): profiller sadece 3 örnekten
+    türetildiği için izinli uzunluk çoğu zaman TEK değer (QNB sorgu_no={10}). Gerçek dekontta numara 1 hane
+    oynayabilir → yalnız 2+ hane sapma SAPMA sayılmalı. Testler: (a) 10 hane (tam) → bulgu YOK; (b) 11 hane
+    (±1) → bulgu YOK; (c) 7 hane (3 sapma) → REF_ID_LENGTH_MISMATCH VAR."""
+    import reference_profiles as _rp
+    def _has_mismatch(digits):
+        out = _rp.check_against_reference("qnb", f"SORGU NO: {'1'*digits}")
+        return any(o.get("code") == "REF_ID_LENGTH_MISMATCH" for o in out)
+    a = not _has_mismatch(10)     # tam eşleşme → yok
+    b = not _has_mismatch(11)     # ±1 tolerans → yok
+    c = _has_mismatch(7)          # 3 hane sapma → yakalanır
+    ok = a and b and c
+    return ok, f"tam-eslesme-yok={a}, ±1-tolerans-yok={b}, 3-sapma-yakalanir={c}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1456,6 +1505,8 @@ _CHECKS = [
     (38, "QNB'ye özel: 'GİDEN EFT'→EFT, 'GİDEN FAST EFT'→FAST; sadece QNB kanalı (rail tüm bankalarda/PDF'de)", _t38_qnb_giden_eft_rule),
     (39, "Tek otoriter rail: RAIL_IS_FAST+RAIL_IS_EFT gibi çelişki nihai raporda kalmaz (düzeltilmiş veri otoriter)", _t39_single_authoritative_rail),
     (40, "Kesin EFT ücret kanıtı ('GEÇ EFT'/'EFT TUTARI') korunur: yanlış IBAN düzeltmesi EFT riskini ezemez", _t40_definitive_eft_fee_protection),
+    (41, "Double-check: skor %100 olsa da YZ her zaman çağrılır (should_adjudicate hep True)", _t41_ai_always_double_checks),
+    (42, "Referans no uzunluğu ±1 hane toleransı: gerçek dekont yanlış-pozitifi yok, 2+ sapma yakalanır", _t42_ref_id_length_tolerance),
 ]
 
 

@@ -102,7 +102,15 @@ def should_adjudicate(findings: list, extraction: dict, input_kind: str = "pdf")
             if _get(extraction or {}, f)]
     if not _ids:
         reasons.append("İşlem/referans numarası okunamadı (işlem no, referans no, sıra no boş).")
-    return (bool(reasons), reasons)
+    # KULLANICI KURALI (DOUBLE-CHECK): skor %100 / dekont tertemiz olsa BİLE her dekont YZ'ye gider.
+    # YZ ikinci bir göz olarak teyit eder; kural motorunun kaçırabileceği görsel/bağlamsal tahrifatı
+    # yakalar. GÜVENLİK: YZ ASLA çelişki yaratmaz — düzeltilmiş deterministik veri OTORİTERDİR (bkz.
+    # 7.96 hüküm kapısı + rail_codes_to_remove + has_definitive_eft_fee). YZ yalnız KANITLA (gorsel_tahrifat
+    # ≥50 / somut forgery bulgusu) skoru düşürebilir; kanıtsız 'sahte' hükmü nihai skoru/kararı DÜŞÜRMEZ,
+    # yalnız 'belirsiz'e çevrilip uzlaştırma notuyla gösterilir. Bu yüzden double-check güvenlidir.
+    if not reasons:
+        reasons.append("Rutin çift-kontrol (double-check): skor yüksek olsa da YZ teyidi (kullanıcı kuralı).")
+    return (True, reasons)
 
 
 def _img_b64(pil_img, max_dim: int = 1568):   # Anthropic optimal ~1568px; daha büyüğü hız kazandırmaz

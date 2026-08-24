@@ -93,7 +93,12 @@ def check_against_reference(bank_key: str, text: str) -> list:
         if not m:
             continue
         ln = len(m.group(1))
-        if ln not in allowed:
+        # ±1 HANE TOLERANSI (YANLIŞ-POZİTİF AZALTMA): profiller yalnız 3 örnekten türetildiği için izinli
+        # hane kümesi çoğu zaman TEK değerdir (ör. QNB sorgu_no={10}). Gerçek dekontlarda numara uzunluğu
+        # meşru olarak 1 hane oynayabilir (sıfır-dolgu/format farkı) → yalnız izinli uzunlukların HEPSİNDEN
+        # en az 2 hane sapıyorsa SAPMA say. Böylece 03:37 QNB'de görülen gerçek-dekont yanlış-pozitifi biter,
+        # ama açıkça uydurulmuş (ör. 7 hane ↔ beklenen 10) numaralar hâlâ yakalanır.
+        if allowed and min(abs(ln - a) for a in allowed) >= 2:
             _exp = "/".join(str(x) for x in sorted(allowed))
             out.append({
                 "code": "REF_ID_LENGTH_MISMATCH", "severity": "medium", "weight": 16,

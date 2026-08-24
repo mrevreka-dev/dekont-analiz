@@ -1371,6 +1371,22 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                     "Even if genuine, the payment may not have arrived — confirm the money landed before "
                     "crediting. Only HAVALE and FAST settle instantly and finally."),
                 detail="rail=eft source=ai"))
+        # (c2-b) FAST/HAVALE VISION ESKALASYONU (özellikle QNB fotoğrafları): kural motoru rail'i HİÇ
+        #     üretemediyse (fotoğrafta 'GİDEN FAST EFT'/'GİDEN EFT'/ücret kalemi okunamadı → RAIL kodu yok)
+        #     ve YZ görüntüden kanalı FAST ya da HAVALE okuduysa, bu bilgiyi EKLERİZ ki işlem türü ekrana
+        #     BOŞ gelmesin. ÇELİŞKİ KORUMASI: yalnız HİÇBİR rail kodu yokken çalışır (kural motoru bir rail
+        #     belirlediyse o OTORİTERDİR, YZ ezmez). EFT yukarıda ayrıca ele alınır (risk uyarısıyla).
+        _has_any_rail = bool(_exist_codes_eft & _RAIL_CODES_ALL)
+        if _ai_kanal in ("FAST", "HAVALE") and not _has_any_rail:
+            _ai_rail_code = "RAIL_IS_FAST" if _ai_kanal == "FAST" else "RAIL_IS_HAVALE"
+            _ai_rail_tr = ("İşlem türü FAST (YZ görüntü incelemesi) — para anında ve kesin hesaba geçer."
+                           if _ai_kanal == "FAST" else
+                           "İşlem türü banka-içi HAVALE (YZ görüntü incelemesi) — para anında hesaba geçer.")
+            _ai_rail_en = ("Transaction rail is FAST (AI image review) — settles instantly and finally."
+                           if _ai_kanal == "FAST" else
+                           "Intra-bank HAVALE (AI image review) — settles instantly.")
+            _post_ai.append(Finding(_ai_rail_code, "info", "content", 0,
+                                    tr=_ai_rail_tr, en=_ai_rail_en, detail=f"rail={_ai_kanal.lower()} source=ai"))
     except Exception:
         pass
 
