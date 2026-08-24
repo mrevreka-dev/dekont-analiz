@@ -299,6 +299,19 @@ async def scan_log_api(q: str | None = None, limit: int = 20):
     return {"query": q or "", "count": len(rows), "results": rows}
 
 
+@app.post("/api/v1/store/reset")
+async def store_reset_api(confirm: str = "", scope: str = "detection"):
+    """ESKİ VERİYİ SİLER (kirli/geçmiş kayıtlar). GÜVENLİK: confirm='EVET-SIL' zorunlu (yanlışlıkla
+    silmeyi önler). scope='detection' (varsayılan) → analyses+receipts+report_cache; scope='all' → +
+    günlükler ve öğrenilenler. Şema korunur, sadece satırlar silinir. Örnek:
+    POST /api/v1/store/reset?confirm=EVET-SIL&scope=detection"""
+    if confirm != "EVET-SIL":
+        raise HTTPException(400, "Onay gerekli: confirm=EVET-SIL parametresini ekleyin.")
+    import store as _st
+    res = _st.reset_history(scope if scope in ("detection", "all") else "detection")
+    return res
+
+
 @app.get("/api/v1/unknown_banks")
 async def unknown_banks_api(limit: int = 200):
     """BİLİNMEYEN BANKALAR: gönderici IBAN banka kodu tanınan listede (IBAN_BANK_CODES) olmayan dekontlar.

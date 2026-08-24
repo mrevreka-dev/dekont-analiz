@@ -725,6 +725,39 @@ def diag_sample_file(sha256: str):
     return None, None
 
 
+def reset_history(scope: str = "detection") -> dict:
+    """ESKİ VERİYİ SİLER (kullanıcı isteği). scope:
+      - 'detection' (varsayılan): numara-tekrarı/kara-liste kaynağı + önbellek → analyses, receipts,
+        report_cache. (Öğrenilen ipuçları/tarifeler ve denetim günlükleri KORUNUR.)
+      - 'all': yukarıdakiler + scan_log, diag_log (denetim günlükleri) + field_hints, bank_corpus (öğrenilenler).
+        (unknown_banks KORUNUR — listeye eklenecek bankalar.)
+    Döner: {silinen_tablolar: {tablo: satır_sayısı}}. Şema DEĞİŞMEZ, sadece satırlar silinir."""
+    if not enabled():
+        return {"ok": False, "reason": "store disabled"}
+    _det = ["analyses", "receipts", "report_cache"]
+    _all = _det + ["scan_log", "diag_log", "field_hints", "bank_corpus"]
+    tables = _all if scope == "all" else _det
+    result = {}
+    try:
+        con = _connect()
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+    try:
+        for t in tables:
+            try:
+                n = con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                con.execute(f"DELETE FROM {t}")
+                result[t] = n
+            except Exception:
+                result[t] = "hata"
+        con.commit()
+        return {"ok": True, "scope": scope, "silinen": result}
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+    finally:
+        con.close()
+
+
 def log_unknown_bank(code: str, ai_bank_name: str = "", rail: str = "", sample_sha256: str = "") -> bool:
     """Bilinmeyen banka kodunu (gönderici IBAN kodu listede yok) kaydeder → gün sonu IBAN_BANK_CODES'a
     eklenmek üzere. Aynı kod tekrar gelirse hit_count artar, YZ'nin bulduğu banka adı/rail güncellenir."""
