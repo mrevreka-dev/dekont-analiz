@@ -888,14 +888,16 @@ def check_number_reuse(report: dict) -> list[dict]:
             # işlem tarihi karışması, isim maskeleme) ve aynı dekontta YANLIŞ 'sahte' üretiyordu. Yani numara
             # aynı iken TUTAR pozitif farklıysa YA DA iki taraf da geçerli-IBAN olup farklıysa → kopyala-yapıştır
             # sahteciliği; aksi halde AYNI işlem varsayılır ve bulgu verilmez.
+            # FARKLILIK KARARI YALNIZ TUTARA DAYANIR (en kararlı re-tarama değişmezi). Alıcı IBAN farkı
+            # ölçüt DIŞI: (1) OCR/vision aynı dekontu her taramada biraz farklı okuyabiliyor; (2) geçmişte
+            # hatalı çıkarımlar aynı dekont için farklı alıcı IBAN (ör. yanlış gönderici IBAN'ına düşme)
+            # kaydetmiş olabilir → 'farklı IBAN' YANLIŞ 'sahte' üretiyordu. Sahtecilikte numara kopyalanıp
+            # TUTAR neredeyse her zaman değiştirilir; numara aynı + tutar POZİTİF farklı → kopyala-yapıştır.
+            # Numara aynı + tutar aynı → AYNI işlem/dekont, bulgu ÜRETİLMEZ (kullanıcı kuralı: aynı dekont uyarı vermez).
             _forgery = None
             for pr in rows:
                 p_amt = _round2(pr[1])
-                p_riban = re.sub(r"\s+", "", (pr[5] or "")).upper()
-                amt_diff = (_cur_amt is not None and p_amt is not None and _cur_amt != p_amt)
-                riban_diff = bool(_cur_riban and p_riban and _cur_riban != p_riban
-                                  and _iban_valid_safe(_cur_riban) is True and _iban_valid_safe(p_riban) is True)
-                if amt_diff or riban_diff:
+                if _cur_amt is not None and p_amt is not None and _cur_amt != p_amt:
                     _forgery = pr
                     break
             if _forgery is None:
@@ -1090,13 +1092,10 @@ def check_blocklist(report: dict) -> list[dict]:
                 # 'farklı belge' kanıtı değildir → atla (FP önler).
                 if p_amt is None:
                     continue
-                # Farklılık YALNIZCA en kararlı alanlardan: TUTAR ya da kesin geçerli+farklı ALICI IBAN.
-                # (Tarih ve isim FARK KRİTERİNDEN ÇIKARILDI — re-taramada değişip aynı dekonta yanlış
-                # kara-liste üretiyorlardı.)
-                amt_diff = (_cur_amt is not None and _cur_amt != p_amt)
-                riban_diff = bool(_cur_riban and p_riban and _cur_riban != p_riban
-                                  and _iban_valid_safe(_cur_riban) is True and _iban_valid_safe(p_riban) is True)
-                if amt_diff or riban_diff:
+                # Farklılık YALNIZCA TUTARA dayanır (en kararlı re-tarama değişmezi). Alıcı IBAN farkı ölçüt
+                # DIŞI: OCR/vision varyansı ve geçmiş hatalı çıkarımlar aynı dekonta yanlış kara-liste
+                # üretiyordu. Numara aynı + tutar POZİTİF farklı → gerçekten farklı belge; tutar aynı → aynı dekont.
+                if _cur_amt is not None and _cur_amt != p_amt:
                     hit_seq = _pr   # gerçekten FARKLI bir belge → kara-liste göstergesi
                     break
         print(f"[blocklist] bank={f['bank']!r} seq={f['seq_number']!r} sha={f['sha256'][:10]} "

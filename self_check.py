@@ -34,6 +34,17 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z13", "date": "2026-08-24 02:55", "area": "NUMBER_REUSE/kara-liste: aynı dekont tekrar taramada yanlış-pozitif giderildi (forgery kararı YALNIZ tutar)", "test": 36,
+     "bug": "Aynı dekont tekrar tarandığında NUMBER_REUSE (işlem/sıra/ref no tekrarı) yanlışlıkla çıkıyordu. "
+            "Neden: farklılık kararı 'tutar VEYA farklı geçerli alıcı IBAN'a dayanıyordu; oysa aynı dekont her "
+            "taramada biraz farklı okunabiliyor ve geçmişteki HATALI çıkarımlar (ör. alıcı IBAN'ın göndericinin "
+            "IBAN'ına düşmesi) aynı dekont için farklı IBAN kaydetmiş → 'farklı IBAN → sahte' yanlış-pozitifi. "
+            "Kullanıcı kuralı: aynı dekont tekrar taranınca uyarı OLMAMALI.",
+     "fix": "check_number_reuse ve check_blocklist forgery-farkı kararı artık YALNIZ TUTAR farkına dayanır "
+            "(en kararlı re-tarama değişmezi; sahtecilikte numara kopyalanıp tutar değiştirilir). Alıcı IBAN "
+            "farkı ölçüt DIŞI. Numara aynı + tutar aynı → aynı işlem, bulgu YOK; numara aynı + tutar POZİTİF "
+            "farklı → kopyala-yapıştır sahteciliği. Aynı dosya (sha256) zaten dışlanıyor. Test #36 kilitler.",
+     "not": "Alıcı IBAN çıkarımı ayrıca düzeltildi (test #35); bu ikisi birlikte aynı-dekont FP'sini bitirir."},
     {"id": "Z12", "date": "2026-08-24 02:40", "area": "ALICI IBAN OCR-TOLERANSLI KURTARMA (QNB): 'ALICI IRAN' + boşluk → yanlış aynı-banka/SAHTE giderildi", "test": 35,
      "bug": "QNB dekontunda alıcı IBAN'ı (TR19...=Ziraat) alıcı ADINA sızmış, alıcı IBAN alanı boş kalıp "
             "göndericinin QNB IBAN'ına (TR35) düşüyordu → iki IBAN aynı (QNB) → YZ 'SAHTE %92 (aynı-banka ama "
@@ -1203,6 +1214,36 @@ def _t35_receiver_iban_ocr_tolerant():
     return ok, f"alıcı-iban={r_ib}(geçerli={_b.iban_valid(r_ib)}), farklı-banka={diff_bank}, ad-temiz={name_clean}({ex.receiver.name!r})"
 
 
+def _t36_number_reuse_same_receipt_no_fp():
+    """AYNI DEKONT TEKRAR TARAMA → NUMBER_REUSE YOK (kullanıcı kuralı, tekrar eden hata). Forgery kararı
+    YALNIZ TUTAR farkına dayanır; alıcı IBAN farkı ölçüt DIŞI (OCR/vision varyansı + geçmiş hatalı çıkarımlar
+    aynı dekonta yanlış 'sahte' üretiyordu). Aynı numara+aynı tutar (alıcı IBAN OCR'dan farklı okunsa bile) →
+    bulgu YOK; aynı numara+FARKLI tutar → NUMBER_REUSE (gerçek kopyala-yapıştır)."""
+    import store as _s
+    import os, tempfile
+    _prev = os.environ.get("DEKONT_DB_PATH")
+    os.environ["DEKONT_DB_PATH"] = tempfile.mktemp(suffix=".db")
+    try:
+        def rep(sha, riban, amt):
+            return {"file": {"sha256": sha}, "extracted": {"bank": "QNB Finansbank",
+                    "sender": {"name": "KEREM", "iban": "TR350011100000000120439443"},
+                    "receiver": {"name": "Remzi", "iban": riban}, "amount": {"value": amt},
+                    "transaction": {"document_no": "202608219233777", "ref_no": "1642839263", "sequence_number": ""}},
+                    "score": {"authenticity_score": 70, "risk_level": "low"},
+                    "verdicts": {"overall": {"state": "neutral"}}, "classification": {"is_receipt": True},
+                    "findings_tr": []}
+        _s.log_analysis(rep("sha_A", "TR350011100000000120439443", 100.0))   # eski (hatalı IBAN)
+        same = _s.check_number_reuse(rep("sha_B", "TR190001009011147534405001", 100.0))  # aynı dekont, doğru IBAN
+        diff = _s.check_number_reuse(rep("sha_C", "TR190001009011147534405001", 250.0))  # farklı tutar
+    finally:
+        if _prev is not None:
+            os.environ["DEKONT_DB_PATH"] = _prev
+    same_ok = not any(o.get("code") == "NUMBER_REUSE" for o in same)
+    diff_ok = any(o.get("code") == "NUMBER_REUSE" for o in diff)
+    ok = same_ok and diff_ok
+    return ok, f"aynı-dekont-bulgu-yok={same_ok}, farklı-tutar-yakalanır={diff_ok}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1239,6 +1280,7 @@ _CHECKS = [
     (33, "YZ hükmü düzeltilmiş TAM veriyle uzlaştırılır (sahte→belirsiz, banka etiketi düzelir)", _t33_ai_verdict_reconciled_after_correction),
     (34, "Banka tespiti: gönderici IBAN kodu birincil (QNB≠Enpara), domain yedek, bilinmeyen kod", _t34_bank_detection_sender_iban_first),
     (35, "Alıcı IBAN OCR-toleranslı kurtarma (ALICI IRAN + boşluk) → gönderici≠alıcı", _t35_receiver_iban_ocr_tolerant),
+    (36, "Aynı dekont tekrar tarama → NUMBER_REUSE yok (forgery kararı yalnız tutar farkı)", _t36_number_reuse_same_receipt_no_fp),
 ]
 
 
