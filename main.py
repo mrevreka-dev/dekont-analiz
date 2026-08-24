@@ -300,15 +300,18 @@ async def scan_log_api(q: str | None = None, limit: int = 20):
 
 
 @app.post("/api/v1/store/reset")
-async def store_reset_api(confirm: str = "", scope: str = "detection"):
-    """ESKİ VERİYİ SİLER (kirli/geçmiş kayıtlar). GÜVENLİK: confirm='EVET-SIL' zorunlu (yanlışlıkla
-    silmeyi önler). scope='detection' (varsayılan) → analyses+receipts+report_cache; scope='all' → +
-    günlükler ve öğrenilenler. Şema korunur, sadece satırlar silinir. Örnek:
-    POST /api/v1/store/reset?confirm=EVET-SIL&scope=detection"""
+async def store_reset_api(confirm: str = "", scope: str = "reuse"):
+    """ESKİ/KİRLİ VERİYİ SİLER. GÜVENLİK: confirm='EVET-SIL' zorunlu (yanlışlıkla silmeyi önler).
+    scope='reuse' (VARSAYILAN) → CERRAHİ: yalnız işe yaramayan/eksik (alıcı IBAN+ad+tutar net
+    okunamadığı halde numarayla kaydedilmiş) numara-tekrarı satırları silinir; TAM kayıtlar, önbellek,
+    ÖĞRENİLEN veriler (field_hints/bank_corpus/unknown_banks) ve günlükler KORUNUR.
+    scope='detection' → analyses+receipts+report_cache tamamen temizlenir (öğrenilenler korunur).
+    scope='all' → + günlükler ve öğrenilenler. Şema korunur, sadece satırlar silinir. Örnek:
+    POST /api/v1/store/reset?confirm=EVET-SIL&scope=reuse"""
     if confirm != "EVET-SIL":
         raise HTTPException(400, "Onay gerekli: confirm=EVET-SIL parametresini ekleyin.")
     import store as _st
-    res = _st.reset_history(scope if scope in ("detection", "all") else "detection")
+    res = _st.reset_history(scope if scope in ("reuse", "detection", "all") else "reuse")
     return res
 
 

@@ -34,6 +34,16 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z14", "date": "2026-08-24 03:05", "area": "CERRAHİ SIFIRLAMA (reset scope='reuse'): öğrenilen veriye dokunmadan sadece işe yaramayan/eksik numara kayıtları temizlenir", "test": 37,
+     "bug": "Eski/kirli veriyi silmek için ilk eklenen reset 'detection' kapsamı analyses+receipts+report_cache "
+            "tablolarını TAMAMEN siliyordu → tam ve doğru okunmuş geçmiş kayıtlar da gidiyordu. Kullanıcı kuralı: "
+            "'reset ederken öğrenilmiş hiçbir şeyi silme, sadece işimize yaramayan aynı işlem numarası olan alanı temizle'.",
+     "fix": "reset_history'ye yeni VARSAYILAN kapsam 'reuse' eklendi (_purge_incomplete_reuse): yalnız bir işlem/"
+            "sıra/referans numarası taşıdığı halde EKSİK okunmuş (alıcı IBAN mod-97 geçersiz / alıcı adı yok / tutar "
+            "yok) satırları analyses+receipts'ten siler. TAM kayıtlar, numarasız kayıtlar, önbellek, öğrenilenler "
+            "(field_hints/bank_corpus/unknown_banks) ve günlükler KORUNUR. main.py /store/reset varsayılanı 'reuse' "
+            "oldu. 'detection' ve 'all' tam-temizlik seçenekleri korunuyor. Test #37 kilitler.",
+     "not": "Kullanıcı kuralı: öğrenilen bilgi asla silinmez; sadece kirleten eksik-numara kayıtları temizlenir."},
     {"id": "Z13", "date": "2026-08-24 03:10", "area": "NUMBER_REUSE/kara-liste: EKSİKSİZLİK KAPISI + forgery kararı TUTAR VEYA TARİH (sadece-tarih sahtesi de yakalanır)", "test": 36,
      "bug": "Aynı dekont tekrar tarandığında NUMBER_REUSE yanlışlıkla çıkıyordu. İlk çözümde farklılık kararı "
             "'tutar VEYA farklı alıcı IBAN'dı → alıcı IBAN OCR varyansı + geçmiş hatalı kayıtlar FP üretiyordu. "
@@ -1257,6 +1267,51 @@ def _t36_number_reuse_same_receipt_no_fp():
     return ok, f"aynı-dekont-yok={a}, farklı-tutar-yakalanır={b}, sadece-tarih-yakalanır={c}"
 
 
+def _t37_reset_reuse_surgical_keeps_learned():
+    """CERRAHİ SIFIRLAMA (reset scope='reuse'): SADECE işe yaramayan/eksik numara-tekrarı kayıtları silinir.
+    Kullanıcı kuralı: 'öğrenilmiş hiçbir şeyi silme, sadece işimize yaramayan aynı işlem numarası olan alanı
+    temizle'. Testler: (a) TAM ve DOĞRU okunmuş kayıt (geçerli alıcı IBAN+ad+tutar+numara) KORUNUR;
+    (b) EKSİK kayıt (numara var ama alıcı IBAN geçersiz / ad-tutar yok) SİLİNİR; (c) numarasız kayıt (tekrara
+    konu değil) KORUNUR; (d) öğrenilen veri (field_hints) KORUNUR."""
+    import store as _s
+    import os, tempfile, datetime
+    _prev = os.environ.get("DEKONT_DB_PATH")
+    os.environ["DEKONT_DB_PATH"] = tempfile.mktemp(suffix=".db")
+    try:
+        con = _s._connect()
+        now = datetime.datetime.utcnow().isoformat()
+        VALID = "TR330006100519786457841326"  # mod-97 geçerli
+        # (a) TAM kayıt
+        con.execute("INSERT INTO analyses (sha256,bank,seq_number,document_no,amount,receiver_name,receiver_iban,created_at)"
+                    " VALUES (?,?,?,?,?,?,?,?)", ("s_ok", "Ziraat", "123456", "123456", 100.0, "AHMET", VALID, now))
+        # (b) EKSİK kayıt: numara var ama IBAN geçersiz + ad/tutar yok
+        con.execute("INSERT INTO analyses (sha256,bank,seq_number,document_no,amount,receiver_name,receiver_iban,created_at)"
+                    " VALUES (?,?,?,?,?,?,?,?)", ("s_bad", "Ziraat", "999888", "999888", None, "", "TRBOZUK", now))
+        # (c) numarasız kayıt
+        con.execute("INSERT INTO analyses (sha256,bank,seq_number,document_no,amount,receiver_name,receiver_iban,created_at)"
+                    " VALUES (?,?,?,?,?,?,?,?)", ("s_nonum", "Ziraat", "", "", 50.0, "", "", now))
+        # (d) öğrenilen veri
+        con.execute("INSERT INTO field_hints (bank,field,label,hits,last_at) VALUES (?,?,?,?,?)",
+                    ("Ziraat", "receiver_name", "ALICI", 5, now))
+        con.commit(); con.close()
+        res = _s.reset_history("reuse")
+        con = _s._connect()
+        an = {r[0] for r in con.execute("SELECT sha256 FROM analyses").fetchall()}
+        fh = con.execute("SELECT COUNT(*) FROM field_hints").fetchone()[0]
+        con.close()
+    finally:
+        if _prev is not None:
+            os.environ["DEKONT_DB_PATH"] = _prev
+        else:
+            os.environ.pop("DEKONT_DB_PATH", None)
+    a = "s_ok" in an          # TAM korundu
+    b = "s_bad" not in an     # EKSİK silindi
+    c = "s_nonum" in an       # numarasız korundu
+    d = fh == 1               # öğrenilen korundu
+    ok = a and b and c and d and res.get("ok")
+    return ok, f"tam-korundu={a}, eksik-silindi={b}, numarasız-korundu={c}, öğrenilen-korundu={d}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1294,6 +1349,7 @@ _CHECKS = [
     (34, "Banka tespiti: gönderici IBAN kodu birincil (QNB≠Enpara), domain yedek, bilinmeyen kod", _t34_bank_detection_sender_iban_first),
     (35, "Alıcı IBAN OCR-toleranslı kurtarma (ALICI IRAN + boşluk) → gönderici≠alıcı", _t35_receiver_iban_ocr_tolerant),
     (36, "Aynı dekont→NUMBER_REUSE yok; tutar VEYA sadece-tarih değişikliği→yakala; eksik okuma kaydedilmez", _t36_number_reuse_same_receipt_no_fp),
+    (37, "Cerrahi sıfırlama (reuse): sadece eksik numara kayıtları silinir; tam kayıt+öğrenilen veri korunur", _t37_reset_reuse_surgical_keeps_learned),
 ]
 
 

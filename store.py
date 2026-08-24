@@ -725,24 +725,83 @@ def diag_sample_file(sha256: str):
     return None, None
 
 
-def reset_history(scope: str = "detection") -> dict:
+def _purge_incomplete_reuse(con) -> dict:
+    """CERRAHİ TEMİZLİK — SADECE 'işimize yaramayan' numara-tekrarı kayıtlarını siler:
+    alıcı IBAN + alıcı adı + tutar NET okunamamış (eksik/bozuk) olduğu halde bir işlem/sıra/referans
+    numarasıyla DB'ye kaydedilmiş satırlar. Bunlar aynı dekonta yanlış-pozitif NUMBER_REUSE ürettiği
+    için silinir. TAM ve DOĞRU okunmuş kayıtlar KORUNUR. Öğrenilen veriye (field_hints/bank_corpus/
+    unknown_banks) ve günlüklere DOKUNULMAZ.
+    Ölçüt = _complete_for_reuse (alıcı IBAN mod-97 geçerli + alıcı adı + tutar + 6+ haneli numara).
+    Dönüş: {tablo: silinen_satır}."""
+    out = {}
+    # analyses tablosu: alıcı adı/IBAN sütunları burada var -> tam ölçüt uygulanır.
+    try:
+        rows = con.execute(
+            "SELECT id, receiver_iban, receiver_name, amount, document_no, ref_no, seq_number FROM analyses"
+        ).fetchall()
+        _del = []
+        for r in rows:
+            f = {"receiver_iban": r[1], "receiver_name": r[2], "amount": r[3],
+                 "document_no": r[4], "ref_no": r[5], "seq_number": r[6]}
+            _has_num = any((str(f.get(k) or "").isdigit() and len(str(f.get(k))) >= 6)
+                           for k in ("document_no", "ref_no", "seq_number"))
+            # Sadece bir NUMARA taşıyan (yani numara-tekrarına konu olabilen) ama EKSİK olan satırları sil.
+            if _has_num and not _complete_for_reuse(f):
+                _del.append(r[0])
+        if _del:
+            con.executemany("DELETE FROM analyses WHERE id=?", [(i,) for i in _del])
+        out["analyses"] = len(_del)
+    except Exception:
+        out["analyses"] = "hata"
+    # receipts tablosu: alıcı adı sütunu YOK -> ölçüt (alıcı IBAN mod-97 geçerli + tutar + numara).
+    try:
+        rows = con.execute(
+            "SELECT id, receiver_iban, amount, document_no, ref_no, seq_number FROM receipts"
+        ).fetchall()
+        _del = []
+        for r in rows:
+            _riban = re.sub(r"\s+", "", (r[1] or "")).upper()
+            _amt_ok = r[2] is not None
+            _iban_ok = _iban_valid_safe(_riban) is True
+            _num = {"document_no": r[3], "ref_no": r[4], "seq_number": r[5]}
+            _has_num = any((str(_num.get(k) or "").isdigit() and len(str(_num.get(k))) >= 6)
+                           for k in ("document_no", "ref_no", "seq_number"))
+            if _has_num and not (_iban_ok and _amt_ok):
+                _del.append(r[0])
+        if _del:
+            con.executemany("DELETE FROM receipts WHERE id=?", [(i,) for i in _del])
+        out["receipts"] = len(_del)
+    except Exception:
+        out["receipts"] = "hata"
+    return out
+
+
+def reset_history(scope: str = "reuse") -> dict:
     """ESKİ VERİYİ SİLER (kullanıcı isteği). scope:
-      - 'detection' (varsayılan): numara-tekrarı/kara-liste kaynağı + önbellek → analyses, receipts,
-        report_cache. (Öğrenilen ipuçları/tarifeler ve denetim günlükleri KORUNUR.)
-      - 'all': yukarıdakiler + scan_log, diag_log (denetim günlükleri) + field_hints, bank_corpus (öğrenilenler).
+      - 'reuse' (VARSAYILAN): CERRAHİ — SADECE işe yaramayan/eksik numara-tekrarı kayıtlarını siler
+        (alıcı IBAN+ad+tutar net okunamadığı halde numarayla kaydedilmiş satırlar). TAM kayıtlar,
+        önbellek, öğrenilen veriler ve günlükler KORUNUR. Kullanıcı kuralı: 'öğrenilmiş hiçbir şeyi silme,
+        sadece işimize yaramayan aynı işlem numarası olan alanı temizle'.
+      - 'detection': numara-tekrarı/kara-liste kaynağı + önbellek → analyses, receipts, report_cache
+        TAMAMEN temizlenir. (Öğrenilen ipuçları/tarifeler ve denetim günlükleri KORUNUR.)
+      - 'all': yukarıdakiler + scan_log, diag_log (günlükler) + field_hints, bank_corpus (öğrenilenler).
         (unknown_banks KORUNUR — listeye eklenecek bankalar.)
-    Döner: {silinen_tablolar: {tablo: satır_sayısı}}. Şema DEĞİŞMEZ, sadece satırlar silinir."""
+    Döner: {silinen: {tablo: satır_sayısı}}. Şema DEĞİŞMEZ, sadece satırlar silinir."""
     if not enabled():
         return {"ok": False, "reason": "store disabled"}
-    _det = ["analyses", "receipts", "report_cache"]
-    _all = _det + ["scan_log", "diag_log", "field_hints", "bank_corpus"]
-    tables = _all if scope == "all" else _det
-    result = {}
     try:
         con = _connect()
     except Exception as e:
         return {"ok": False, "reason": str(e)}
     try:
+        if scope == "reuse":
+            result = _purge_incomplete_reuse(con)
+            con.commit()
+            return {"ok": True, "scope": scope, "silinen": result}
+        _det = ["analyses", "receipts", "report_cache"]
+        _all = _det + ["scan_log", "diag_log", "field_hints", "bank_corpus"]
+        tables = _all if scope == "all" else _det
+        result = {}
         for t in tables:
             try:
                 n = con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
