@@ -102,15 +102,7 @@ def should_adjudicate(findings: list, extraction: dict, input_kind: str = "pdf")
             if _get(extraction or {}, f)]
     if not _ids:
         reasons.append("İşlem/referans numarası okunamadı (işlem no, referans no, sıra no boş).")
-    # KULLANICI KURALI (DOUBLE-CHECK): skor %100 / dekont tertemiz olsa BİLE her dekont YZ'ye gider.
-    # YZ ikinci bir göz olarak teyit eder; kural motorunun kaçırabileceği görsel/bağlamsal tahrifatı
-    # yakalar. GÜVENLİK: YZ ASLA çelişki yaratmaz — düzeltilmiş deterministik veri OTORİTERDİR (bkz.
-    # 7.96 hüküm kapısı + rail_codes_to_remove + has_definitive_eft_fee). YZ yalnız KANITLA (gorsel_tahrifat
-    # ≥50 / somut forgery bulgusu) skoru düşürebilir; kanıtsız 'sahte' hükmü nihai skoru/kararı DÜŞÜRMEZ,
-    # yalnız 'belirsiz'e çevrilip uzlaştırma notuyla gösterilir. Bu yüzden double-check güvenlidir.
-    if not reasons:
-        reasons.append("Rutin çift-kontrol (double-check): skor yüksek olsa da YZ teyidi (kullanıcı kuralı).")
-    return (True, reasons)
+    return (bool(reasons), reasons)
 
 
 def _img_b64(pil_img, max_dim: int = 1568):   # Anthropic optimal ~1568px; daha büyüğü hız kazandırmaz
@@ -555,9 +547,14 @@ def apply_corrections(extraction: dict, adjudication: dict, hard_proof_codes=Non
             cur = cur[p]
         # AI OTORİTESİ (kullanıcı kuralı): OCR'ın okuduğu TÜM alanlar AI ile yeniden doğrulanır; AI'ın
         # GÖRÜNTÜDEN okuduğu değer alan BOŞ da olsa, DOLU ama YANLIŞ da olsa YAZILIR. (IBAN yukarıda mod-97
-        # ile doğrulandı; tutarlar float'a çevrildi → uydurma engellenir.) 'bank_stated' KORUNUR: dekonttaki
-        # YAZILI banka adıdır, banka-adı↔IBAN-kodu çelişki kontrolü buna dayanır, AI ezmemeli.
-        if ok and parts[-1] != "bank_stated" and cur.get(parts[-1]) != val:
+        # ile doğrulandı; tutarlar float'a çevrildi → uydurma engellenir.)
+        # 'bank_stated' (dekonttaki YAZILI banka adı): OCR'ın okuduğu değer varsa KORUNUR (AI ezmesin);
+        # ANCAK alan BOŞsa AI'ın görüntüden okuduğu YAZILI banka adı UYGULANIR. Kritik: OCR bu alanı çoğu
+        # düzende dolduramıyor (etiketi 'ALIC] BANKA' gibi bozuk okuyor) → boş kalırsa banka-adı↔IBAN-kodu
+        # çelişki kontrolü ASLA çalışmaz. AI'ın TEMİZ okuması (ör. 'Türkiye Garanti Bankası A.Ş.') bu boşluğu
+        # doldurur ve kural (yazan≠IBAN bankası → KESİN sahte) AI-doğrulanmış veriyle işler.
+        _skip_bank_stated = (parts[-1] == "bank_stated" and bool(cur.get(parts[-1])))
+        if ok and not _skip_bank_stated and cur.get(parts[-1]) != val:
             cur[parts[-1]] = val
             applied[dotted] = val
     ex["_ai_applied_corrections"] = applied

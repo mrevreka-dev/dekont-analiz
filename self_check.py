@@ -34,6 +34,17 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z20", "date": "2026-08-24 14:00", "area": "KULLANICI KURALI: AI'ın okuduğu bank_stated boş alana uygulanır → banka-adı↔IBAN kuralı fotoğrafta çalışır", "test": 43,
+     "bug": "Sahte VakıfBank dekontu deploy sonrası hâlâ %72 alıyordu. Gerçek rapor kanıtladı: AI 'receiver."
+            "bank_stated'i 'Türkiye Garanti Bankası A.Ş.' olarak DOĞRU okuyor ve corrected_fields'a koyuyordu, "
+            "AMA apply_corrections 'bank_stated'i HİÇ uygulamıyordu (parts[-1] != 'bank_stated' guard'ı her "
+            "durumda blokluyordu). Sonuç: extracted.receiver.bank_stated='' kalıyor, banka-adı↔IBAN kontrolü "
+            "(bank_stated'e dayanır) atlanıyor. OCR da etiketi 'ALIC] BANKA' gibi bozuk okuduğundan ham-metin "
+            "yolu da tutmuyordu. AI 'gerçek %78' diyerek çelişkiyi ayrıca mazur görüyordu.",
+     "fix": "apply_corrections: 'bank_stated' alanı BOŞsa AI'ın görüntüden okuduğu değeri UYGULA; DOLUsa "
+            "(OCR okumuşsa) KORU (AI ezmesin). Böylece extracted.receiver.bank_stated='Türkiye Garanti "
+            "Bankası A.Ş.' olur, mevcut çelişki kontrolü AI-doğrulanmış veriyle tetiklenir → RECEIVER_BANK_"
+            "MISMATCH, skor ≤8 (KESİN sahte) — AI'ın 'gerçek' yorumundan BAĞIMSIZ. Test #43 kilitler."},
     {"id": "Z19", "date": "2026-08-24 12:10", "area": "KULLANICI KURALI: yazan banka adı ↔ IBAN banka kodu uyuşmazlığı → KESİN sahte (fotoğrafta da)", "test": 41,
      "bug": "Dekontta ALICI BANKA olarak 'Türkiye Garanti Bankası' yazıp alıcı IBAN'ın banka kodu BAŞKA "
             "bankaya (ör. 00010 Ziraat / 00067 Yapı Kredi) ait olan sahte VakıfBank dekontları yalnız %72 "
@@ -1472,6 +1483,28 @@ def _t42_fast_samebank_definitive_fake():
     return True, "FAST+aynı-banka KESİN sahte; 'FAST Giden Anlık Ödeme' FAST tanınıyor; farklı bankada FP yok."
 
 
+def _t43_ai_fills_empty_bank_stated():
+    """(KULLANICI KURALI) AI'ın GÖRÜNTÜDEN okuduğu YAZILI banka adı (bank_stated), alan BOŞsa UYGULANMALI —
+    OCR bu alanı çoğu düzende dolduramıyor (etiketi 'ALIC] BANKA' gibi bozuk okuyor), boş kalırsa banka-adı↔
+    IBAN çelişki kuralı fotoğrafta ASLA çalışmaz. Ama OCR'ın okuduğu DOLU bir bank_stated AI ile EZİLMEMELİ.
+    Gerçek olay: AI 'Türkiye Garanti Bankası A.Ş.' döndürüyordu ama apply_corrections onu bloke ediyordu."""
+    import ai_adjudicator as AJ
+    # (1) BOŞ bank_stated → AI'ın görüntüden okuduğu değer uygulanır
+    ex = {"receiver": {"iban": "", "bank_stated": ""}}
+    adj = {"corrected_fields": {"receiver.bank_stated": "Türkiye Garanti Bankası A.Ş.",
+                                "receiver.iban": "TR200001002718971593985001"}}
+    out = AJ.apply_corrections(ex, adj)
+    if not (out.get("receiver", {}).get("bank_stated") or ""):
+        return False, "BOŞ bank_stated AI değeriyle DOLDURULMADI"
+    # (2) DOLU bank_stated → korunur (AI ezmez)
+    ex2 = {"receiver": {"iban": "", "bank_stated": "VakıfBank"}}
+    adj2 = {"corrected_fields": {"receiver.bank_stated": "Garanti"}}
+    out2 = AJ.apply_corrections(ex2, adj2)
+    if out2.get("receiver", {}).get("bank_stated") != "VakıfBank":
+        return False, "DOLU bank_stated AI ile EZİLDİ (korunmalıydı)"
+    return True, "bank_stated: boşsa AI'ın görüntüden okuması doldurur, doluysa korunur (çelişki kuralı önkoşulu)."
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1515,6 +1548,7 @@ _CHECKS = [
     (40, "Kesin EFT ücret kanıtı ('GEÇ EFT'/'EFT TUTARI') korunur: yanlış IBAN düzeltmesi EFT riskini ezemez", _t40_definitive_eft_fee_protection),
     (41, "Yazan alıcı/gönderici banka adı ↔ IBAN banka kodu çelişkisi → KESİN sahte (fotoğrafta da)", _t41_receiver_bankname_iban_code_mismatch),
     (42, "FAST + gönderici=alıcı banka → KESİN sahte; 'FAST Giden Anlık Ödeme' FAST tanınır", _t42_fast_samebank_definitive_fake),
+    (43, "AI boş bank_stated'i görüntüden doldurur (dolu olanı ezmez) → çelişki kuralı fotoğrafta çalışır", _t43_ai_fills_empty_bank_stated),
 ]
 
 
