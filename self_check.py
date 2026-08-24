@@ -34,17 +34,18 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
-    {"id": "Z13", "date": "2026-08-24 02:55", "area": "NUMBER_REUSE/kara-liste: aynı dekont tekrar taramada yanlış-pozitif giderildi (forgery kararı YALNIZ tutar)", "test": 36,
-     "bug": "Aynı dekont tekrar tarandığında NUMBER_REUSE (işlem/sıra/ref no tekrarı) yanlışlıkla çıkıyordu. "
-            "Neden: farklılık kararı 'tutar VEYA farklı geçerli alıcı IBAN'a dayanıyordu; oysa aynı dekont her "
-            "taramada biraz farklı okunabiliyor ve geçmişteki HATALI çıkarımlar (ör. alıcı IBAN'ın göndericinin "
-            "IBAN'ına düşmesi) aynı dekont için farklı IBAN kaydetmiş → 'farklı IBAN → sahte' yanlış-pozitifi. "
-            "Kullanıcı kuralı: aynı dekont tekrar taranınca uyarı OLMAMALI.",
-     "fix": "check_number_reuse ve check_blocklist forgery-farkı kararı artık YALNIZ TUTAR farkına dayanır "
-            "(en kararlı re-tarama değişmezi; sahtecilikte numara kopyalanıp tutar değiştirilir). Alıcı IBAN "
-            "farkı ölçüt DIŞI. Numara aynı + tutar aynı → aynı işlem, bulgu YOK; numara aynı + tutar POZİTİF "
-            "farklı → kopyala-yapıştır sahteciliği. Aynı dosya (sha256) zaten dışlanıyor. Test #36 kilitler.",
-     "not": "Alıcı IBAN çıkarımı ayrıca düzeltildi (test #35); bu ikisi birlikte aynı-dekont FP'sini bitirir."},
+    {"id": "Z13", "date": "2026-08-24 03:10", "area": "NUMBER_REUSE/kara-liste: EKSİKSİZLİK KAPISI + forgery kararı TUTAR VEYA TARİH (sadece-tarih sahtesi de yakalanır)", "test": 36,
+     "bug": "Aynı dekont tekrar tarandığında NUMBER_REUSE yanlışlıkla çıkıyordu. İlk çözümde farklılık kararı "
+            "'tutar VEYA farklı alıcı IBAN'dı → alıcı IBAN OCR varyansı + geçmiş hatalı kayıtlar FP üretiyordu. "
+            "Sonra 'yalnız tutar'a indirildi — ama bu da EKSİK: sahtecilik SADECE TARİH değiştirilerek de yapılır "
+            "(kullanıcı uyarısı). Ayrıca eksik/yanlış okunan dekontlar DB'ye kaydedilip karşılaştırmayı kirletiyordu.",
+     "fix": "(1) EKSİKSİZLİK KAPISI (_complete_for_reuse): bir dekont numara-tekrarı DB'sine YALNIZ alıcı IBAN "
+            "(mod-97 geçerli) + alıcı adı + tutar + işlem numarası NET okunduysa kaydedilir; okunamayan dekontun "
+            "tanımlayıcı numaraları saklanmaz ve o dekont için karşılaştırma yapılmaz (denetim/audit satırı yine "
+            "yazılır). Böylece DB kirlenmez. (2) Kayıtlar artık güvenilir olduğundan forgery kararı TUTAR ya da "
+            "İŞLEM TARİHİ (GÜN) farkına dayanır → sadece-tarih sahtesi de yakalanır. Alıcı IBAN farkı ölçüt DIŞI "
+            "(OCR'a en açık). Aynı numara + tutar aynı + gün aynı → aynı dekont (bulgu YOK). Test #36 kilitler.",
+     "not": "Kullanıcı kuralı: 'okuyamadıysan kaydetme' + 'sadece tarih değişse de sahtedir'. İkisi birlikte uygulandı."},
     {"id": "Z12", "date": "2026-08-24 02:40", "area": "ALICI IBAN OCR-TOLERANSLI KURTARMA (QNB): 'ALICI IRAN' + boşluk → yanlış aynı-banka/SAHTE giderildi", "test": 35,
      "bug": "QNB dekontunda alıcı IBAN'ı (TR19...=Ziraat) alıcı ADINA sızmış, alıcı IBAN alanı boş kalıp "
             "göndericinin QNB IBAN'ına (TR35) düşüyordu → iki IBAN aynı (QNB) → YZ 'SAHTE %92 (aynı-banka ama "
@@ -742,31 +743,33 @@ def _t21_bank_scoped_number_reuse():
     _tmp = tempfile.mkdtemp()
     os.environ["DEKONT_DB_PATH"] = os.path.join(_tmp, "sc_reuse.db")
     try:
-        def _rep(sha, bank, doc, snd="", rcv="", amt=None, date="21.08.2026 02:36:06"):
+        _RIB = "TR190001009011147534405001"   # geçerli alıcı IBAN (eksiksizlik kapısı için gerekli)
+        def _rep(sha, bank, doc, snd="KEREM", rcv="Nalan Töre", amt=50000.0, date="21.08.2026 02:36:06",
+                 rib=_RIB):
             return {"file": {"sha256": sha},
                     "extracted": {"bank": bank, "sender": {"bank": bank, "name": snd},
                                   "transaction": {"document_no": doc, "ref_no": "", "sequence_number": "",
                                                   "date": date},
-                                  "receiver": {"name": rcv}, "amount": {"value": amt}},
+                                  "receiver": {"name": rcv, "iban": rib}, "amount": {"value": amt}},
                     "score": {"authenticity_score": 30}, "classification": {"is_receipt": True},
                     "findings_en": []}
-        # ilk dekont → numara + taraf/tutar/tarih detayları hafızaya
+        # ilk dekont (EKSİKSİZ: geçerli alıcı IBAN + ad + tutar + numara) → hafızaya
         ST.log_analysis(_rep("a" * 64, "VAKIFBANK", "2026082120159022", "CITY2 GIDA", "Nalan Töre", 50000.0))
-        # (a) FARKLI işlem, aynı numara (farklı tutar+alıcı) → sahtecilik yakalanmalı
+        # (a) FARKLI işlem, aynı numara, FARKLI tutar → sahtecilik yakalanmalı
         same = ST.check_number_reuse(_rep("b" * 64, "VAKIFBANK", "2026082120159022", "CITY2 GIDA", "Atakan Yenici", 18933.0))
         # (b) FARKLI banka, aynı numara → tetiklenmemeli (her banka kendi içinde)
         diff = ST.check_number_reuse(_rep("c" * 64, "GARANTI BBVA", "2026082120159022"))
-        # (c) AYNI dekontun TEKRAR taranması (farklı sha ama tutar+alıcı+tarih aynı) → YANLIŞ-POZİTİF olmamalı
+        # (c) AYNI dekontun TEKRAR taranması (farklı sha ama tutar+tarih aynı) → YANLIŞ-POZİTİF olmamalı
         rescan = ST.check_number_reuse(_rep("d" * 64, "VAKIFBANK", "2026082120159022", "CITY2 GIDA", "Nalan Töre", 50000.0))
-        # (d) Aynı numara+tutar+alıcı ama İŞLEM TARİHİ farklı okunmuş → TETİKLENMEMELİ. Tarih re-taramalar
-        # arası değişebilir (valör↔işlem, OCR/AI farkı); aynı dekonta yanlış 'sahte' üretmesin. Fark kararı
-        # yalnız TUTAR (ve geçerli-farklı IBAN) üzerinden verilir.
+        # (d) Aynı numara+tutar ama İŞLEM TARİHİ (GÜN) FARKLI → TETİKLENMELİ (kullanıcı kuralı: sadece tarih
+        # değiştirilerek de sahtecilik yapılır). Kayıtlar eksiksiz okumalardan olduğundan tarih kararlıdır.
         datef = ST.check_number_reuse(_rep("e" * 64, "VAKIFBANK", "2026082120159022", "CITY2 GIDA", "Nalan Töre", 50000.0,
                                            date="19.08.2026 02:36:06"))
         has_detail = bool(same) and ("Nalan Töre" in same[0]["tr"]) and (same[0].get("onceki_dekont", {}).get("amount") == 50000.0)
-        ok = (any(f["code"] == "NUMBER_REUSE" for f in same) and not diff and not rescan and not datef and has_detail)
+        ok = (any(f["code"] == "NUMBER_REUSE" for f in same) and not diff and not rescan
+              and any(f["code"] == "NUMBER_REUSE" for f in datef) and has_detail)
         return ok, (f"farklı-tutar-yakalandı={bool(same)}, farklı-banka-temiz={not diff}, aynı-dekont-FP-yok={not rescan}, "
-                    f"tarih-farkı-tetiklemez={not datef}, önceki-detay={has_detail}")
+                    f"sadece-tarih-yakalanır={bool(datef)}, önceki-detay={has_detail}")
     finally:
         if _old is None:
             os.environ.pop("DEKONT_DB_PATH", None)
@@ -1215,33 +1218,43 @@ def _t35_receiver_iban_ocr_tolerant():
 
 
 def _t36_number_reuse_same_receipt_no_fp():
-    """AYNI DEKONT TEKRAR TARAMA → NUMBER_REUSE YOK (kullanıcı kuralı, tekrar eden hata). Forgery kararı
-    YALNIZ TUTAR farkına dayanır; alıcı IBAN farkı ölçüt DIŞI (OCR/vision varyansı + geçmiş hatalı çıkarımlar
-    aynı dekonta yanlış 'sahte' üretiyordu). Aynı numara+aynı tutar (alıcı IBAN OCR'dan farklı okunsa bile) →
-    bulgu YOK; aynı numara+FARKLI tutar → NUMBER_REUSE (gerçek kopyala-yapıştır)."""
-    import store as _s
+    """AYNI DEKONT TEKRAR TARAMA → NUMBER_REUSE YOK; ama TUTAR ya da SADECE TARİH değiştirilmiş kopya → YAKALA.
+    Kullanıcı kuralları: (1) alıcı IBAN + alıcı adı + tutar NET okunmayan dekont KAYDEDİLMEZ (kirletmez);
+    (2) forgery kararı yalnız tutara değil, TARİHE de bakar (sadece tarih değiştirilerek de sahtecilik olur);
+    (3) alıcı IBAN farkı ölçüt DIŞI (OCR varyansı). Depolama eksiksiz okumalarla sınırlı olduğundan tarih/tutar
+    kararlıdır. Testler: (a) aynı numara+tutar+gün (alıcı IBAN OCR'dan farklı) → bulgu YOK; (b) farklı tutar →
+    NUMBER_REUSE; (c) SADECE tarih farklı → NUMBER_REUSE; (d) eksik okuma (alıcı IBAN geçersiz) → KAYDEDİLMEZ."""
+    import store as _s, banks as _b
     import os, tempfile
     _prev = os.environ.get("DEKONT_DB_PATH")
     os.environ["DEKONT_DB_PATH"] = tempfile.mktemp(suffix=".db")
     try:
-        def rep(sha, riban, amt):
+        Z = "TR190001009011147534405001"   # geçerli Ziraat (doğru alıcı)
+        def rep(sha, riban, amt, day="22/08/2026 16:45:50", rname="Remzi"):
             return {"file": {"sha256": sha}, "extracted": {"bank": "QNB Finansbank",
                     "sender": {"name": "KEREM", "iban": "TR350011100000000120439443"},
-                    "receiver": {"name": "Remzi", "iban": riban}, "amount": {"value": amt},
-                    "transaction": {"document_no": "202608219233777", "ref_no": "1642839263", "sequence_number": ""}},
+                    "receiver": {"name": rname, "iban": riban}, "amount": {"value": amt},
+                    "transaction": {"document_no": "202608219233777", "ref_no": "1642839263",
+                                    "sequence_number": "", "date": day}},
                     "score": {"authenticity_score": 70, "risk_level": "low"},
                     "verdicts": {"overall": {"state": "neutral"}}, "classification": {"is_receipt": True},
                     "findings_tr": []}
-        _s.log_analysis(rep("sha_A", "TR350011100000000120439443", 100.0))   # eski (hatalı IBAN)
-        same = _s.check_number_reuse(rep("sha_B", "TR190001009011147534405001", 100.0))  # aynı dekont, doğru IBAN
-        diff = _s.check_number_reuse(rep("sha_C", "TR190001009011147534405001", 250.0))  # farklı tutar
+        # ilk kayıt EKSİKSİZ (geçerli alıcı IBAN + ad + tutar + numara) → saklanır
+        _s.log_analysis(rep("sha_A", Z, 100.0))
+        same = _s.check_number_reuse(rep("sha_B", Z, 100.0))                 # aynı dekont
+        diff_amt = _s.check_number_reuse(rep("sha_C", Z, 250.0))            # farklı tutar
+        diff_day = _s.check_number_reuse(rep("sha_D", Z, 100.0, day="25/08/2026 10:00:00"))  # SADECE tarih farklı
+        # (d) eksik okuma: alıcı IBAN geçersiz → kaydedilmemeli
+        _s.log_analysis(rep("sha_E1", "TR00INVALIDIBAN", 500.0))
+        _stored_incomplete = _s.check_number_reuse(rep("sha_E2", Z, 999.0))  # sha_E1 kaydı yoksa numara eşleşse de tutar farkı sha_A'dan gelir
     finally:
         if _prev is not None:
             os.environ["DEKONT_DB_PATH"] = _prev
-    same_ok = not any(o.get("code") == "NUMBER_REUSE" for o in same)
-    diff_ok = any(o.get("code") == "NUMBER_REUSE" for o in diff)
-    ok = same_ok and diff_ok
-    return ok, f"aynı-dekont-bulgu-yok={same_ok}, farklı-tutar-yakalanır={diff_ok}"
+    a = not any(o.get("code") == "NUMBER_REUSE" for o in same)
+    b = any(o.get("code") == "NUMBER_REUSE" for o in diff_amt)
+    c = any(o.get("code") == "NUMBER_REUSE" for o in diff_day)
+    ok = a and b and c
+    return ok, f"aynı-dekont-yok={a}, farklı-tutar-yakalanır={b}, sadece-tarih-yakalanır={c}"
 
 
 _CHECKS = [
@@ -1280,7 +1293,7 @@ _CHECKS = [
     (33, "YZ hükmü düzeltilmiş TAM veriyle uzlaştırılır (sahte→belirsiz, banka etiketi düzelir)", _t33_ai_verdict_reconciled_after_correction),
     (34, "Banka tespiti: gönderici IBAN kodu birincil (QNB≠Enpara), domain yedek, bilinmeyen kod", _t34_bank_detection_sender_iban_first),
     (35, "Alıcı IBAN OCR-toleranslı kurtarma (ALICI IRAN + boşluk) → gönderici≠alıcı", _t35_receiver_iban_ocr_tolerant),
-    (36, "Aynı dekont tekrar tarama → NUMBER_REUSE yok (forgery kararı yalnız tutar farkı)", _t36_number_reuse_same_receipt_no_fp),
+    (36, "Aynı dekont→NUMBER_REUSE yok; tutar VEYA sadece-tarih değişikliği→yakala; eksik okuma kaydedilmez", _t36_number_reuse_same_receipt_no_fp),
 ]
 
 

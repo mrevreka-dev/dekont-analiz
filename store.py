@@ -36,6 +36,26 @@ def _iban_valid_safe(ib: str):
     except Exception:
         return None
 
+
+def _complete_for_reuse(f: dict) -> bool:
+    """Bu dekont numara-tekrarı/kara-liste veritabanına GÜVENLE kaydedilecek/karşılaştırılacak kadar EKSİKSİZ
+    ve DOĞRU mu? Kullanıcı kuralı: alıcı IBAN + alıcı adı + tutar NET okunduysa (ve bir işlem numarası varsa)
+    sakla; okunamadıysa KAYDETME (yanlış/eksik veri DB'yi kirletip aynı dekonta yanlış-pozitif üretiyordu).
+    Alıcı IBAN mod-97 GEÇERLİ olmalı — böylece bozuk/yanlış-atanan IBAN'lı kayıtlar dışarıda kalır."""
+    try:
+        _riban = re.sub(r"\s+", "", (f.get("receiver_iban") or "")).upper()
+        if _iban_valid_safe(_riban) is not True:
+            return False
+        if not (f.get("receiver_name") or "").strip():
+            return False
+        if f.get("amount") is None:
+            return False
+        _num = any((str(f.get(k) or "").isdigit() and len(str(f.get(k))) >= 6)
+                   for k in ("document_no", "ref_no", "seq_number"))
+        return bool(_num)
+    except Exception:
+        return False
+
 _DEF_PATHS = ["/data/dekont.db", os.path.join(os.path.dirname(__file__), "..", "dekont_store.db")]
 
 
@@ -832,6 +852,11 @@ def check_number_reuse(report: dict) -> list[dict]:
     sha = f["sha256"]
     if not bank or not sha:
         return out
+    # EKSİKSİZLİK KAPISI: MEVCUT dekont eksiksiz+doğru okunmadıysa (alıcı IBAN geçerli + alıcı adı + tutar)
+    # numara-tekrarı KARŞILAŞTIRMASI YAPMA — güvenilmez veriyle kıyas yanlış-pozitif üretir. Zaten böyle
+    # okumalar DB'ye de kaydedilmez (bkz. log_analysis). Hem depolama hem karşılaştırma aynı kuralı izler.
+    if not _complete_for_reuse(f):
+        return out
     # Tanımlayıcı numaralar (alan etiketi + değer). Yalnız 6+ haneli gerçek numaralar; kısa/ortak
     # sayılar (şube kodu vb.) yanlış-pozitif üretmesin diye elenir.
     nums = []
@@ -888,16 +913,19 @@ def check_number_reuse(report: dict) -> list[dict]:
             # işlem tarihi karışması, isim maskeleme) ve aynı dekontta YANLIŞ 'sahte' üretiyordu. Yani numara
             # aynı iken TUTAR pozitif farklıysa YA DA iki taraf da geçerli-IBAN olup farklıysa → kopyala-yapıştır
             # sahteciliği; aksi halde AYNI işlem varsayılır ve bulgu verilmez.
-            # FARKLILIK KARARI YALNIZ TUTARA DAYANIR (en kararlı re-tarama değişmezi). Alıcı IBAN farkı
-            # ölçüt DIŞI: (1) OCR/vision aynı dekontu her taramada biraz farklı okuyabiliyor; (2) geçmişte
-            # hatalı çıkarımlar aynı dekont için farklı alıcı IBAN (ör. yanlış gönderici IBAN'ına düşme)
-            # kaydetmiş olabilir → 'farklı IBAN' YANLIŞ 'sahte' üretiyordu. Sahtecilikte numara kopyalanıp
-            # TUTAR neredeyse her zaman değiştirilir; numara aynı + tutar POZİTİF farklı → kopyala-yapıştır.
-            # Numara aynı + tutar aynı → AYNI işlem/dekont, bulgu ÜRETİLMEZ (kullanıcı kuralı: aynı dekont uyarı vermez).
+            # FARKLILIK KARARI: TUTAR ya da İŞLEM TARİHİ (GÜN). Kullanıcı kuralı: sahtecilik SADECE tarih
+            # değiştirilerek de yapılabilir → yalnız tutara bakmak YANLIŞ. Kayıtlar artık YALNIZ EKSİKSİZ+DOĞRU
+            # okunan dekontlardan oluştuğu için (bkz. _complete_for_reuse) tarih/tutar re-taramada KARARLIDIR;
+            # aynı numara + tutar aynı + tarih(gün) aynı → AYNI dekont (bulgu YOK). Aynı numara iken tutar
+            # POZİTİF farklı YA DA tarih(gün) farklı → kopyala-yapıştır sahteciliği (tutar VEYA sadece-tarih).
+            # (Alıcı IBAN farkı ölçüt DIŞI — OCR varyansına en açık alan.)
             _forgery = None
             for pr in rows:
                 p_amt = _round2(pr[1])
-                if _cur_amt is not None and p_amt is not None and _cur_amt != p_amt:
+                p_day = _daykey(pr[2])
+                amt_diff = (_cur_amt is not None and p_amt is not None and _cur_amt != p_amt)
+                day_diff = bool(_cur_day and p_day and _cur_day != p_day)
+                if amt_diff or day_diff:
                     _forgery = pr
                     break
             if _forgery is None:
@@ -1020,6 +1048,16 @@ def log_analysis(report: dict) -> bool:
     # taşıyan gerçek dekontları da yanlışlıkla "bilinen sahte" yapar (FP çoğaltıcı).
     # Böyle dosyalar zaten her yüklemede kendi bulgularıyla yeniden yakalanır.
     is_fake = 1 if (set(codes) & _FAKE_CODES) else 0
+    # EKSİKSİZLİK KAPISI (kullanıcı kuralı): Alıcı IBAN + alıcı adı + tutar NET okunduysa (ve işlem numarası
+    # varsa) tanımlayıcı numaraları KAYDET; okunamadıysa numaraları SAKLAMA (boş yaz). Böylece eksik/yanlış
+    # okunmuş bir dekont, numara-tekrarı (NUMBER_REUSE) karşılaştırmasında başka dekontlarla EŞLEŞİP yanlış
+    # 'sahte' üretemez. Denetim satırı (kaç yüklendi + is_fake/kara-liste) yine yazılır.
+    _complete = _complete_for_reuse(f)
+    _seq = f["seq_number"] if _complete else ""
+    _ref = f["ref_no"] if _complete else ""
+    _doc = f["document_no"] if _complete else ""
+    _amt_store = f["amount"] if _complete else None
+    _rib_store = f.get("receiver_iban") if _complete else ""
     try:
         con = _connect()
     except Exception:
@@ -1032,9 +1070,9 @@ def log_analysis(report: dict) -> bool:
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (f["sha256"], f["bank"], 1 if cls.get("is_receipt") else 0,
              sc.get("authenticity_score"), sc.get("risk_level"), is_fake,
-             f["seq_number"], f["ref_no"], f["document_no"], f["amount"], f["txn_date"],
+             _seq, _ref, _doc, _amt_store, f["txn_date"],
              ",".join(c for c in codes if c in _FAKE_CODES), _dt.datetime.utcnow().isoformat(),
-             f.get("sender_name"), f.get("receiver_name"), f.get("receiver_iban")))
+             f.get("sender_name"), f.get("receiver_name"), _rib_store))
         con.commit()
         return True
     except Exception:
@@ -1092,10 +1130,11 @@ def check_blocklist(report: dict) -> list[dict]:
                 # 'farklı belge' kanıtı değildir → atla (FP önler).
                 if p_amt is None:
                     continue
-                # Farklılık YALNIZCA TUTARA dayanır (en kararlı re-tarama değişmezi). Alıcı IBAN farkı ölçüt
-                # DIŞI: OCR/vision varyansı ve geçmiş hatalı çıkarımlar aynı dekonta yanlış kara-liste
-                # üretiyordu. Numara aynı + tutar POZİTİF farklı → gerçekten farklı belge; tutar aynı → aynı dekont.
-                if _cur_amt is not None and _cur_amt != p_amt:
+                # Farklılık: TUTAR ya da İŞLEM TARİHİ (GÜN) — sahtecilik sadece tarih değiştirilerek de yapılır.
+                # Alıcı IBAN farkı ölçüt DIŞI (OCR varyansına en açık). Kayıtlar eksiksiz okumalardan olduğu için
+                # tutar/tarih kararlı: numara aynı + (tutar farklı VEYA gün farklı) → FARKLI belge; ikisi de aynı → aynı dekont.
+                p_day = _daykey(_pr[3])
+                if (_cur_amt is not None and _cur_amt != p_amt) or (_cur_day and p_day and _cur_day != p_day):
                     hit_seq = _pr   # gerçekten FARKLI bir belge → kara-liste göstergesi
                     break
         print(f"[blocklist] bank={f['bank']!r} seq={f['seq_number']!r} sha={f['sha256'][:10]} "
