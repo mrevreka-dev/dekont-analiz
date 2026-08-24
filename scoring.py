@@ -165,10 +165,10 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 8)
     if "IBAN_INVALID" in codes:               # IBAN mod-97 tutmuyor
         score = min(score, 20)
-    if "RECEIVER_BANK_MISMATCH" in codes:     # yazan alıcı bankası ≠ IBAN bankası
-        score = min(score, 12)
-    if "SENDER_BANK_MISMATCH" in codes:       # yazan gönderici bankası ≠ IBAN bankası
-        score = min(score, 12)
+    if "RECEIVER_BANK_MISMATCH" in codes:     # yazan alıcı bankası ≠ IBAN bankası (KESİN sahte)
+        score = min(score, 8)
+    if "SENDER_BANK_MISMATCH" in codes:       # yazan gönderici bankası ≠ IBAN bankası (KESİN sahte)
+        score = min(score, 8)
     if "AMOUNT_FONT_ANOMALY" in codes:        # tutar yabancı fontta (yapıştırılmış)
         score = min(score, 15)
     if codes & {"BROWSER_RERENDER", "FONT_BROWSER_RERENDER"}:  # tarayıcıyla yeniden basım

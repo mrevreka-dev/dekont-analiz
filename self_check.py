@@ -34,6 +34,24 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z19", "date": "2026-08-24 12:10", "area": "KULLANICI KURALI: yazan banka adı ↔ IBAN banka kodu uyuşmazlığı → KESİN sahte (fotoğrafta da)", "test": 41,
+     "bug": "Dekontta ALICI BANKA olarak 'Türkiye Garanti Bankası' yazıp alıcı IBAN'ın banka kodu BAŞKA "
+            "bankaya (ör. 00010 Ziraat / 00067 Yapı Kredi) ait olan sahte VakıfBank dekontları yalnız %72 "
+            "alıyordu (image_only tavanı = hiçbir güçlü bulgu yok). İki neden: (1) deterministik "
+            "RECEIVER_BANK_MISMATCH FOTOĞRAFTA bastırılıyordu; (2) mevcut kontrol IBAN-otoritesiyle EZİLEN "
+            "'receiver.bank' alanına bakıyordu, dekontta YAZAN adı değil → yazan=IBAN çıkıp çelişki doğmuyordu.",
+     "fix": "authenticity.bank_name_iban_contradiction(): YAZAN banka adını HAM METİNDEN ('ALICI/GÖNDEREN "
+            "BANKA' etiketi) alır, o tarafın GEÇERLİ (mod-97) IBAN'ının banka koduyla karşılaştırır; farklı "
+            "TANINAN bankalar → RECEIVER/SENDER_BANK_MISMATCH (critical). analyze.py bunu FOTOĞRAF-baskılamasına "
+            "TABİ OLMADAN çağırır (geçerli IBAN + açıkça yazan tanınan ad = güvenilir). scoring: bu kodlar skoru "
+            "≤8'e çeker (KESİN sahte). Test #41 kilitler."},
+    {"id": "Z18", "date": "2026-08-24 12:10", "area": "KULLANICI KURALI: FAST + gönderici=alıcı banka → KESİN sahte; 'FAST Giden Anlık Ödeme' FAST tanınır", "test": 42,
+     "bug": "detect_transfer_rail 'FAST Giden Anlık Ödeme' (VakıfBank başlığı) ibaresini FAST saymıyordu "
+            "('giden fast' arıyordu, sıralama ters) → bu bankanın FAST dekontlarında rail hiç FAST çıkmıyor, "
+            "dolayısıyla FAST+aynı-banka (RAIL_SAMEBANK_MISMATCH) çelişkisi hiç değerlendirilmiyordu.",
+     "fix": "detect_transfer_rail'e 'fast giden' / 'fast gelen' / 'fast anlik' işaretleri eklendi. check_rail_bank "
+            "(FAST/EFT ama gönderici ve alıcı IBAN aynı banka → RAIL_SAMEBANK_MISMATCH, skor ≤6) artık bu "
+            "dekontlarda da tetiklenir. Test #42 kilitler."},
     {"id": "Z17", "date": "2026-08-24 04:05", "area": "BÜTÜNSEL KONTROL-ÇAKIŞMASI DENETİMİ: bir kontrolün diğerini ezdiği 4 yol kapatıldı (alt-ajan analizi)", "test": 40,
      "bug": "Tüm pipeline 'bir kontrol diğerini eziyor mu' diye denetlendi. Bulunan gerçek çakışmalar: "
             "(1) KRİTİK: _remove_codes yalnız 'findings'e uygulanıyordu; _post_ai ekleme döngüsü kaldırılan kodu "
@@ -1415,6 +1433,45 @@ def _t40_definitive_eft_fee_protection():
     return ok, f"gec-eft={a}, eft-tutari={b}, fast-degil={c}, defter-tuzagi-yok={d}"
 
 
+def _t41_receiver_bankname_iban_code_mismatch():
+    """(KULLANICI KURALI) Dekontta YAZAN alıcı banka adı ile alıcı IBAN'ın banka kodu farklı
+    bankaları gösteriyorsa KESİN SAHTE — fotoğrafta da tetiklenmeli (geçerli IBAN + yazan ad).
+    Gerçek olay: VakıfBank dekontu 'ALICI BANKA: Türkiye Garanti Bankası' yazıp IBAN kodu 00010
+    (Ziraat) / 00067 (Yapı Kredi) taşıyordu; sahte olmasına rağmen %72 alıyordu."""
+    import authenticity as A
+    txt = ("İŞLEM TÜRÜ  FAST Giden Anlık Ödeme\n"
+           "ALICI BANKA  Türkiye Garanti Bankası A.Ş.   SORGU NO 2869688238\n"
+           "ALICI HESAP NO / IBAN  TR20 0001 0027 1897 1593 9850 01   İŞLEM NO 2026082120159022")
+    rcv = "TR200001002718971593985001"                     # geçerli; banka kodu 00010 = Ziraat
+    codes = {d["code"] for d in A.bank_name_iban_contradiction(txt, "", rcv)}
+    if "RECEIVER_BANK_MISMATCH" not in codes:
+        return False, f"Garanti yazan + Ziraat IBAN çelişkisi YAKALANMADI: {codes}"
+    # Yanlış-pozitif koruması: yazan banka = IBAN bankası (Ziraat=Ziraat) → tetiklenMEmeli
+    txt_ok = "ALICI BANKA  T.C. Ziraat Bankası\nALICI HESAP NO / IBAN  TR20 0001 0027 1897 1593 9850 01"
+    if any(d["code"] == "RECEIVER_BANK_MISMATCH" for d in A.bank_name_iban_contradiction(txt_ok, "", rcv)):
+        return False, "Ziraat=Ziraat iken YANLIŞ-POZİTİF mismatch"
+    return True, "Alıcı banka adı↔IBAN kodu çelişkisi (Garanti≠Ziraat) KESİN yakalanıyor; eşleşmede FP yok."
+
+
+def _t42_fast_samebank_definitive_fake():
+    """(KULLANICI KURALI) İşlem FAST görünüyor ama gönderici ve alıcı IBAN AYNI bankadaysa KESİN
+    SAHTE (FAST bankalararası; aynı banka içi HAVALE olur). Ayrıca 'FAST Giden Anlık Ödeme'
+    başlığı (VakıfBank) FAST olarak tanınmalı."""
+    import authenticity as A
+    if A.detect_transfer_rail("İŞLEM TÜRÜ  FAST Giden Anlık Ödeme") != "fast":
+        return False, "'FAST Giden Anlık Ödeme' FAST olarak TANINMADI"
+    s = _gen_iban("00015", "0000000000012345")             # VakıfBank
+    r = _gen_iban("00015", "0000000000067890")             # AYNI banka, farklı hesap
+    rb = A.check_rail_bank("İŞLEM TÜRÜ  FAST Giden Anlık Ödeme", s, r, [s, r])
+    if not rb or rb.get("code") != "RAIL_SAMEBANK_MISMATCH":
+        return False, f"FAST + aynı banka çelişkisi YAKALANMADI: {rb}"
+    # Yanlış-pozitif koruması: farklı banka → tetiklenMEmeli
+    r2 = _gen_iban("00062", "0000000000067890")            # Garanti (farklı banka)
+    if A.check_rail_bank("İŞLEM TÜRÜ  FAST Giden Anlık Ödeme", s, r2, [s, r2]):
+        return False, "Farklı bankada YANLIŞ-POZİTİF RAIL_SAMEBANK"
+    return True, "FAST+aynı-banka KESİN sahte; 'FAST Giden Anlık Ödeme' FAST tanınıyor; farklı bankada FP yok."
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1456,6 +1513,8 @@ _CHECKS = [
     (38, "QNB'ye özel: 'GİDEN EFT'→EFT, 'GİDEN FAST EFT'→FAST; sadece QNB kanalı (rail tüm bankalarda/PDF'de)", _t38_qnb_giden_eft_rule),
     (39, "Tek otoriter rail: RAIL_IS_FAST+RAIL_IS_EFT gibi çelişki nihai raporda kalmaz (düzeltilmiş veri otoriter)", _t39_single_authoritative_rail),
     (40, "Kesin EFT ücret kanıtı ('GEÇ EFT'/'EFT TUTARI') korunur: yanlış IBAN düzeltmesi EFT riskini ezemez", _t40_definitive_eft_fee_protection),
+    (41, "Yazan alıcı/gönderici banka adı ↔ IBAN banka kodu çelişkisi → KESİN sahte (fotoğrafta da)", _t41_receiver_bankname_iban_code_mismatch),
+    (42, "FAST + gönderici=alıcı banka → KESİN sahte; 'FAST Giden Anlık Ödeme' FAST tanınır", _t42_fast_samebank_definitive_fake),
 ]
 
 
