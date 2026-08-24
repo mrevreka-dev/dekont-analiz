@@ -792,6 +792,17 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
     # ALT-DİZE DEĞİL kelime eşleşmesi ('defter'/'geft' yakalanmaz).
     eft_in_title = _eft_word or ("eftbankalararasi" in ns) or ("bankalararasihesaba" in ns and _eft_word)
 
+    # ===================== QNB'YE ÖZEL EFT/FAST AYRIMI (kullanıcı kuralı) =====================
+    # QNB dekontlarında işlem türü başlıkta "GİDEN EFT" ya da "GİDEN FAST EFT" olarak yazılır:
+    #   - "GİDEN EFT"       → KESİN EFT (bu banka için net gösterge).
+    #   - "GİDEN FAST EFT"  → FAST (buradaki 'EFT' sadece genel şablon; ibare FAST teslimini gösterir).
+    # Bu kural SADECE QNB kanalına özeldir (bkey='qnb' ya da gönderici IBAN kodu 00111).
+    # Boşluklar atıldığı için: "GİDEN EFT"→'gideneft', "GİDEN FAST EFT"→'gidenfasteft'.
+    _is_qnb = (bkey == "qnb") or (sc == "00111")
+    _qnb_giden_fast_eft = "gidenfasteft" in ns          # ÖNCE bakılır (içinde 'eft' geçse de FAST'tır)
+    _qnb_giden_eft = ("gideneft" in ns) and not _qnb_giden_fast_eft
+    qnb_definitive_eft = False                          # QNB'ye özel net-EFT bildirimi için bayrak
+
     rail, conf = "belirsiz", 0
     title_based_eft = False
     # ===================== BİRİNCİL KAPI: IBAN BANKA KODU =====================
@@ -800,6 +811,11 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
     # EFT mi FAST mı ayrımını ise FATURA etiketi (EFT/FAST TUTARI/ÜCRETİ) yapar.
     def _interbank_rail():
         """Bankalararası (farklı IBAN kodu) durumda EFT/FAST'ı fatura etiketinden ayırır."""
+        # QNB'YE ÖZEL (en yüksek öncelik): 'GİDEN FAST EFT'→FAST, 'GİDEN EFT'→KESİN EFT.
+        if _is_qnb and _qnb_giden_fast_eft:
+            return "fast", 93, "QNB: başlıkta 'GİDEN FAST EFT' → FAST (bu ibare FAST teslimini gösterir; içindeki 'EFT' genel şablondur)."
+        if _is_qnb and _qnb_giden_eft:
+            return "eft", 96, "QNB: başlıkta 'GİDEN EFT' → KESİN EFT (QNB kanalına özel net gösterge)."
         if eft_definitive:
             return "eft", 95, "Ücret kaleminde 'GEÇ EFT / GECEFT' → KESİN EFT."
         if fast_billing and not eft_billing:
@@ -828,10 +844,19 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
         ev.append("Gönderici ve alıcı IBAN FARKLI bankalarda (banka kodu farklı) → bankalararası "
                   "(EFT ya da FAST; HAVALE olamaz).")
         ev.append(_msg)
-        title_based_eft = (rail == "eft" and not eft_definitive and not eft_billing)
+        # QNB 'GİDEN EFT' → net EFT (başlık-temelli belirsiz EFT DEĞİL): QNB'ye özel bildirim kullanılır.
+        qnb_definitive_eft = _is_qnb and _qnb_giden_eft and rail == "eft"
+        title_based_eft = (rail == "eft" and not eft_definitive and not eft_billing
+                           and not qnb_definitive_eft)
     else:
         # IBAN kodları eksik/okunamadı → yalnız METİN fatura etiketiyle karar (yedek).
-        if eft_definitive:
+        # QNB'YE ÖZEL (en yüksek öncelik): 'GİDEN FAST EFT'→FAST, 'GİDEN EFT'→EFT.
+        if _is_qnb and _qnb_giden_fast_eft:
+            rail, conf = "fast", 90; ev.append("QNB: 'GİDEN FAST EFT' → FAST (IBAN kodu okunamadı).")
+        elif _is_qnb and _qnb_giden_eft:
+            rail, conf = "eft", 92; qnb_definitive_eft = True
+            ev.append("QNB: 'GİDEN EFT' → KESİN EFT (IBAN kodu okunamadı, QNB kanalına özel).")
+        elif eft_definitive:
             rail, conf = "eft", 90; ev.append("'GEÇ EFT/GECEFT' → EFT (IBAN kodu okunamadı).")
         elif fast_billing and not eft_billing:
             rail, conf = "fast", 88; ev.append("FAST faturalama → FAST (IBAN kodu okunamadı).")
@@ -852,7 +877,20 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
             return None
 
     _RL = {"eft": "EFT", "fast": "FAST", "havale": "HAVALE", "belirsiz": "BELİRSİZ"}[rail]
-    if rail == "eft" and title_based_eft:
+    if rail == "eft" and qnb_definitive_eft:
+        notice_tr = ("İŞLEM KANALI: Bu işlem bir **EFT** işlemidir — **FAST DEĞİLDİR**. QNB dekontunun "
+                     "başlığında 'GİDEN EFT' ibaresi geçiyor; bu, QNB kanalında EFT işleminin NET "
+                     "göstergesidir ('GİDEN FAST EFT' yazsaydı FAST olurdu). NOT: Bu, kanal "
+                     "sınıflandırmasıdır; dekontun sahte olup olmadığından AYRIDIR.")
+        notice_en = ("TRANSFER RAIL: This is an **EFT** transaction — **NOT FAST**. The QNB receipt title "
+                     "contains 'GİDEN EFT', a definitive EFT indicator for the QNB channel (had it said "
+                     "'GİDEN FAST EFT' it would be FAST). NOTE: rail classification, separate from authenticity.")
+    elif rail == "fast" and _is_qnb and _qnb_giden_fast_eft:
+        notice_tr = ("İŞLEM KANALI: Bu işlem bir **FAST** işlemidir. QNB dekontunda 'GİDEN FAST EFT' ibaresi "
+                     "geçiyor; bu ibare QNB'de FAST teslimini gösterir (içindeki 'EFT' genel şablondur).")
+        notice_en = ("TRANSFER RAIL: This is a **FAST** transaction. The QNB receipt says 'GİDEN FAST EFT', "
+                     "which denotes FAST delivery on the QNB channel (the embedded 'EFT' is a generic template).")
+    elif rail == "eft" and title_based_eft:
         notice_tr = ("İŞLEM KANALI: Bu işlem büyük olasılıkla bir **EFT** işlemidir — **FAST DEĞİLDİR**. "
                      "Gerekçe: dekont başlığında 'EFT BANKALAR ARASI HESABA HAVALE' ibaresi var, işlem "
                      "bankalararası (gönderici ve alıcı farklı bankalarda) ve belgede HİÇBİR FAST işareti "

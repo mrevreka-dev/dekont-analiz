@@ -34,6 +34,19 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z15", "date": "2026-08-24 03:20", "area": "QNB'YE ÖZEL EFT/FAST AYRIMI: 'GİDEN EFT'→net EFT, 'GİDEN FAST EFT'→FAST (rail tüm bankalarda + PDF'de evrensel)", "test": 38,
+     "bug": "QNB dekontlarında işlem türü başlıkta 'GİDEN EFT' / 'GİDEN FAST EFT' olarak yazılıyor. Eski "
+            "sınıflandırmada 'GİDEN EFT' yalnız başlık-temelli EFT (%75, 'büyük olasılıkla') sayılıyordu; "
+            "kullanıcı bunun QNB'de KESİN EFT göstergesi olduğunu, 'GİDEN FAST EFT'in ise FAST demek olduğunu "
+            "belirtti. Ayrıca EFT/FAST/HAVALE kanal tespitinin PDF taramalarında da tüm bankalarda çalıştığı "
+            "teyit edilmeliydi.",
+     "fix": "classify_rail'e QNB'ye özel gate eklendi (bkey=='qnb' VEYA gönderici IBAN kodu 00111): "
+            "boşluk-atılmış metinde 'gidenfasteft' → FAST (%93), 'gideneft' (fast-eft değilse) → KESİN EFT "
+            "(%96), QNB'ye özel bildirim metniyle. Hem bankalararası dalda hem IBAN-okunamadı yedeğinde geçerli; "
+            "QNB-dışı bankalara SIZMAZ (guard). Kanal tespiti (classify_rail + check_rail_bank) zaten "
+            "'if is_receipt' altında, girdi türünden (PDF/görsel) ve bankadan BAĞIMSIZ text_layout üzerinden "
+            "evrensel çalışıyor — doğrulandı. Test #38 kilitler.",
+     "not": "Kullanıcı kuralı: 'GİDEN EFT' QNB'de net EFT; 'GİDEN FAST EFT' FAST. Sadece QNB kanalına özel."},
     {"id": "Z14", "date": "2026-08-24 03:05", "area": "CERRAHİ SIFIRLAMA (reset scope='reuse'): öğrenilen veriye dokunmadan sadece işe yaramayan/eksik numara kayıtları temizlenir", "test": 37,
      "bug": "Eski/kirli veriyi silmek için ilk eklenen reset 'detection' kapsamı analyses+receipts+report_cache "
             "tablolarını TAMAMEN siliyordu → tam ve doğru okunmuş geçmiş kayıtlar da gidiyordu. Kullanıcı kuralı: "
@@ -1312,6 +1325,31 @@ def _t37_reset_reuse_surgical_keeps_learned():
     return ok, f"tam-korundu={a}, eksik-silindi={b}, numarasız-korundu={c}, öğrenilen-korundu={d}"
 
 
+def _t38_qnb_giden_eft_rule():
+    """QNB'YE ÖZEL EFT/FAST KURALI (kullanıcı kuralı): QNB dekontunda başlık 'GİDEN EFT' → KESİN EFT;
+    'GİDEN FAST EFT' → FAST (içindeki 'EFT' genel şablon). SADECE QNB kanalına özel — QNB-dışı bankalara
+    sızmamalı. Rail sınıflandırması PDF/görsel fark etmeden tüm bankalarda text_layout üzerinden çalışır.
+    Testler: (a) QNB+GİDEN EFT→eft; (b) QNB+GİDEN FAST EFT→fast; (c) QNB bkey boş ama gönderici IBAN 00111
+    → yine EFT; (d) QNB-dışı (Akbank kodu) + GİDEN EFT → QNB kuralı ÇALIŞMAZ (conf 96 QNB'ye özeldir)."""
+    import authenticity as _a, banks as _b
+    QNB = "TR350011100000000120439443"   # 00111 QNB (gönderici)
+    ZIR = "TR190001009011147534405001"   # 00010 Ziraat (alıcı) — bankalararası
+    if _b.iban_valid(QNB) is not True or _b.iban_valid(ZIR) is not True:
+        return False, "test IBAN'ları geçersiz (fixture hatası)"
+    r_eft = _a.classify_rail("QNB Bank A.S. GONDEREN ALICI Ziraat GIDEN EFT Tutar 5000 TL", QNB, ZIR, "qnb")
+    r_fast = _a.classify_rail("QNB Bank A.S. GONDEREN ALICI Ziraat GIDEN FAST EFT Tutar 5000 TL", QNB, ZIR, "qnb")
+    r_nokey = _a.classify_rail("GONDEREN ALICI GIDEN EFT Tutar 5000 TL", QNB, ZIR, "")  # bkey boş ama IBAN 00111
+    # QNB-dışı: Akbank kodu (00046) gönderici; QNB kuralı çalışmamalı → conf 96 OLMAMALI
+    AKB = "TR" + "00046" + "0" * 17  # kod 00046 içeren dizi (mod-97 önemsiz; kod okunur)
+    r_akb = _a.classify_rail("Akbank GONDEREN ALICI Ziraat GIDEN EFT Tutar 5000 TL", AKB, ZIR, "akbank")
+    a = bool(r_eft) and r_eft.get("rail") == "eft" and r_eft.get("confidence") == 96
+    b = bool(r_fast) and r_fast.get("rail") == "fast"
+    c = bool(r_nokey) and r_nokey.get("rail") == "eft" and r_nokey.get("confidence") == 96
+    d = not (bool(r_akb) and r_akb.get("confidence") == 96)   # QNB'ye özel 96 QNB-dışına sızmamalı
+    ok = a and b and c and d
+    return ok, f"qnb-giden-eft={a}, qnb-giden-fast-eft={b}, ibankodundan-qnb={c}, qnb-dışına-sızmaz={d}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1350,6 +1388,7 @@ _CHECKS = [
     (35, "Alıcı IBAN OCR-toleranslı kurtarma (ALICI IRAN + boşluk) → gönderici≠alıcı", _t35_receiver_iban_ocr_tolerant),
     (36, "Aynı dekont→NUMBER_REUSE yok; tutar VEYA sadece-tarih değişikliği→yakala; eksik okuma kaydedilmez", _t36_number_reuse_same_receipt_no_fp),
     (37, "Cerrahi sıfırlama (reuse): sadece eksik numara kayıtları silinir; tam kayıt+öğrenilen veri korunur", _t37_reset_reuse_surgical_keeps_learned),
+    (38, "QNB'ye özel: 'GİDEN EFT'→EFT, 'GİDEN FAST EFT'→FAST; sadece QNB kanalı (rail tüm bankalarda/PDF'de)", _t38_qnb_giden_eft_rule),
 ]
 
 
