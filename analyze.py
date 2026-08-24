@@ -46,6 +46,25 @@ def _engine_code_hash() -> str:
 # Görünen sürüm + kod hash'i. Hash sayesinde her kod değişikliği cache'i otomatik tazeler.
 ENGINE_VERSION = "1.0.1+" + _engine_code_hash()
 
+_RAIL_CODE = {"eft": "RAIL_IS_EFT", "fast": "RAIL_IS_FAST", "havale": "RAIL_IS_HAVALE"}
+_RAIL_CODES_ALL = set(_RAIL_CODE.values())
+
+
+def rail_codes_to_remove(existing_codes, authoritative_rail: str) -> set:
+    """TEK OTORİTER RAIL GARANTİSİ (saf/yan-etkisiz — test edilebilir). Düzeltilmiş veriyle sınıflanan
+    otoriter rail dışındaki TÜM rail kodlarını (ve otoriter rail EFT DEĞİLSE yanlış eklenmiş
+    EFT_SETTLEMENT_RISK'i) kaldırılacaklar kümesi olarak döndürür. Böylece kural motoru + YZ çapraz-kontrolü
+    çelişkili iki rail üretmiş olsa bile (ör. RAIL_IS_FAST + RAIL_IS_EFT) nihai raporda TEK rail kalır.
+    authoritative_rail belirsiz/boşsa hiçbir şey kaldırılmaz (kural motoru rail'i kaçırmış → mevcut korunur)."""
+    if authoritative_rail not in _RAIL_CODE:
+        return set()
+    want = _RAIL_CODE[authoritative_rail]
+    cur = set(existing_codes) & _RAIL_CODES_ALL
+    remove = cur - {want}
+    if remove and authoritative_rail != "eft":
+        remove = remove | {"EFT_SETTLEMENT_RISK"}
+    return remove
+
 _MONEY_TOK = r"-?\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|-?\d+[.,]\d{1,2}"
 
 # YALNIZCA işlem/transfer tutarını taşıyan etiketler. Ücret/komisyon/BSMV/masraf/toplam
@@ -1318,7 +1337,22 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     try:
         _exist_codes_eft = {f.code for f in findings} | {f.code for f in _post_ai}
         _ai_kanal = str(((ai_adjudication or {}).get("islem_kanali") or {}).get("kanal") or "").upper()
-        if _ai_kanal == "EFT" and "RAIL_IS_EFT" not in _exist_codes_eft:
+        # ÇELİŞKİ KORUMASI (temel kural: düzeltilmiş veri OTORİTER, YZ çelişki YARATAMAZ):
+        # Kural motoru düzeltilmiş veriyle ZATEN net bir NON-EFT rail belirlediyse, YZ'nin 'EFT' tahmini
+        # bunu EZMEZ ve İKİNCİ bir rail kodu OLUŞTURMAZ (yoksa aynı dekontta RAIL_IS_FAST + RAIL_IS_EFT gibi
+        # çelişki doğuyordu). Engellenen durumlar: (a) RAIL_IS_FAST zaten var (açık FAST kanıtı / QNB 'GİDEN
+        # FAST EFT'); (b) aynı-banka HAVALE (IBAN kodları eşit → EFT zaten imkânsız). YZ-EFT eskalasyonu
+        # SADECE kural motoru rail'i KAÇIRDIĞINDA (belirsiz/rail kodu yok) devrede kalır — asıl amacı budur.
+        try:
+            import banks as _bkeft
+            _sc_eft = _bkeft.iban_bank_code(ex.sender.iban) if ex.sender.iban else ""
+            _rc_eft = _bkeft.iban_bank_code(ex.receiver.iban) if ex.receiver.iban else ""
+            _same_bank_eft = bool(_sc_eft and _rc_eft and _sc_eft == _rc_eft)
+        except Exception:
+            _same_bank_eft = False
+        _rail_conflict_eft = ("RAIL_IS_FAST" in _exist_codes_eft
+                              or ("RAIL_IS_HAVALE" in _exist_codes_eft and _same_bank_eft))
+        if _ai_kanal == "EFT" and "RAIL_IS_EFT" not in _exist_codes_eft and not _rail_conflict_eft:
             _post_ai.append(Finding(
                 "RAIL_IS_EFT", "info", "content", 0,
                 tr="İşlem türü EFT (YZ görüntü incelemesi: ücret kalemi/başlık EFT'i gösteriyor).",
@@ -1362,6 +1396,10 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             _receipt_proven = _has_valid_iban or (_amt is not None and bool(_txn_id)) or _has_names
             if _receipt_proven:
                 _remove_codes.add("NOT_A_RECEIPT")
+                # KRİTİK: NOT_A_RECEIPT kalkıyorsa belge DEKONT olarak KANITLANMIŞTIR → is_receipt bayrağını da
+                # güncelle. Aksi halde verdicts.valid_receipt=FALSE kalıp (is_receipt hâlâ False) skoru 40'a
+                # çekiyor ve "geçerli dekont değil" çelişkisi doğuyordu (bulgu kaldırıldı ama bayrak eski).
+                is_receipt = True
         except Exception:
             pass
 
@@ -1409,17 +1447,44 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         if "SAMEBANK_RAIL_CONTRADICTION" in _codes_now:
             if not _auth_rec.check_samebank_rail_contradiction(text_layout, _s2, _r2, issuer_codes=_iss2):
                 _remove_codes.add("SAMEBANK_RAIL_CONTRADICTION")
-        # 2) RAIL: düzeltilmiş IBAN'larla yeniden sınıfla; yanlış HAVALE firelanmışsa (aslında EFT/FAST) düzelt
-        _rl_now = _auth_rec.classify_rail(text_layout, _s2, _r2, _bkey2)
+        # 1b) RAIL_SAMEBANK_MISMATCH / FEE_RAIL_MISMATCH: bunlar HAM-OCR IBAN'larıyla firelenmiş olabilir;
+        #     düzeltilmiş IBAN'larla yeniden değerlendir, artık geçerli değilse KALDIR (aksi halde meşru
+        #     bankalararası işlem, düzeltmeden sonra bile 'aynı-banka' yanlış-pozitifiyle sahte damgalanıyordu).
+        try:
+            if "RAIL_SAMEBANK_MISMATCH" in _codes_now:
+                _rbm = _auth_rec.check_rail_bank(text_layout, _s2, _r2, getattr(ex, "all_ibans", None))
+                if not _rbm or _rbm.get("code") != "RAIL_SAMEBANK_MISMATCH":
+                    _remove_codes.add("RAIL_SAMEBANK_MISMATCH")
+            if "FEE_RAIL_MISMATCH" in _codes_now:
+                try:
+                    import store as _store_lr
+                    _learned_lr = _store_lr.learned_rail_fees(ex.bank)
+                except Exception:
+                    _learned_lr = None
+                _frm = _auth_rec.check_fee_rail(_bkey2, text_layout, getattr(ex.amount, "fee", None), _learned_lr)
+                if not _frm or _frm.get("code") != "FEE_RAIL_MISMATCH":
+                    _remove_codes.add("FEE_RAIL_MISMATCH")
+        except Exception:
+            pass
+        # 2) RAIL: düzeltilmiş IBAN'larla yeniden sınıfla (ücret/tutar da geçilir ki KESİN EFT ücret kanıtı
+        #    'GEÇ EFT' görülebilsin); yanlış HAVALE firelanmışsa (aslında EFT/FAST) düzelt.
+        _rl_now = _auth_rec.classify_rail(text_layout, _s2, _r2, _bkey2,
+                                          getattr(ex.amount, "value", None), getattr(ex.amount, "fee", None))
         _rail_now = (_rl_now or {}).get("rail")
         if _rail_now in ("eft", "fast", "havale"):
-            _want = {"eft": "RAIL_IS_EFT", "fast": "RAIL_IS_FAST", "havale": "RAIL_IS_HAVALE"}[_rail_now]
-            _cur_rail = _codes_now & {"RAIL_IS_EFT", "RAIL_IS_FAST", "RAIL_IS_HAVALE"}
-            if _cur_rail and _want not in _cur_rail:
-                _remove_codes |= _cur_rail            # yanlış rail kod(lar)ını kaldır
-                # HAVALE yanlış firelendiyse EFT riski de yanlış eklenmiş olabilir → EFT değilse kaldır
-                if _rail_now != "eft":
-                    _remove_codes.add("EFT_SETTLEMENT_RISK")
+            _want = _RAIL_CODE[_rail_now]
+            _cur_rail = _codes_now & _RAIL_CODES_ALL
+            # TEK OTORİTER RAIL GARANTİSİ (bkz. rail_codes_to_remove): düzeltilmiş veriyle sınıflanan rail
+            # (_want) DIŞINDAKİ tüm rail kodlarını (ve rail EFT değilse yanlış EFT riskini) kaldır — kural
+            # motoru + YZ çapraz-kontrolü çelişkili iki rail üretmiş olsa bile nihai raporda TEK rail kalır.
+            _rail_rm = rail_codes_to_remove(_codes_now, _rail_now)
+            # KESİN EFT ÜCRET KANITI KORUMASI (Bulgu 5): metinde 'GEÇ EFT'/'EFT TUTARI' gibi KESİN EFT ücret
+            # kanıtı varken, IBAN-kodu tabanlı 'aynı-banka→HAVALE' çıkarımı EFT_SETTLEMENT_RISK'i EZMESİN
+            # (AI bir IBAN'ı yanlış düzeltip iki tarafı aynı banka yapmış olabilir → gerçek EFT riski kaybolmasın).
+            if _rail_now != "eft" and _auth_rec.has_definitive_eft_fee(text_layout):
+                _rail_rm.discard("EFT_SETTLEMENT_RISK")
+            _remove_codes |= _rail_rm
+            if _want not in _cur_rail:
                 _post_ai.append(Finding(_want, "info", "content", 0,
                                         tr=_rl_now.get("notice_tr", ""), en=_rl_now.get("notice_en", ""),
                                         detail=f"rail={_rail_now} source=reconciled"))
@@ -1440,8 +1505,12 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             findings = [f for f in findings if f.code not in _remove_codes]
         _exist_codes = {f.code for f in findings}
         for _f in _post_ai:
-            if _f.code not in _exist_codes:
+            # KRİTİK: _remove_codes'u _post_ai'ye DE uygula — aksi halde uzlaştırmada kaldırılan bir kod
+            # (ör. çelişkili RAIL_IS_EFT / yanlış EFT_SETTLEMENT_RISK) _post_ai içinde yaşadığı için GERİ
+            # eklenip çelişkili çift rail'i yeniden doğuruyordu. Ayrıca döngü-içi dedup (_exist_codes güncellenir).
+            if _f.code not in _exist_codes and _f.code not in _remove_codes:
                 findings.append(_f)
+                _exist_codes.add(_f.code)
         verdicts = _vd.compute_verdicts(
             doc_type=doc_type, input_kind=input_kind,
             codes={f.code for f in findings}, cons=cons,

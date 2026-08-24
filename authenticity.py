@@ -754,6 +754,16 @@ _EFT_FEE_MARKERS = _EFT_DEFINITIVE + _EFT_BILLING + ("dekont/eft",)
 _FAST_FEE_MARKERS = _FAST_BILLING + _FAST_TAG
 
 
+def has_definitive_eft_fee(text: str) -> bool:
+    """Metinde KESİN EFT ücret kanıtı ('GEÇ EFT/GECEFT' ya da 'EFT TUTARI/ÜCRETİ/KOMİSYON' gibi EFT
+    faturalaması) var mı? Bu, EFT'nin en güçlü göstergesidir ve IBAN-kodu tabanlı çıkarımla EZİLMEMELİDİR
+    (ör. AI bir IBAN'ı yanlış bankaya düzeltip aynı-banka→HAVALE çıkarımı yapsa bile EFT riski korunmalı)."""
+    if not text:
+        return False
+    ns = _tr_low(text).replace(" ", "")
+    return any(m in ns for m in _EFT_DEFINITIVE) or any(m in ns for m in _EFT_BILLING)
+
+
 def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
                   bkey: str = "", amount=None, fee=None) -> dict | None:
     """İşlem kanalını (EFT/FAST/HAVALE) KATMANLI kanıtla sınıflandırır ve

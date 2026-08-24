@@ -34,6 +34,36 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z17", "date": "2026-08-24 04:05", "area": "BÜTÜNSEL KONTROL-ÇAKIŞMASI DENETİMİ: bir kontrolün diğerini ezdiği 4 yol kapatıldı (alt-ajan analizi)", "test": 40,
+     "bug": "Tüm pipeline 'bir kontrol diğerini eziyor mu' diye denetlendi. Bulunan gerçek çakışmalar: "
+            "(1) KRİTİK: _remove_codes yalnız 'findings'e uygulanıyordu; _post_ai ekleme döngüsü kaldırılan kodu "
+            "(çelişkili RAIL_IS_EFT / yanlış EFT_SETTLEMENT_RISK) GERİ ekliyordu → çift/çelişkili rail hâlâ "
+            "mümkündü. (2) RAIL_SAMEBANK_MISMATCH / FEE_RAIL_MISMATCH, IBAN düzeltmesinden sonra yeniden "
+            "değerlendirilmiyordu → meşru bankalararası işlem düzeltmeden sonra bile 'aynı-banka' yanlış-pozitifiyle "
+            "sahte kalıyordu. (3) NOT_A_RECEIPT kaldırılıyor ama is_receipt bayrağı False kalıyordu → "
+            "verdicts.valid_receipt=FALSE + skor 40 çelişkisi. (5) Uzlaştırmadaki classify_rail ücret/tutar "
+            "geçilmeden çağrılıyordu → KESİN EFT ücret kanıtı ('GEÇ EFT') görülmeyip IBAN-tabanlı HAVALE çıkarımı "
+            "gerçek EFT riskini eziyordu.",
+     "fix": "(1) _post_ai ekleme döngüsü artık _remove_codes'a göre de süzülüyor + döngü-içi dedup. (2) blok(e)'ye "
+            "check_rail_bank/check_fee_rail düzeltilmiş IBAN'larla re-eval + geçersizse kaldırma eklendi. (3) "
+            "NOT_A_RECEIPT kalkınca is_receipt=True yapılıyor. (5) blok(e) classify_rail'e amount/fee geçiliyor + "
+            "yeni authenticity.has_definitive_eft_fee() ile KESİN EFT ücret kanıtı varken EFT_SETTLEMENT_RISK "
+            "korunuyor. (Bulgu 4 — apply_corrections hard-proof koruması — düşük öncelikli, ayrıca ele alınacak.) "
+            "Test #39 (tek rail) + #40 (kesin EFT koruması) kilitler.",
+     "not": "Skor tavanları min() ile birleşiyor; en düşük her zaman kazanıyor — tavan sırası hatası YOK (doğrulandı)."},
+    {"id": "Z16", "date": "2026-08-24 03:50", "area": "TEK OTORİTER RAIL: aynı dekontta çelişkili çift rail (RAIL_IS_FAST + RAIL_IS_EFT) engellendi", "test": 39,
+     "bug": "Sahada (03:42 QNB, OCR) bir dekontta hem RAIL_IS_EFT hem RAIL_IS_FAST + EFT_SETTLEMENT_RISK "
+            "birlikte çıktı. Kök neden: rail kodu ÜÇ ayrı yerde ekleniyor — (1) kural motoru, (2) YZ "
+            "islem_kanali çapraz-kontrolü, (3) AI-sonrası uzlaştırma. YZ çapraz-kontrolü, kural motoru ZATEN "
+            "FAST demişken 'EFT' deyince çelişki kontrolü YAPMADAN RAIL_IS_EFT DE ekliyordu; uzlaştırma da "
+            "'_want zaten var' durumunda yanlış rail'i temizleyemiyordu → iki çelişkili rail kalıyordu. "
+            "Bu, temel mimari kuralı ihlal ediyordu (düzeltilmiş veri otoriter, YZ çelişki yaratamaz).",
+     "fix": "(1) YZ-EFT çapraz-kontrolüne ÇELİŞKİ KORUMASI: RAIL_IS_FAST zaten varsa ya da aynı-banka HAVALE "
+            "ise (IBAN kodları eşit) YZ'nin 'EFT' tahmini rail EKLEMEZ; eskalasyon yalnız kural motoru rail'i "
+            "KAÇIRDIĞINDA (belirsiz/kod yok) devrede kalır. (2) Uzlaştırmaya TEK-RAIL GARANTİSİ: yeni saf "
+            "yardımcı analyze.rail_codes_to_remove() otoriter rail dışındaki tüm rail kodlarını (+rail EFT "
+            "değilse yanlış EFT riskini) kaldırır. Test #39 kilitler.",
+     "not": "Belt-and-suspenders: hem çelişki kaynağı (YZ ekleme) engellendi hem de uzlaştırma tek rail'e indiriyor."},
     {"id": "Z15", "date": "2026-08-24 03:20", "area": "QNB'YE ÖZEL EFT/FAST AYRIMI: 'GİDEN EFT'→net EFT, 'GİDEN FAST EFT'→FAST (rail tüm bankalarda + PDF'de evrensel)", "test": 38,
      "bug": "QNB dekontlarında işlem türü başlıkta 'GİDEN EFT' / 'GİDEN FAST EFT' olarak yazılıyor. Eski "
             "sınıflandırmada 'GİDEN EFT' yalnız başlık-temelli EFT (%75, 'büyük olasılıkla') sayılıyordu; "
@@ -1350,6 +1380,41 @@ def _t38_qnb_giden_eft_rule():
     return ok, f"qnb-giden-eft={a}, qnb-giden-fast-eft={b}, ibankodundan-qnb={c}, qnb-dışına-sızmaz={d}"
 
 
+def _t39_single_authoritative_rail():
+    """TEK OTORİTER RAIL GARANTİSİ: bir dekontta ASLA iki çelişkili rail kodu (ör. RAIL_IS_FAST + RAIL_IS_EFT)
+    birlikte kalmamalı. Sahada görülen hata: kural motoru FAST derken YZ 'EFT' deyince ikisi birden
+    ekleniyordu. Düzeltme: düzeltilmiş veriyle sınıflanan rail OTORİTER; analyze.rail_codes_to_remove
+    diğer rail kodlarını (ve rail EFT değilse yanlış EFT_SETTLEMENT_RISK'i) kaldırır. Testler:
+    (a) FAST otoriter iken RAIL_IS_EFT + EFT_SETTLEMENT_RISK kaldırılır; (b) EFT otoriter iken FAST/HAVALE
+    kaldırılır, EFT riski KORUNUR; (c) rail belirsiz iken hiçbir şey kaldırılmaz (kural motoru kaçırmış→koru);
+    (d) HAVALE otoriter iken EFT/FAST + EFT riski kaldırılır."""
+    import analyze as _an
+    conflict = {"RAIL_IS_FAST", "RAIL_IS_EFT", "EFT_SETTLEMENT_RISK", "NUMBER_REUSE"}
+    a = _an.rail_codes_to_remove(conflict, "fast") == {"RAIL_IS_EFT", "EFT_SETTLEMENT_RISK"}
+    rem_eft = _an.rail_codes_to_remove({"RAIL_IS_FAST", "RAIL_IS_EFT", "EFT_SETTLEMENT_RISK"}, "eft")
+    b = rem_eft == {"RAIL_IS_FAST"}                       # EFT otoriter → FAST kalkar, EFT riski KORUNUR
+    c = _an.rail_codes_to_remove(conflict, "belirsiz") == set()
+    d = _an.rail_codes_to_remove({"RAIL_IS_EFT", "RAIL_IS_FAST", "EFT_SETTLEMENT_RISK"}, "havale") == \
+        {"RAIL_IS_EFT", "RAIL_IS_FAST", "EFT_SETTLEMENT_RISK"}
+    ok = a and b and c and d
+    return ok, f"fast-otoriter={a}, eft-otoriter-risk-korur={b}, belirsiz-korur={c}, havale-otoriter={d}"
+
+
+def _t40_definitive_eft_fee_protection():
+    """KESİN EFT ÜCRET KANITI KORUMASI (Bulgu 5): metinde 'GEÇ EFT' ya da 'EFT TUTARI/ÜCRETİ' gibi KESİN
+    EFT ücret kanıtı varken, AI bir IBAN'ı yanlış düzeltip iki tarafı aynı-banka yaptığında bile
+    EFT_SETTLEMENT_RISK EZİLMEMELİDİR. has_definitive_eft_fee() bu kanıtı tespit eder. Testler:
+    (a) 'GEÇ EFT' → True; (b) 'EFT TUTARI' → True; (c) sadece 'GİDEN FAST' (FAST) → False;
+    (d) 'defter kayıtları' (kelime tuzağı) → False."""
+    import authenticity as _a
+    a = _a.has_definitive_eft_fee("Islem turu GEC EFT ucret 5 TL") is True
+    b = _a.has_definitive_eft_fee("EFT TUTARI 5.000,00 TL") is True
+    c = _a.has_definitive_eft_fee("GIDEN FAST Tutar 5.000,00 TL") is False
+    d = _a.has_definitive_eft_fee("Bankanin defter kayitlari esastir") is False
+    ok = a and b and c and d
+    return ok, f"gec-eft={a}, eft-tutari={b}, fast-degil={c}, defter-tuzagi-yok={d}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1389,6 +1454,8 @@ _CHECKS = [
     (36, "Aynı dekont→NUMBER_REUSE yok; tutar VEYA sadece-tarih değişikliği→yakala; eksik okuma kaydedilmez", _t36_number_reuse_same_receipt_no_fp),
     (37, "Cerrahi sıfırlama (reuse): sadece eksik numara kayıtları silinir; tam kayıt+öğrenilen veri korunur", _t37_reset_reuse_surgical_keeps_learned),
     (38, "QNB'ye özel: 'GİDEN EFT'→EFT, 'GİDEN FAST EFT'→FAST; sadece QNB kanalı (rail tüm bankalarda/PDF'de)", _t38_qnb_giden_eft_rule),
+    (39, "Tek otoriter rail: RAIL_IS_FAST+RAIL_IS_EFT gibi çelişki nihai raporda kalmaz (düzeltilmiş veri otoriter)", _t39_single_authoritative_rail),
+    (40, "Kesin EFT ücret kanıtı ('GEÇ EFT'/'EFT TUTARI') korunur: yanlış IBAN düzeltmesi EFT riskini ezemez", _t40_definitive_eft_fee_protection),
 ]
 
 
