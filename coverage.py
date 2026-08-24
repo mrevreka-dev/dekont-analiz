@@ -105,14 +105,44 @@ def build(report: dict) -> dict:
                     f"(EFT ya da FAST). Kanal: {(_rail or 'belirsiz').upper()}."
                     + (" DİKKAT: farklı bankada HAVALE olamaz." if _rail == "havale" else ""))
         else:
-            add("IBAN banka kodu karşılaştırması", "kısmi",
-                "İki tarafın IBAN'ı okunamadığından banka kodu karşılaştırması yapılamadı.")
+            # Hangi tarafın IBAN'ı eksik, AÇIKÇA yaz (kullanıcı kuralı). Gönderen IBAN'ı çoğu dekontta
+            # YAZILMAZ (gönderen müşteri no ile tanımlanır) → 'okunamadı' değil 'dekontta yer almıyor'.
+            _snd_bank = ex.get("bank") or bank
+            _rc_bank = (_bk2.bank_label_from_iban(rcv.get("iban", "")) or _bk2.bank_from_iban(rcv.get("iban", ""))) if _rc else ""
+            _sc_bank = (_bk2.bank_label_from_iban(snd.get("iban", "")) or _bk2.bank_from_iban(snd.get("iban", ""))) if _sc else ""
+            if _rc and not _sc:
+                add("IBAN banka kodu karşılaştırması", "kısmi",
+                    f"Karşılaştırma yapılamadı: GÖNDERİCİ IBAN'ı bu dekontta YER ALMIYOR/okunamadı "
+                    f"(bu bankada gönderen genelde müşteri no ile tanımlanır, IBAN yazılmaz). Gönderici bankası "
+                    f"dekont sahibinden (ihraççı) biliniyor: {_snd_bank}. Alıcı IBAN kodu {_rc} → {_rc_bank}. "
+                    f"Kod karşılaştırması için İKİ tarafın IBAN'ı gerekir.")
+            elif _sc and not _rc:
+                add("IBAN banka kodu karşılaştırması", "kısmi",
+                    f"Karşılaştırma yapılamadı: ALICI IBAN'ı okunamadı/yok. Gönderici IBAN kodu {_sc} → "
+                    f"{_sc_bank}. Kod karşılaştırması için İKİ tarafın IBAN'ı gerekir.")
+            else:
+                add("IBAN banka kodu karşılaştırması", "kısmi",
+                    f"Karşılaştırma yapılamadı: iki tarafın da IBAN'ı okunamadı/yok. Tespit edilen banka "
+                    f"(ihraççı): {_snd_bank}.")
     except Exception:
         pass
 
-    # 3) Kimlik (TC/VKN) doğruluğu + çapraz tutarlılık
-    d1, s1 = _tc_status(snd.get("tckn", ""), "Gönderici/işlem TCKN")
-    add("Kimlik (TC/VKN) doğruluğu", d1, s1)
+    # 3) Kimlik (TC/VKN) doğruluğu — gönderici TCKN VAR MI, yoksa ŞABLONDA YOK MU (kullanıcı kuralı):
+    #    boşsa 'okunamadı' deyip geçme; dekont ham metninde bir kimlik ALANI olup olmadığını YENİDEN kontrol et.
+    _snd_tckn = snd.get("tckn", "") or ""
+    if _snd_tckn:
+        d1, s1 = _tc_status(_snd_tckn, "Gönderici/işlem TCKN")
+        add("Kimlik (TC/VKN) doğruluğu", d1, s1)
+    else:
+        import re as _re_id
+        _rt_id = (ex.get("raw_text") or "")
+        _has_id_label = bool(_re_id.search(r"(TCKN|T\.?\s*C\.?\s*Kimlik|VKN|Vergi\s*(Kimlik\s*)?No|Kimlik\s*No)", _rt_id, _re_id.I))
+        if _has_id_label:
+            add("Kimlik (TC/VKN) doğruluğu", "kısmi",
+                "Belgede kimlik (TCKN/VKN) ALANI var ama gönderici numarası net okunamadı — gözle teyit önerilir.")
+        else:
+            add("Kimlik (TC/VKN) doğruluğu", "yapıldı",
+                "Bu dekont şablonunda gönderici TCKN/VKN alanı YOK (şablon gereği) → doğrulanacak kimlik numarası bulunmuyor.")
     if "ID_FIELD_MISMATCH" in codes:
         add("Kimlik çapraz tutarlılık (VKN ↔ TCKN)", "kusur",
             "VKN alanı ile işlemi yapan TCKN uyuşmuyor (kimlik uydurma) — ID_FIELD_MISMATCH")
@@ -134,7 +164,21 @@ def build(report: dict) -> dict:
         add("Tutar/vergi/toplam aritmetiği", "yapıldı" if ok else "kusur",
             f"tutar {v} + ücret {fee} = {round(v + fee, 2)} vs toplam {tot} → {'tutarlı' if ok else 'TUTARSIZ'}")
     elif v is not None:
-        add("Tutar analizi", "kısmi", f"tutar {v}; ücret/toplam eksik (aritmetik doğrulanamadı)")
+        # tutar OKUNDU. Ücret/toplam durumunu AÇIKÇA yaz. KÖK NEDEN: çoğu FAST/HAVALE dekontunda TOPLAM
+        # satırı YOKTUR (yalnız tutar + masraf yazar) → 'toplam' hiç basılmadığından aritmetik yapılamaz;
+        # bu bir EKSİK/KUSUR DEĞİLDİR. Eskiden ücret dolu olsa bile 'ücret/toplam eksik' yazıp her seferinde
+        # hata gibi gösteriliyordu.
+        if tot is not None:
+            _ok = (fee is None) or True
+            add("Tutar analizi", "kısmi",
+                f"tutar {v}" + (f" + ücret {fee}" if fee is not None else "") + f"; toplam {tot} okundu.")
+        elif fee is not None:
+            add("Tutar analizi", "yapıldı",
+                f"tutar {v} + ücret {fee} okundu; belgede TOPLAM satırı yok (bu bankada FAST/HAVALE dekontu "
+                f"toplam yazmaz) → tutar+ücret=toplam aritmetiği için toplam gerekir. Bu bir EKSİK/kusur DEĞİLDİR.")
+        else:
+            add("Tutar analizi", "kısmi",
+                f"tutar {v} okundu; belgede ücret ve toplam satırı yok/okunamadı → aritmetik doğrulama yapılamaz.")
     else:
         add("Tutar analizi", "yapılamadı", "tutar okunamadı")
     if "AMOUNT_MISMATCH" in codes:
@@ -253,8 +297,32 @@ def build(report: dict) -> dict:
         add("Üretim uygulaması / düzenleme", "yapıldı",
             f"Üretici/yazılım: {_blob}. Bilinen düzenleyici (Photoshop/Canva/GIMP…) ya da AI izi YOK.")
     elif is_image:
-        add("Üretim uygulaması / düzenleme", "kısmi",
-            "Görselde EXIF yazılım/üretici bilgisi yok (silinmiş olabilir); ELA + Vision ile içerik tarandı.")
+        # HANGİ YOLLA OLUŞTURULDU + SONRADAN DÜZENLENDİ Mİ (kullanıcı kuralı): forensik sinyallerden yaz.
+        _sigs = imf.get("signals") or []
+        _sig_txt = " ".join(((s.get("tr") or "") + " " + (s.get("en") or "")) for s in _sigs).lower()
+        _recap = any(k in _sig_txt for k in ("recapture", "yeniden çek", "moiré", "moire"))
+        _ela_h = float(imf.get("ela_hotspot_ratio") or 0)
+        _bg_h = float(imf.get("bg_dev_hotspot_ratio") or 0)
+        _noise = float(imf.get("noise_inconsistency") or 0)
+        _jq = imf.get("jpeg_quality_est")
+        _has_exif = bool(imf.get("has_exif"))
+        # (a) OLUŞTURMA YOLU
+        if _recap:
+            _nasil = "ekranın İKİNCİ bir cihazla yeniden çekimi (recapture — moiré/periyodik desen)"
+        elif not _has_exif:
+            _nasil = "ekran görüntüsü / dijital dışa aktarım (kamera EXIF verisi yok)"
+        else:
+            _nasil = "doğrudan cihaz fotoğrafı (kamera EXIF var)"
+        # (b) SONRADAN DÜZENLEME İZİ
+        if _ela_h > 0.02 or _bg_h > 0.02 or _noise > 1.5:
+            _durum, _duzen = "kısmi", ("olası rötuş/yapıştırma bölgesi İŞARETLENDİ "
+                f"(ELA hotspot {round(_ela_h,3)}, zemin-farkı hotspot {round(_bg_h,3)}, gürültü {round(_noise,2)}) "
+                "→ ısı haritasındaki bölge(ler)i gözle inceleyin")
+        else:
+            _durum, _duzen = "yapıldı", ("belirgin düzenleme/rötuş izi (ELA/gürültü/zemin/font) BULUNAMADI")
+        add("Üretim uygulaması / düzenleme", _durum,
+            f"EXIF yazılım/üretici bilgisi yok. Oluşturma: {_nasil}. Sonradan düzenleme: {_duzen}."
+            + (f" (JPEG kalite tahmini ~{_jq})" if _jq else ""))
     else:
         add("Üretim uygulaması / düzenleme", "yapıldı", "Üretici/düzenleyici bilgisinde düzenleyici/AI izi yok.")
 

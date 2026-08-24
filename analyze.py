@@ -1568,6 +1568,15 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                          "tahrifat kanıtı BULUNAMADI → hüküm 'belirsiz'e güncellendi. Özgünlük ayrı, işlem "
                          "kanalı riski (EFT ise) ayrı değerlendirilir. — ")
             ai_adjudication["reasoning_tr"] = _rec_note + str(ai_adjudication.get("reasoning_tr") or "")
+        # TERS YÖN (KULLANICI KURALI: 'YZ yorumu OKUNAMAYAN değil NETLEŞMİŞ veriye dayanmalı'): YZ bir alanı
+        # 'net okunamadı' deyip çelişkiyi mazur görebilir (ör. IBAN'ı corrected_fields'a yazdığı hâlde 'IBAN
+        # okunamadı, karşılaştırma yapılamadı' der ve 'gerçek' hükmü verir). Alanlar düzeltildikten SONRAKİ
+        # NİHAİ bulgularda KESİN bir tahrifat/çelişki kodu varsa, YZ 'gerçek/belirsiz' demiş olsa BİLE hüküm
+        # 'sahte'ye çekilir ve gerekçeye NETLEŞMİŞ veriye dayanan şeffaf bir not eklenir. Böylece rapor
+        # iskeleti (düzeltilmiş veri) ile YZ yorumu ASLA çelişmez.
+        elif ai_adjudication and _ai_v not in ("sahte", "şüpheli", "supheli") and _forgery_codes:
+            _hard = [(f.code, f.tr) for f in findings if f.code in _forgery_codes]
+            _vd.escalate_verdict_on_hard_findings(ai_adjudication, _hard, _ai_v)
     except Exception:
         pass
 

@@ -34,6 +34,21 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z21", "date": "2026-08-24 14:30", "area": "KULLANICI KURALI: YZ yorumu NETLEŞMİŞ veriyle uzlaştırılır (gerçek→sahte) + denetim kapsamı maddeleri netleştirildi", "test": 44,
+     "bug": "(1) YZ tek geçişte hem alan düzeltiyor hem hüküm veriyordu; bir alanı 'net okunamadı' deyip "
+            "çelişkiyi mazur görüp 'gerçek' diyordu (IBAN'ı corrected_fields'a yazdığı hâlde). Uzlaştırma "
+            "kapısı yalnız TEK yöndeydi (sahte→belirsiz). (2) Denetim kapsamı maddeleri okunamayan veriyle "
+            "genel/yanıltıcı yazıyordu: IBAN karşılaştırması 'iki taraf okunamadı' (hangi taraf belirsiz), "
+            "TCKN 'okunamadı/boş' (şablonda alan yokken bile), Tutar 'ücret/toplam eksik' (ücret DOLU olsa "
+            "bile, toplam satırı olmayan şablonda her seferinde 'hata'), Üretim 'EXIF yok' (nasıl oluştuğu/"
+            "düzenlendiği yazılmıyordu).",
+     "fix": "(1) verdicts.escalate_verdict_on_hard_findings + analyze uzlaştırma kapısına TERS yön: YZ 'gerçek/"
+            "belirsiz' dese de NETLEŞMİŞ bulgularda KESİN çelişki (RECEIVER_BANK_MISMATCH vb.) varsa hüküm "
+            "'sahte'ye çekilir, verdict_ham korunur, gerekçeye netleşmiş-veri notu eklenir. (2) coverage.py: "
+            "IBAN karşılaştırması hangi tarafın eksik olduğunu (gönderici IBAN dekontta YOK/ihraççıdan biliniyor) "
+            "yazar; TCKN şablonda alan yoksa 'yapıldı: alan yok' der; Tutar toplam satırı olmayan şablonda "
+            "'kusur değil' der; Üretim maddesi oluşturma yolu (recapture/ekran görüntüsü/foto) + düzenleme izini "
+            "(ELA/zemin/gürültü) yazar. Test #44 kilitler."},
     {"id": "Z20", "date": "2026-08-24 14:00", "area": "KULLANICI KURALI: AI'ın okuduğu bank_stated boş alana uygulanır → banka-adı↔IBAN kuralı fotoğrafta çalışır", "test": 43,
      "bug": "Sahte VakıfBank dekontu deploy sonrası hâlâ %72 alıyordu. Gerçek rapor kanıtladı: AI 'receiver."
             "bank_stated'i 'Türkiye Garanti Bankası A.Ş.' olarak DOĞRU okuyor ve corrected_fields'a koyuyordu, "
@@ -1505,6 +1520,27 @@ def _t43_ai_fills_empty_bank_stated():
     return True, "bank_stated: boşsa AI'ın görüntüden okuması doldurur, doluysa korunur (çelişki kuralı önkoşulu)."
 
 
+def _t44_ai_verdict_escalated_on_hard_finding():
+    """(KULLANICI KURALI) YZ 'gerçek/belirsiz' dediği hâlde NETLEŞMİŞ veride KESİN çelişki (ör. RECEIVER_BANK_
+    MISMATCH) varsa, rapordaki YZ hükmü 'sahte'ye çekilmeli (verdict_ham korunur) ve gerekçeye netleşmiş-veri
+    notu eklenmeli. YZ, okuyamadığı veriyle değil netleşmiş/düzeltilmiş veriyle konuşmalı."""
+    import verdicts as V
+    # (1) YZ 'gerçek' + kesin çelişki → 'sahte'ye çekilir
+    ai = {"verdict": "gerçek", "reasoning_tr": "çelişki yok."}
+    hard = [("RECEIVER_BANK_MISMATCH", "Alıcı banka Garanti ↔ IBAN kodu Ziraat")]
+    out, changed = V.escalate_verdict_on_hard_findings(ai, hard, "gerçek")
+    if not changed or out.get("verdict") != "sahte" or out.get("verdict_ham") != "gerçek":
+        return False, f"kesin çelişki varken YZ hükmü 'sahte'ye çekilmedi: {out.get('verdict')}"
+    if "UZLAŞTIRMA" not in (out.get("reasoning_tr") or ""):
+        return False, "gerekçeye netleşmiş-veri uzlaştırma notu eklenmedi"
+    # (2) Kesin çelişki YOKken YZ 'gerçek' → DOKUNULMAZ (yanlış-pozitif olmaz)
+    ai2 = {"verdict": "gerçek", "reasoning_tr": "temiz."}
+    out2, changed2 = V.escalate_verdict_on_hard_findings(ai2, [], "gerçek")
+    if changed2 or out2.get("verdict") != "gerçek":
+        return False, "çelişki yokken YZ hükmü gereksiz değiştirildi (FP)"
+    return True, "YZ hükmü: kesin çelişki varsa netleşmiş veriyle 'sahte'ye çekilir; yoksa korunur."
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1549,6 +1585,7 @@ _CHECKS = [
     (41, "Yazan alıcı/gönderici banka adı ↔ IBAN banka kodu çelişkisi → KESİN sahte (fotoğrafta da)", _t41_receiver_bankname_iban_code_mismatch),
     (42, "FAST + gönderici=alıcı banka → KESİN sahte; 'FAST Giden Anlık Ödeme' FAST tanınır", _t42_fast_samebank_definitive_fake),
     (43, "AI boş bank_stated'i görüntüden doldurur (dolu olanı ezmez) → çelişki kuralı fotoğrafta çalışır", _t43_ai_fills_empty_bank_stated),
+    (44, "YZ 'gerçek' dese de netleşmiş veride kesin çelişki varsa hüküm 'sahte'ye çekilir (verdict_ham korunur)", _t44_ai_verdict_escalated_on_hard_finding),
 ]
 
 

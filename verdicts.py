@@ -347,3 +347,22 @@ def compute_verdicts(*, doc_type: str, input_kind: str, codes: set, cons: dict,
         "checks": checks,
         "overall": {"state": overall, "label_tr": o_tr, "label_en": o_en},
     }
+
+
+def escalate_verdict_on_hard_findings(ai_adjudication: dict, hard_findings, ai_verdict: str):
+    """KULLANICI KURALI ('YZ yorumu OKUNAMAYAN değil NETLEŞMİŞ veriye dayanmalı'): YZ 'gerçek/belirsiz'
+    dediği hâlde alanlar düzeltildikten SONRAKİ NİHAİ bulgularda KESİN bir tahrifat/çelişki (hard_findings)
+    varsa, hüküm 'sahte'ye çekilir ve gerekçeye NETLEŞMİŞ veriye dayanan şeffaf bir not eklenir.
+    hard_findings: [(code, tr_message), ...]. Döner: (guncellenen_ai_adjudication, degisti_mi)."""
+    v = (ai_verdict or "").lower()
+    if not ai_adjudication or v in ("sahte", "şüpheli", "supheli") or not hard_findings:
+        return ai_adjudication, False
+    _kanit = "; ".join(f"{c}: {t}" for c, t in hard_findings)[:700]
+    ai_adjudication.setdefault("verdict_ham", v or "belirsiz")   # şeffaflık: YZ'nin ilk (ham) hükmü
+    ai_adjudication["verdict"] = "sahte"
+    _note = (f"[DÜZELTME SONRASI UZLAŞTIRMA] YZ'nin ilk hükmü ('{v or 'belirsiz'}') OKUNAMAYAN/ham veriye "
+             "dayanıyordu (ör. 'IBAN net okunamadı, karşılaştırma yapılamadı' demiş olsa da o alan "
+             "NETLEŞTİRİLİP rapora işlenmiştir). Raporun iskeletini oluşturan NETLEŞMİŞ veriyle DETERMINİSTİK "
+             f"ve KESİN bir çelişki bulundu → hüküm 'sahte'ye güncellendi. Kanıt: {_kanit} — ")
+    ai_adjudication["reasoning_tr"] = _note + str(ai_adjudication.get("reasoning_tr") or "")
+    return ai_adjudication, True
