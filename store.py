@@ -120,6 +120,11 @@ def _connect():
         ai_ok INTEGER, ai_verdict TEXT, ai_recovered INTEGER, vision_ok INTEGER,
         blocklist_hit INTEGER, visual_tamper INTEGER, score INTEGER, risk TEXT,
         codes TEXT, notes TEXT, elapsed_ms INTEGER, created_at TEXT )""")
+    # BİLİNMEYEN BANKALAR: gönderici IBAN banka kodu tanınan listede olmayan dekontlar. Gün sonu bu tablo
+    # gözden geçirilip banka IBAN_BANK_CODES listesine eklenir (kullanıcı kuralı: 'listeye ekleme komutu').
+    con.execute("""CREATE TABLE IF NOT EXISTS unknown_banks (
+        code TEXT PRIMARY KEY, ai_bank_name TEXT, rail TEXT, sample_sha256 TEXT,
+        hit_count INTEGER, first_seen TEXT, last_seen TEXT )""")
     con.commit()
     _maybe_unblock(con)
     return con
@@ -698,6 +703,49 @@ def diag_sample_file(sha256: str):
     except Exception:
         pass
     return None, None
+
+
+def log_unknown_bank(code: str, ai_bank_name: str = "", rail: str = "", sample_sha256: str = "") -> bool:
+    """Bilinmeyen banka kodunu (gönderici IBAN kodu listede yok) kaydeder → gün sonu IBAN_BANK_CODES'a
+    eklenmek üzere. Aynı kod tekrar gelirse hit_count artar, YZ'nin bulduğu banka adı/rail güncellenir."""
+    if not enabled() or not code:
+        return False
+    try:
+        con = _connect()
+    except Exception:
+        return False
+    try:
+        now = _dt.datetime.utcnow().isoformat()
+        row = con.execute("SELECT hit_count FROM unknown_banks WHERE code=?", (code,)).fetchone()
+        if row:
+            con.execute("UPDATE unknown_banks SET hit_count=hit_count+1, last_seen=?, "
+                        "ai_bank_name=COALESCE(NULLIF(?,''), ai_bank_name), "
+                        "rail=COALESCE(NULLIF(?,''), rail), "
+                        "sample_sha256=COALESCE(NULLIF(?,''), sample_sha256) WHERE code=?",
+                        (now, ai_bank_name or "", rail or "", sample_sha256 or "", code))
+        else:
+            con.execute("INSERT INTO unknown_banks (code, ai_bank_name, rail, sample_sha256, hit_count, "
+                        "first_seen, last_seen) VALUES (?,?,?,?,1,?,?)",
+                        (code, ai_bank_name or "", rail or "", sample_sha256 or "", now, now))
+        con.commit()
+        return True
+    except Exception:
+        return False
+
+
+def unknown_banks_recent(limit: int = 200) -> list:
+    """Kaydedilmiş bilinmeyen banka kodları (gün sonu listeye eklemek için). En çok görülenler önce."""
+    if not enabled():
+        return []
+    try:
+        con = _connect()
+        rows = con.execute("SELECT code, ai_bank_name, rail, sample_sha256, hit_count, first_seen, last_seen "
+                           "FROM unknown_banks ORDER BY hit_count DESC, last_seen DESC LIMIT ?",
+                           (int(limit),)).fetchall()
+        return [{"code": r[0], "ai_bank_name": r[1], "rail": r[2], "sample_sha256": r[3],
+                 "hit_count": r[4], "first_seen": r[5], "last_seen": r[6]} for r in rows]
+    except Exception:
+        return []
 
 
 def log_diag(d: dict) -> bool:

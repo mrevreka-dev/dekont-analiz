@@ -470,8 +470,10 @@ BANK_REGISTRY = [
      "sig": lambda c: ("teb.com.tr" in c["lc_ns"] or "cepteteb" in c["lc_ns"]
                        or "bankalararasiparatransferdekontu" in c["lc_ns"])},
     {"key": "qnb", "label": "QNB Bank A.Ş.", "iban": {"00111"},
-     "sig": lambda c: ("qnb.com" in c["low"] or "qnb telefon bankaciligi" in c["nlow"]
-                       or "qnb internet bankaciligi" in c["nlow"])},
+     # ÖNCELİK: (2) domain 'qnb.com', (3) logo/header 'QNB Bank' / 'Finansbank'. OCR domaini kaçırsa bile
+     # header 'QNB Bank A.Ş.' logosu yakalanır. (Enpara ARTIK ayrı banka; gönderici IBAN 00111 zaten birincil.)
+     "sig": lambda c: ("qnb.com" in c["low"] or "qnb bank" in c["nlow"] or "finansbank" in c["nlow"]
+                       or "qnb telefon bankaciligi" in c["nlow"] or "qnb internet bankaciligi" in c["nlow"])},
     {"key": "halk", "label": "Türkiye Halk Bankası", "iban": {"00012"},
      "sig": lambda c: "halkbank.com" in c["low"]},
     {"key": "ptt", "label": "PTT (PttBank)", "iban": {"00807"},
@@ -489,10 +491,10 @@ BANK_REGISTRY = [
      "sig": lambda c: ("alternatifbank.com" in c["low"] or "alternatif bank" in c["low"]
                        or "alternatifbank a" in c["low"] or "0060003154500048" in c["lc_ns"])},
     {"key": "enpara", "label": "Enpara Bank", "iban": {"00157"},
-     "sig": lambda c: ("enpara.com" in c["low"] or "enpara subesi" in c["nlow"]
-                       or ("qnb.com" not in c["low"] and (
-                           ("alici unvani" in c["nlow"] and "eft tutari" in c["nlow"])
-                           or ("musteri unvani" in c["nlow"] and "giden fast" in c["nlow"]))))},
+     # ÖNCELİK: (2) domain 'enpara.com', (3) logo/marka 'enpara'. GEVŞEK layout-tahmini KALDIRILDI
+     # (yalnız 'ALICI ÜNVANI'+'EFT TUTARI' gibi genel etiketler başka bankaları (QNB vb.) yanlış Enpara
+     # sanıyordu). Gönderici IBAN kodu 00157 zaten BİRİNCİL sinyaldir; bu imza yalnız domain/marka yedeğidir.
+     "sig": lambda c: ("enpara.com" in c["low"] or "enpara subesi" in c["nlow"] or "enpara" in c["nlow"])},
 ]
 
 BANK_LABELS = {b["key"]: b["label"] for b in BANK_REGISTRY}
@@ -514,9 +516,52 @@ def _issuer_ctx(joined: str) -> dict:
             "zsig": nlow, "lc_ns": low.replace(" ", "")}
 
 
+# Banka KODU → registry anahtarı (ör. '00111'→'qnb'). Gönderici IBAN kodundan banka dalına gitmek için.
+_CODE_TO_KEY = {}
+for _b in BANK_REGISTRY:
+    for _c in _b.get("iban", ()):
+        _CODE_TO_KEY.setdefault(_c, _b["key"])
+
+# Gönderici (hesap-sahibi) tarafı IBAN etiketleri — yanlarındaki IBAN dekont SAHİBİ (ihraççı) bankasınındır.
+_SENDER_LABEL_RE = (r"(musteri\s*unvani|gonderen\s*hesap|gonderen\s*iban|gonderen|gonderici|"
+                    r"borclu\s*hesap|ucret\s*tah|hesap\s*sahibi)")
+_RECV_LABEL_RE = r"(alici|alacakli|karsi)"
+_IBAN_IN_TEXT = r"(TR\d{2}[\d ]{20,34})"
+
+
+def sender_iban_code(joined: str) -> str:
+    """Dekont SAHİBİ (ihraççı = gönderici) bankasını GÖNDERİCİ IBAN'ının banka kodundan bulur — EN GÜVENİLİR
+    sinyal (kullanıcı kuralı: 'gönderici IBAN'ı bulduysan bankayı da bulmuşsun demektir'). Gönderici IBAN =
+    hesap-sahibi etiketiyle (MÜŞTERİ ÜNVANI / GÖNDEREN / BORÇLU HESAP / ÜCRET TAH.) işaretli IBAN. ALICI/
+    ALACAKLI etiketli IBAN karşı taraftır → ihraççı DEĞİLDİR, dışlanır. Döner: 5-haneli banka kodu ya da ''."""
+    if not joined:
+        return ""
+    nt = _norm_tr(joined).replace("̇", "")
+    # Alıcı/karşı-taraf IBAN'larını topla (dışlamak için)
+    recv = set()
+    for m in re.finditer(_RECV_LABEL_RE + r"[\s\S]{0,45}?" + _IBAN_IN_TEXT, nt, re.I):
+        recv.add(re.sub(r"\s", "", m.group(2)).upper()[:26])
+    # Gönderici etiketli IBAN'ı bul (alıcı olanı atla)
+    for m in re.finditer(_SENDER_LABEL_RE + r"[\s\S]{0,55}?" + _IBAN_IN_TEXT, nt, re.I):
+        ib = re.sub(r"\s", "", m.group(2)).upper()[:26]
+        if ib in recv:
+            continue
+        code = ib[4:9] if len(ib) >= 9 else ""
+        if re.fullmatch(r"\d{5}", code):
+            return code
+    return ""
+
+
 def detect_issuer(joined: str) -> str:
-    """İHRAÇÇI bankayı registry'den, ÖNCELİK sırasıyla belirler. Yalnız BİR banka seçilir
-    (karşılıklı dışlayan). Hiçbir imza tutmazsa "" (universal — güvenli çıkarıma düşer)."""
+    """İHRAÇÇI bankayı belirler. ÖNCELİK (kullanıcı kuralı): (1) GÖNDERİCİ IBAN'ının banka kodu — en
+    güvenilir; kod registry'de bir dala karşılık geliyorsa O dal seçilir (isim/logo imzasını EZER, çünkü
+    OCR header'ı kaçırıp yanlış banka seçebilir). (2) Gönderici IBAN yoksa/kodu dalsızsa isim/domain
+    imzası (yedek — ör. ING/Kuveyt Türk gibi gönderici IBAN'ı yazmayan dekontlar). Hiçbiri yoksa ""."""
+    _sc = sender_iban_code(joined)
+    if _sc:
+        _k = _CODE_TO_KEY.get(_sc)
+        if _k:
+            return _k                         # gönderici IBAN kodu KESİN → bu dala git (isim imzasını ez)
     ctx = _issuer_ctx(joined)
     for b in BANK_REGISTRY:
         try:

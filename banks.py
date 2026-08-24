@@ -80,6 +80,11 @@ IBAN_BANK_CODES = {
     "00807": "PTT (Posta ve Telgraf Teşkilatı)",
 }
 
+def is_known_bank_code(code: str) -> bool:
+    """5-haneli IBAN banka kodu tanınan bankalar listesinde mi (IBAN_BANK_CODES)."""
+    return bool(code) and code in IBAN_BANK_CODES
+
+
 # Metin içi anahtar kelimeler -> banka adı
 NAME_KEYWORDS = [
     (r"garanti", "Garanti BBVA"),
@@ -136,6 +141,8 @@ def iban_valid(iban: str) -> bool | None:
 
 
 # OCR'da sıkça karışan rakam çiftleri (görsel benzerlik). Tek yönlü değil — çift yönlü.
+# OCR/Vision rakam karışmaları (yazı tipi + yedi-segment benzerlikleri). Yanlış onarım riski YOK:
+# repair_iban_ocr YALNIZ tek benzersiz mod-97-geçerli adayı uygular (aksi halde orijinali korur).
 _OCR_CONFUSABLE = {
     "0": ["8", "6"], "8": ["0", "6", "3"], "6": ["8", "5", "0"], "5": ["6", "8"],
     "1": ["7"], "7": ["1"], "3": ["8", "9"], "9": ["4"], "2": ["7"], "4": ["9"],

@@ -782,6 +782,27 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         try:
             import authenticity as _auth
             _bkey = _auth.bank_key(ex.bank)
+            # BİLİNMEYEN BANKA KODU: Gönderici IBAN'ının banka kodu (dekont SAHİBİ bankası) tanınan listede
+            # (IBAN_BANK_CODES) YOKSA → bu banka sistemde tanımsız. Kullanıcı kuralı: böyle bir dekont YZ'ye
+            # DERİN incelettirilir (tüm alanlar + FAST/HAVALE/EFT kanalı) ve listeye eklenmek üzere KAYDEDİLİR.
+            _unknown_bank_code = ""
+            try:
+                import banks as _bkub, extract as _exub
+                _sc_ub = _exub.sender_iban_code(text_layout) or _bkub.iban_bank_code(
+                    _bkub.normalize_iban(ex.sender.iban or ""))
+                if _sc_ub and not _bkub.is_known_bank_code(_sc_ub):
+                    _unknown_bank_code = _sc_ub
+                    findings.append(Finding(
+                        "UNKNOWN_BANK_CODE", "info", "content", 0,
+                        tr=(f"BİLİNMEYEN BANKA: Gönderici IBAN'ının banka kodu ({_sc_ub}) tanınan banka "
+                            f"listesinde YOK. Bu dekont yapay zekâya DERİN incelettirilecek (tüm alanlar + "
+                            f"işlem kanalı: FAST/HAVALE/EFT) ve banka listeye eklenmek üzere kaydedildi."),
+                        en=(f"UNKNOWN BANK: sender IBAN bank code ({_sc_ub}) is not in the known list. This "
+                            f"receipt is escalated to AI for deep analysis (all fields + rail FAST/HAVALE/EFT) "
+                            f"and logged to be added to the list."),
+                        detail=f"code={_sc_ub}"))
+            except Exception:
+                pass
             # GÖNDERİCİ IBAN ↔ İHRAÇÇI TUTARLILIĞI (yanlış-atama düzeltmesi): Göndericinin bankası =
             # belge İHRAÇÇISIDIR. Bir dekontta çoğu kez gönderici IBAN'ı YAZILMAZ; OCR/vision 'Gönderilen
             # IBAN' (= ALICI IBAN'ı) gibi etiketleri yanlışlıkla göndericiye atayabilir. Böyle olunca
@@ -1629,6 +1650,15 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             report["cross_db"]["recorded"] = _store.record(report)
             # AUDIT LOG: her analiz (sahte dahil) — 'kaç yüklendi' + kara-liste temeli
             _store.log_analysis(report)
+            # BİLİNMEYEN BANKA KAYDI: gönderici IBAN kodu listede yoksa, YZ'nin bulduğu banka adı + kanal
+            # ile kaydet (gün sonu IBAN_BANK_CODES'a eklemek için). AI derin incelemesi zaten çalıştı.
+            _ubc = locals().get("_unknown_bank_code") or ""
+            if _ubc:
+                _ai_kanal2 = str(((ai_adjudication or {}).get("islem_kanali") or {}).get("kanal") or "")
+                _ai_bankname = ((_extracted_dict.get("sender", {}) or {}).get("bank")
+                                or (ai_adjudication or {}).get("sender_bank") or "")
+                _store.log_unknown_bank(_ubc, ai_bank_name=_ai_bankname,
+                                        rail=_ai_kanal2, sample_sha256=struct.sha256)
         except Exception:
             pass
     # DENETİM KAPSAMI (EK): hangi denetimler yapıldı / yapılamadı — BANKA BAZLI, şeffaf.

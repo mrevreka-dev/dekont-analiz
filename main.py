@@ -299,6 +299,16 @@ async def scan_log_api(q: str | None = None, limit: int = 20):
     return {"query": q or "", "count": len(rows), "results": rows}
 
 
+@app.get("/api/v1/unknown_banks")
+async def unknown_banks_api(limit: int = 200):
+    """BİLİNMEYEN BANKALAR: gönderici IBAN banka kodu tanınan listede (IBAN_BANK_CODES) olmayan dekontlar.
+    Her kayıt: kod, YZ'nin bulduğu banka adı, işlem kanalı (FAST/HAVALE/EFT), örnek sha, kaç kez görüldü.
+    Gün sonu bu liste gözden geçirilip yeni banka(lar) IBAN_BANK_CODES'a eklenir."""
+    import store as _st
+    rows = _st.unknown_banks_recent(max(1, min(int(limit or 200), 500)))
+    return {"count": len(rows), "results": rows}
+
+
 @app.get("/api/v1/diag_log")
 async def diag_log_api(limit: int = 100, only_problems: bool = False):
     """TANI/HATA GÜNLÜĞÜ: her analizin tanı bilgisi (çıkarım boş mu, YZ verdict/başarı, kesik-kurtarma,

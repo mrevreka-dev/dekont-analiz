@@ -81,6 +81,10 @@ def should_adjudicate(findings: list, extraction: dict, input_kind: str = "pdf")
     sev = {(f.get("code")): f.get("severity") for f in (findings or [])}
     if any(s in ("high", "critical") for s in sev.values()):
         reasons.append("Yüksek/kritik önem taşıyan bir bulgu var.")
+    # BİLİNMEYEN BANKA (gönderici IBAN kodu listede yok): DERİN YZ incelemesi ŞART — tüm alanlar + işlem
+    # kanalı (FAST/HAVALE/EFT) okutulur ki banka listeye doğru bilgiyle eklenebilsin (kullanıcı kuralı).
+    if any(f.get("code") == "UNKNOWN_BANK_CODE" for f in (findings or [])):
+        reasons.append("Bilinmeyen banka: gönderici IBAN kodu listede yok → derin inceleme + kanal tespiti.")
     # GÖRÜNTÜ/FOTOĞRAF DEKONT: görsel tahrifat (font uyuşmazlığı, yapıştırma, hizalama, montaj) YALNIZ
     # görüntüden görülür; kural motoru rasterize metinde bunu göremez. Bu yüzden fotoğraf/görüntü
     # dekontlar KURAL 'TEMİZ' dese bile HER ZAMAN YZ görsel incelemesine eskale edilir (kullanıcı kuralı).

@@ -34,6 +34,21 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z11", "date": "2026-08-24 02:20", "area": "BANKA TESPİTİ YENİDEN DÜZENLENDİ: gönderici IBAN kodu BİRİNCİL + bilinmeyen banka → AI derin inceleme/kayıt", "test": 34,
+     "bug": "QNB dekontu 'Enpara' tespit ediliyordu: ilk iş banka tespiti isim/domain imzasına dayalıydı; OCR "
+            "footer'daki 'qnb.com'u kaçırınca Enpara'nın GEVŞEK imzası (yalnız 'ALICI ÜNVANI'+'EFT TUTARI' "
+            "layout'u) devreye girip QNB'yi Enpara sanıyordu. Bu, alıcı IBAN'ın yanlış dala düşmesine + "
+            "NUMBER_REUSE dahil zincirleme hataya yol açıyordu. Kök sorun: banka, en güvenilir sinyal olan "
+            "GÖNDERİCİ IBAN banka kodundan belirlenmiyordu.",
+     "fix": "İŞ AKIŞI: İLK İŞ banka tespiti; öncelik (kullanıcı kuralı) (1) GÖNDERİCİ IBAN banka kodu "
+            "(hesap-sahibi etiketli: MÜŞTERİ ÜNVANI/GÖNDEREN/BORÇLU/ÜCRET TAH.), (2) domain, (3) logo/isim. "
+            "extract.sender_iban_code() gönderici IBAN kodunu bulur; detect_issuer önce bunu kullanır (isim "
+            "imzasını EZER). Enpara gevşek layout-imzası KALDIRILDI (yalnız 'enpara' marka/domain); QNB imzası "
+            "'qnb bank'/'finansbank' header'ıyla genişletildi. BİLİNMEYEN BANKA: gönderici IBAN kodu "
+            "IBAN_BANK_CODES'ta yoksa → UNKNOWN_BANK_CODE bulgusu + AI DERİN inceleme (should_adjudicate "
+            "tetikler; tüm alanlar + FAST/HAVALE/EFT kanalı) + store.log_unknown_bank ile kaydedilir; "
+            "/api/v1/unknown_banks ile gün sonu listeye eklenir. Test #34 kilitler.",
+     "not": "ING/Kuveyt Türk gibi gönderici IBAN'ı YAZMAYAN dekontlar domain/isim yedeğiyle doğru tespit edilir."},
     {"id": "Z10", "date": "2026-08-22 03:00", "area": "TEMEL MİMARİ KURAL: YZ hükmü DÜZELTİLMİŞ TAM veriyle uzlaştırılır (düzeltme-sonrası yeniden değerlendirme)", "test": 33,
      "bug": "QNB→Ziraat interbank FAST/EFT dekontunda YZ 'SAHTE %88' diyordu: gerekçe 'gönderici ve alıcı IBAN "
             "aynı (00111=QNB) → aynı-banka HAVALE olmalı ama FAST/EFT → çelişki'. Oysa YZ'nin KENDİ düzelttiği "
@@ -1132,6 +1147,29 @@ def _t33_ai_verdict_reconciled_after_correction():
     return ok, f"samebank-yok={no_samebank}, hüküm-uzlaştı={verdict_fixed}, gönderici-banka={s_bank!r}, alıcı-banka={r_bank!r}, farklı={banks_distinct}"
 
 
+def _t34_bank_detection_sender_iban_first():
+    """BANKA TESPİTİ ÖNCELİĞİ (kullanıcı kuralı): (1) GÖNDERİCİ IBAN banka kodu — en güvenilir; (2) domain;
+    (3) logo/isim. Ayrıca gönderici IBAN kodu tanınan listede YOKSA → bilinmeyen banka (AI derin inceleme +
+    listeye ekleme kaydı). Testler: (a) QNB dekontu header/domain OCR'da kaçsa bile gönderici IBAN 00111'den
+    QNB tespit edilir (isim imzası 'enpara'ya kaymaz); (b) ING gibi gönderici IBAN'ı YAZMAYAN dekont domain/
+    isimle doğru tespit edilir; (c) bilinmeyen kod (00999) 'bilinmeyen' sayılır."""
+    import extract as _E, banks as _b
+    # (a) QNB — domain/header OCR'da yok; gönderici IBAN 00111 (MÜŞTERİ ÜNVANI etiketli)
+    qnb = ("Dekont\nALICI ÜNVANI: Remzi ALICI IBAN: TR190001009011147534405001\n"
+           "MÜŞTERİ ÜNVANI: KEREM IBAN: TR350011100000000120439443")
+    a = (_E.detect_issuer(qnb) == "qnb" and _E.sender_iban_code(qnb) == "00111")
+    # (b) ING — gönderici IBAN yok, yalnız karşı-taraf + domain
+    ing = "ING Bank ing.com.tr\nGiden FAST TR030006200129100006298436 Garanti"
+    b = (_E.detect_issuer(ing) == "ing" and _E.sender_iban_code(ing) == "")
+    # (c) bilinmeyen banka kodu
+    c = (_b.is_known_bank_code("00111") is True and _b.is_known_bank_code("00999") is False)
+    # (d) Enpara — gönderici IBAN 00157 (tightened sig; layout-tahmini artık QNB'yi Enpara sanmaz)
+    qnb2 = "QNB Bank\nMÜŞTERİ ÜNVANI: X IBAN: TR350011100000000120439443\nALICI ÜNVANI: Y ALICI IBAN: TR190001009011147534405001"
+    d = (_E.detect_issuer(qnb2) == "qnb")   # 'ALICI ÜNVANI'+'EFT' layout'una rağmen Enpara DEĞİL
+    ok = a and b and c and d
+    return ok, f"qnb-sender-code={a}, ing-domain={b}, bilinmeyen-kod={c}, qnb-not-enpara={d}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1166,6 +1204,7 @@ _CHECKS = [
     (31, "Vision sonrası IBAN OCR onarımı (tek-rakam '9850'→'9650') çalışır", _t31_vision_iban_repaired),
     (32, "İhraççı güvencesi: yanlış-atanan gönderici IBAN → sahte 'aynı-banka çelişkisi' yok", _t32_issuer_guard_no_false_samebank),
     (33, "YZ hükmü düzeltilmiş TAM veriyle uzlaştırılır (sahte→belirsiz, banka etiketi düzelir)", _t33_ai_verdict_reconciled_after_correction),
+    (34, "Banka tespiti: gönderici IBAN kodu birincil (QNB≠Enpara), domain yedek, bilinmeyen kod", _t34_bank_detection_sender_iban_first),
 ]
 
 
