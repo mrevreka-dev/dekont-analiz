@@ -1,0 +1,223 @@
+From 62ab283d22936c1147a84bacb4b1978ceb89c139 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 24 Aug 2026 10:06:16 +0000
+Subject: [PATCH] =?UTF-8?q?self=5Fcheck:=20=C3=B6nbellekli+arka=20planl?=
+ =?UTF-8?q?=C4=B1=20=C3=B6z-denetim=20(h=C4=B1zl=C4=B1=20GET=20yan=C4=B1t?=
+ =?UTF-8?q?=C4=B1)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Sorun: GET /api/v1/self_check her istekte 40 değişmez testi SENKRON
+koşuyordu (~45 sn). Bu, WebFetch/izleme yoklamalarının ~10 sn okuma
+zaman aşımını aşıyor ve uç 499/timeout veriyordu — zamanlanmış öz-denetim
+rutini all_ok'i hiç okuyamıyordu (servis sağlıklı olmasına rağmen).
+
+Çözüm (cerrahi, analiz hattına dokunmadan):
+- self_check.py: run_cached() + arka plan hesaplama + bellek/disk (/data)
+  önbelleği. Uç son bilinen sonucu ANINDA döndürür; sonuç en çok 10 dk'da
+  bir arka planda tazelenir. Şema run() ile aynı; ek alanlar: cached,
+  status, as_of, age_seconds, stale. İlk-defa soğuk açılışta all_ok=null +
+  status='computing' döner (ALARM DEĞİL).
+- main.py: /api/v1/self_check ve /gunluk artık run_cached() kullanır;
+  açılışta start_background_warm() ile önbellek ısıtılır (daemon thread,
+  açılışı bloke etmez).
+- Ek yarar: run() artık her istekte değil periyodik koştuğu için, testlerin
+  ai_adjudicator'ı geçici monkeypatch'lediği pencere canlı trafikle çok
+  daha az çakışır.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01CoBAmwaUaEZpFcHf8ULEbK
+---
+ main.py       |  27 +++++++++--
+ self_check.py | 125 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 149 insertions(+), 3 deletions(-)
+
+diff --git a/main.py b/main.py
+index 1bba407..073afc0 100644
+--- a/main.py
++++ b/main.py
+@@ -53,6 +53,19 @@ app = FastAPI(
+ )
+ 
+ 
++@app.on_event("startup")
++async def _warm_self_check() -> None:
++    """Açılışta öz-denetim önbelleğini ısıt: diskteki son sonucu belleğe al ve arka
++    planda taze hesabı başlat. Böylece /api/v1/self_check ilk yoklamadan itibaren
++    ANINDA (bayat da olsa) bir sonuç döndürebilir. Hata olsa da uygulama açılışını
++    ASLA engellemez."""
++    try:
++        import self_check
++        self_check.start_background_warm()
++    except Exception:
++        pass
++
++
+ # ----------------------------- CEVAP ŞEMALARI (OpenAPI) -----------------------------
+ class Dosya(BaseModel):
+     ad: str = Field("", description="Dosya adı")
+@@ -361,16 +374,24 @@ async def diag_sample_download(sha: str):
+ @app.get("/api/v1/self_check")
+ async def self_check_api():
+     """Motorun ÖZ-DENETİMİ: canlı koda karşı tüm değişmez (invariant) testlerini çalıştırır.
+-    all_ok=false ise bir iyileştirme ezilmiş demektir. Zamanlanmış görev bunu periyodik yoklar."""
++    all_ok=false ise bir iyileştirme ezilmiş demektir. Zamanlanmış görev bunu periyodik yoklar.
++
++    Sonuç ARKA PLANDA (en çok 10 dk'da bir) hesaplanıp önbelleğe/diske alınır; bu uç
++    son bilinen sonucu ANINDA döndürür (WebFetch/izleme yoklamalarının ~10 sn zaman
++    aşımına takılmamak için). Ek alanlar: cached, status, as_of, age_seconds, stale.
++    status='computing' (all_ok=null) yalnızca bu özellik ilk kez devreye girdiğinde,
++    henüz hiç sonuç yokken görülür → alarm değildir, birazdan tekrar yoklayın."""
+     import self_check
+-    return self_check.run()
++    return self_check.run_cached()
+ 
+ 
+ @app.get("/gunluk", response_class=HTMLResponse)
+ async def gunluk_page():
+     """Geliştirme günlüğü + canlı öz-denetim durumu (web'de görülebilir kayıt defteri)."""
+     import self_check
+-    r = self_check.run()
++    r = self_check.run_cached()
++    if not r.get("checks"):          # ilk açılış: önbellek henüz boş → insan sayfası için tam hesap
++        r = self_check.run()
+     return HTMLResponse(_render_gunluk(r))
+ 
+ 
+diff --git a/self_check.py b/self_check.py
+index 8296679..d2e2ddd 100644
+--- a/self_check.py
++++ b/self_check.py
+@@ -1484,3 +1484,128 @@ def run() -> dict:
+         "improvements": IMPROVEMENTS,
+         "invariant_rules": INVARIANT_RULES,
+     }
++
++
++# ==================================================================
++# ÖNBELLEKLİ ÖZ-DENETİM  (ekl: hızlı GET yanıtı için)
++# ------------------------------------------------------------------
++# run() ~40 değişmez testi SENKRON koşar (~45 sn) ve bu, WebFetch /
++# izleme yoklamalarının okuma zaman aşımını (≈10 sn) aşar; uç 499/
++# timeout verir. Bu katman sonucu ARKA PLANDA hesaplar, belleğe +
++# kalıcı diske (/data) yazar ve GET ucunun ANINDA son bilinen sonucu
++# döndürmesini sağlar. Şema run() ile aynıdır; ek alanlar: cached,
++# status, as_of, age_seconds, stale.
++# Ek yarar: run() artık her istekte değil, en çok 10 dk'da bir arka
++# planda koşar → testlerin ai_adjudicator'ı geçici monkeypatch'lediği
++# pencere canlı trafikle çok daha az çakışır.
++# ==================================================================
++import os as _os
++import json as _json
++import time as _time
++import threading as _threading
++
++_CACHE_LOCK = _threading.Lock()
++_CACHE = {"result": None, "computed_monotonic": None, "computing": False}
++_SELF_CHECK_MAX_AGE = int(_os.environ.get("DEKONT_SELF_CHECK_MAX_AGE", "600"))  # sn (10 dk)
++
++
++def _sc_cache_file() -> str:
++    """Sonucu yazacağımız yol: kalıcı disk /data varsa oraya, yoksa /tmp."""
++    candidates = ["/data",
++                  _os.path.dirname(_os.environ.get("DEKONT_DB_PATH", "") or ""),
++                  "/tmp"]
++    for d in candidates:
++        if d and _os.path.isdir(d) and _os.access(d, _os.W_OK):
++            return _os.path.join(d, "self_check_cache.json")
++    return _os.path.join("/tmp", "self_check_cache.json")
++
++
++def _sc_persist(result: dict) -> None:
++    try:
++        with open(_sc_cache_file(), "w", encoding="utf-8") as f:
++            _json.dump(result, f, ensure_ascii=False)
++    except Exception:
++        pass
++
++
++def _sc_load_persisted():
++    try:
++        with open(_sc_cache_file(), "r", encoding="utf-8") as f:
++            return _json.load(f)
++    except Exception:
++        return None
++
++
++def _sc_compute_and_store() -> dict:
++    try:
++        result = run()
++    except Exception as e:
++        result = {"all_ok": None, "status": "error", "error": str(e),
++                  "passed": 0, "total": len(_CHECKS), "checks": [],
++                  "generated_at": _now_tr()}
++    with _CACHE_LOCK:
++        _CACHE["result"] = result
++        _CACHE["computed_monotonic"] = _time.monotonic()
++        _CACHE["computing"] = False
++    _sc_persist(result)
++    return result
++
++
++def _sc_start_bg_compute() -> None:
++    with _CACHE_LOCK:
++        if _CACHE["computing"]:
++            return
++        _CACHE["computing"] = True
++    _threading.Thread(target=_sc_compute_and_store,
++                      name="self_check_warm", daemon=True).start()
++
++
++def start_background_warm() -> None:
++    """Açılışta çağrılır: diskteki son sonucu belleğe alır, arka planda taze hesap başlatır."""
++    persisted = _sc_load_persisted()
++    if persisted is not None:
++        with _CACHE_LOCK:
++            if _CACHE["result"] is None:
++                _CACHE["result"] = persisted
++                # diskten gelenin yaşı bilinmiyor → 'bayat' say, hemen tazele
++    _sc_start_bg_compute()
++
++
++def run_cached(max_age_seconds: int = None) -> dict:
++    """Önbellekteki son öz-denetim sonucunu ANINDA döndürür (WebFetch/izleme dostu).
++    Sonuç yoksa/bayatsa arka planda yeniden hesaplar. run() ile AYNI şema + meta alanlar."""
++    if max_age_seconds is None:
++        max_age_seconds = _SELF_CHECK_MAX_AGE
++    with _CACHE_LOCK:
++        result = _CACHE["result"]
++        computed = _CACHE["computed_monotonic"]
++    now = _time.monotonic()
++    age = None if computed is None else round(now - computed, 1)
++    stale = (computed is None) or (age is not None and age > max_age_seconds)
++    if stale:
++        _sc_start_bg_compute()
++    if result is None:
++        # Henüz hiç sonuç yok (yalnızca ilk-defa açılışta). ALARM ÜRETME.
++        return {
++            "all_ok": None,
++            "status": "computing",
++            "passed": 0,
++            "total": len(_CHECKS),
++            "checks": [],
++            "improvements": IMPROVEMENTS,
++            "invariant_rules": INVARIANT_RULES,
++            "cached": False,
++            "as_of": None,
++            "age_seconds": None,
++            "stale": True,
++            "note": "İlk öz-denetim arka planda hesaplanıyor (~1 dk). Birazdan tekrar deneyin.",
++            "generated_at": _now_tr(),
++            "generated_tz": "Europe/Istanbul",
++        }
++    out = dict(result)
++    out["cached"] = True
++    out["status"] = out.get("status") or "ready"
++    out["as_of"] = result.get("generated_at")
++    out["age_seconds"] = age
++    out["stale"] = bool(stale)
++    return out
+-- 
+2.43.0
+

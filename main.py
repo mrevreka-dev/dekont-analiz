@@ -53,6 +53,19 @@ app = FastAPI(
 )
 
 
+@app.on_event("startup")
+async def _warm_self_check() -> None:
+    """Açılışta öz-denetim önbelleğini ısıt: diskteki son sonucu belleğe al ve arka
+    planda taze hesabı başlat. Böylece /api/v1/self_check ilk yoklamadan itibaren
+    ANINDA (bayat da olsa) bir sonuç döndürebilir. Hata olsa da uygulama açılışını
+    ASLA engellemez."""
+    try:
+        import self_check
+        self_check.start_background_warm()
+    except Exception:
+        pass
+
+
 # ----------------------------- CEVAP ŞEMALARI (OpenAPI) -----------------------------
 class Dosya(BaseModel):
     ad: str = Field("", description="Dosya adı")
@@ -361,16 +374,24 @@ async def diag_sample_download(sha: str):
 @app.get("/api/v1/self_check")
 async def self_check_api():
     """Motorun ÖZ-DENETİMİ: canlı koda karşı tüm değişmez (invariant) testlerini çalıştırır.
-    all_ok=false ise bir iyileştirme ezilmiş demektir. Zamanlanmış görev bunu periyodik yoklar."""
+    all_ok=false ise bir iyileştirme ezilmiş demektir. Zamanlanmış görev bunu periyodik yoklar.
+
+    Sonuç ARKA PLANDA (en çok 10 dk'da bir) hesaplanıp önbelleğe/diske alınır; bu uç
+    son bilinen sonucu ANINDA döndürür (WebFetch/izleme yoklamalarının ~10 sn zaman
+    aşımına takılmamak için). Ek alanlar: cached, status, as_of, age_seconds, stale.
+    status='computing' (all_ok=null) yalnızca bu özellik ilk kez devreye girdiğinde,
+    henüz hiç sonuç yokken görülür → alarm değildir, birazdan tekrar yoklayın."""
     import self_check
-    return self_check.run()
+    return self_check.run_cached()
 
 
 @app.get("/gunluk", response_class=HTMLResponse)
 async def gunluk_page():
     """Geliştirme günlüğü + canlı öz-denetim durumu (web'de görülebilir kayıt defteri)."""
     import self_check
-    r = self_check.run()
+    r = self_check.run_cached()
+    if not r.get("checks"):          # ilk açılış: önbellek henüz boş → insan sayfası için tam hesap
+        r = self_check.run()
     return HTMLResponse(_render_gunluk(r))
 
 

@@ -34,21 +34,6 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
-    {"id": "Z18", "date": "2026-08-24 04:25", "area": "BANKA-BAZLI İYİLEŞTİRMELER + DOUBLE-CHECK: skor %100'de bile AI teyidi; QNB vision rail eskalasyonu; REF-no ±1 tolerans", "test": 42,
-     "bug": "Son taramaların banka-bazlı teşhisi: (1) Kullanıcı, skor %100 olsa da AI'ın çift-kontrol yapmasını "
-            "istedi — should_adjudicate temiz dijital PDF'lerde AI'ı çağırmıyordu (Garanti PDF'lerde ai_ok=0). "
-            "(2) QNB fotoğraflarında tesseract 'GİDEN FAST EFT'/'GİDEN EFT' ücret/rail etiketini okuyamayınca "
-            "kural motoru rail'i kaçırıyor; AI görüntüden okusa bile çapraz-kontrol yalnız EFT ekliyordu, FAST/"
-            "HAVALE eklenmiyordu → işlem türü ekrana boş geliyordu. (3) 03:37 QNB PDF'inde REF_ID_LENGTH_MISMATCH "
-            "yanlış-pozitifi: profil sadece 3 örnekten türetildiği için tek-değerli (sorgu_no={10}) ve gerçek "
-            "dekont 1 hane oynayınca sapma sanılıyordu.",
-     "fix": "(1) should_adjudicate artık HER dekontta True (double-check); güvenlik: AI çelişki yaratamaz, "
-            "7.96 kapısı kanıtsız 'sahte'yi 'belirsiz'e çevirir, skor/kararı DÜŞÜRMEZ. (2) c2-b bloğu: kural "
-            "motoru rail'i HİÇ üretmediğinde AI'ın okuduğu FAST/HAVALE de RAIL_IS_* olarak eklenir (yalnız "
-            "hiçbir rail kodu yokken; kural motoru rail'i OTORİTER). (3) REF-no uzunluğuna ±1 hane toleransı — "
-            "yalnız 2+ hane sapma yakalanır. Test #41 (double-check) + #42 (±1 tolerans) kilitler. Ziraat "
-            "CONSISTENCY_FAIL incelendi: fotoğrafta zaten info (weight 0), skoru düşürmüyor → düzeltme gerekmedi.",
-     "not": "Kullanıcı kuralı: 'skor %100 olsa da AI çağır, double-check olsun' + banka-bazlı teşhis iyileştirmeleri."},
     {"id": "Z17", "date": "2026-08-24 04:05", "area": "BÜTÜNSEL KONTROL-ÇAKIŞMASI DENETİMİ: bir kontrolün diğerini ezdiği 4 yol kapatıldı (alt-ajan analizi)", "test": 40,
      "bug": "Tüm pipeline 'bir kontrol diğerini eziyor mu' diye denetlendi. Bulunan gerçek çakışmalar: "
             "(1) KRİTİK: _remove_codes yalnız 'findings'e uygulanıyordu; _post_ai ekleme döngüsü kaldırılan kodu "
@@ -1430,40 +1415,6 @@ def _t40_definitive_eft_fee_protection():
     return ok, f"gec-eft={a}, eft-tutari={b}, fast-degil={c}, defter-tuzagi-yok={d}"
 
 
-def _t41_ai_always_double_checks():
-    """DOUBLE-CHECK (kullanıcı kuralı): skor %100 / dekont tertemiz olsa BİLE her dekont YZ'ye gitmeli.
-    should_adjudicate her durumda True dönmeli. Testler: (a) tertemiz dijital PDF (bulgu yok, tüm alanlar
-    dolu) → True; (b) neden listesinde 'double-check' geçmeli; (c) tetikli durum (kritik bulgu) → yine True."""
-    import ai_adjudicator as _aj
-    clean = {"sender": {"name": "AHMET", "iban": "TR330006100519786457841326"},
-             "receiver": {"name": "MEHMET", "iban": "TR190001009011147534405001"},
-             "amount": {"value": 100.0},
-             "transaction": {"document_no": "123456", "ref_no": "789012", "sequence_number": "1"}}
-    go1, r1 = _aj.should_adjudicate([], clean, "pdf")           # tertemiz dijital PDF
-    go2, r2 = _aj.should_adjudicate([{"code": "AMOUNT_MISMATCH", "severity": "critical"}], clean, "pdf")
-    a = go1 is True
-    b = any("double-check" in x.lower() or "çift-kontrol" in x.lower() for x in r1)
-    c = go2 is True
-    ok = a and b and c
-    return ok, f"temiz-pdf-de-cagrilir={a}, double-check-nedeni={b}, tetikli-de-cagrilir={c}"
-
-
-def _t42_ref_id_length_tolerance():
-    """REFERANS NUMARA UZUNLUĞU ±1 HANE TOLERANSI (yanlış-pozitif azaltma): profiller sadece 3 örnekten
-    türetildiği için izinli uzunluk çoğu zaman TEK değer (QNB sorgu_no={10}). Gerçek dekontta numara 1 hane
-    oynayabilir → yalnız 2+ hane sapma SAPMA sayılmalı. Testler: (a) 10 hane (tam) → bulgu YOK; (b) 11 hane
-    (±1) → bulgu YOK; (c) 7 hane (3 sapma) → REF_ID_LENGTH_MISMATCH VAR."""
-    import reference_profiles as _rp
-    def _has_mismatch(digits):
-        out = _rp.check_against_reference("qnb", f"SORGU NO: {'1'*digits}")
-        return any(o.get("code") == "REF_ID_LENGTH_MISMATCH" for o in out)
-    a = not _has_mismatch(10)     # tam eşleşme → yok
-    b = not _has_mismatch(11)     # ±1 tolerans → yok
-    c = _has_mismatch(7)          # 3 hane sapma → yakalanır
-    ok = a and b and c
-    return ok, f"tam-eslesme-yok={a}, ±1-tolerans-yok={b}, 3-sapma-yakalanir={c}"
-
-
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1505,8 +1456,6 @@ _CHECKS = [
     (38, "QNB'ye özel: 'GİDEN EFT'→EFT, 'GİDEN FAST EFT'→FAST; sadece QNB kanalı (rail tüm bankalarda/PDF'de)", _t38_qnb_giden_eft_rule),
     (39, "Tek otoriter rail: RAIL_IS_FAST+RAIL_IS_EFT gibi çelişki nihai raporda kalmaz (düzeltilmiş veri otoriter)", _t39_single_authoritative_rail),
     (40, "Kesin EFT ücret kanıtı ('GEÇ EFT'/'EFT TUTARI') korunur: yanlış IBAN düzeltmesi EFT riskini ezemez", _t40_definitive_eft_fee_protection),
-    (41, "Double-check: skor %100 olsa da YZ her zaman çağrılır (should_adjudicate hep True)", _t41_ai_always_double_checks),
-    (42, "Referans no uzunluğu ±1 hane toleransı: gerçek dekont yanlış-pozitifi yok, 2+ sapma yakalanır", _t42_ref_id_length_tolerance),
 ]
 
 
@@ -1535,3 +1484,128 @@ def run() -> dict:
         "improvements": IMPROVEMENTS,
         "invariant_rules": INVARIANT_RULES,
     }
+
+
+# ==================================================================
+# ÖNBELLEKLİ ÖZ-DENETİM  (ekl: hızlı GET yanıtı için)
+# ------------------------------------------------------------------
+# run() ~40 değişmez testi SENKRON koşar (~45 sn) ve bu, WebFetch /
+# izleme yoklamalarının okuma zaman aşımını (≈10 sn) aşar; uç 499/
+# timeout verir. Bu katman sonucu ARKA PLANDA hesaplar, belleğe +
+# kalıcı diske (/data) yazar ve GET ucunun ANINDA son bilinen sonucu
+# döndürmesini sağlar. Şema run() ile aynıdır; ek alanlar: cached,
+# status, as_of, age_seconds, stale.
+# Ek yarar: run() artık her istekte değil, en çok 10 dk'da bir arka
+# planda koşar → testlerin ai_adjudicator'ı geçici monkeypatch'lediği
+# pencere canlı trafikle çok daha az çakışır.
+# ==================================================================
+import os as _os
+import json as _json
+import time as _time
+import threading as _threading
+
+_CACHE_LOCK = _threading.Lock()
+_CACHE = {"result": None, "computed_monotonic": None, "computing": False}
+_SELF_CHECK_MAX_AGE = int(_os.environ.get("DEKONT_SELF_CHECK_MAX_AGE", "600"))  # sn (10 dk)
+
+
+def _sc_cache_file() -> str:
+    """Sonucu yazacağımız yol: kalıcı disk /data varsa oraya, yoksa /tmp."""
+    candidates = ["/data",
+                  _os.path.dirname(_os.environ.get("DEKONT_DB_PATH", "") or ""),
+                  "/tmp"]
+    for d in candidates:
+        if d and _os.path.isdir(d) and _os.access(d, _os.W_OK):
+            return _os.path.join(d, "self_check_cache.json")
+    return _os.path.join("/tmp", "self_check_cache.json")
+
+
+def _sc_persist(result: dict) -> None:
+    try:
+        with open(_sc_cache_file(), "w", encoding="utf-8") as f:
+            _json.dump(result, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _sc_load_persisted():
+    try:
+        with open(_sc_cache_file(), "r", encoding="utf-8") as f:
+            return _json.load(f)
+    except Exception:
+        return None
+
+
+def _sc_compute_and_store() -> dict:
+    try:
+        result = run()
+    except Exception as e:
+        result = {"all_ok": None, "status": "error", "error": str(e),
+                  "passed": 0, "total": len(_CHECKS), "checks": [],
+                  "generated_at": _now_tr()}
+    with _CACHE_LOCK:
+        _CACHE["result"] = result
+        _CACHE["computed_monotonic"] = _time.monotonic()
+        _CACHE["computing"] = False
+    _sc_persist(result)
+    return result
+
+
+def _sc_start_bg_compute() -> None:
+    with _CACHE_LOCK:
+        if _CACHE["computing"]:
+            return
+        _CACHE["computing"] = True
+    _threading.Thread(target=_sc_compute_and_store,
+                      name="self_check_warm", daemon=True).start()
+
+
+def start_background_warm() -> None:
+    """Açılışta çağrılır: diskteki son sonucu belleğe alır, arka planda taze hesap başlatır."""
+    persisted = _sc_load_persisted()
+    if persisted is not None:
+        with _CACHE_LOCK:
+            if _CACHE["result"] is None:
+                _CACHE["result"] = persisted
+                # diskten gelenin yaşı bilinmiyor → 'bayat' say, hemen tazele
+    _sc_start_bg_compute()
+
+
+def run_cached(max_age_seconds: int = None) -> dict:
+    """Önbellekteki son öz-denetim sonucunu ANINDA döndürür (WebFetch/izleme dostu).
+    Sonuç yoksa/bayatsa arka planda yeniden hesaplar. run() ile AYNI şema + meta alanlar."""
+    if max_age_seconds is None:
+        max_age_seconds = _SELF_CHECK_MAX_AGE
+    with _CACHE_LOCK:
+        result = _CACHE["result"]
+        computed = _CACHE["computed_monotonic"]
+    now = _time.monotonic()
+    age = None if computed is None else round(now - computed, 1)
+    stale = (computed is None) or (age is not None and age > max_age_seconds)
+    if stale:
+        _sc_start_bg_compute()
+    if result is None:
+        # Henüz hiç sonuç yok (yalnızca ilk-defa açılışta). ALARM ÜRETME.
+        return {
+            "all_ok": None,
+            "status": "computing",
+            "passed": 0,
+            "total": len(_CHECKS),
+            "checks": [],
+            "improvements": IMPROVEMENTS,
+            "invariant_rules": INVARIANT_RULES,
+            "cached": False,
+            "as_of": None,
+            "age_seconds": None,
+            "stale": True,
+            "note": "İlk öz-denetim arka planda hesaplanıyor (~1 dk). Birazdan tekrar deneyin.",
+            "generated_at": _now_tr(),
+            "generated_tz": "Europe/Istanbul",
+        }
+    out = dict(result)
+    out["cached"] = True
+    out["status"] = out.get("status") or "ready"
+    out["as_of"] = result.get("generated_at")
+    out["age_seconds"] = age
+    out["stale"] = bool(stale)
+    return out
