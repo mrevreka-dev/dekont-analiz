@@ -34,6 +34,17 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z12", "date": "2026-08-24 02:40", "area": "ALICI IBAN OCR-TOLERANSLI KURTARMA (QNB): 'ALICI IRAN' + boşluk → yanlış aynı-banka/SAHTE giderildi", "test": 35,
+     "bug": "QNB dekontunda alıcı IBAN'ı (TR19...=Ziraat) alıcı ADINA sızmış, alıcı IBAN alanı boş kalıp "
+            "göndericinin QNB IBAN'ına (TR35) düşüyordu → iki IBAN aynı (QNB) → YZ 'SAHTE %92 (aynı-banka ama "
+            "FAST/EFT)'. Neden: OCR 'ALICI IBAN'ı 'ALICI IRAN' (B→R) okudu ve IBAN'a stray boşluk sızdı "
+            "('TR19...901 1 147...') → _after_label('ALICI IBAN') eşleşmedi.",
+     "fix": "extract.receiver_iban_ocr_tolerant(): alıcı/alacaklı + IBAN/IRAN (B↔R) etiketinden sonra IBAN'ı "
+            "boşluk-toleranslı alır, mod-97 geçersizse tek-rakam onarır. QNB/Enpara dalında _after_label boş/"
+            "geçersizse bu devreye girer; alıcı adına sızan 'ALICI IRAN: TR..' temizlenir. Sonuç: gönderici QNB "
+            "(00111) / alıcı Ziraat (00010) — FARKLI, geçerli; aynı-banka çelişkisi ve yanlış SAHTE oluşmaz. "
+            "Test #35 kilitler.",
+     "not": "Kök kural (tekrar): veriler ÖNCE doğru çıkarılır; alıcı IBAN göndericininkine ASLA düşürülmez."},
     {"id": "Z11", "date": "2026-08-24 02:20", "area": "BANKA TESPİTİ YENİDEN DÜZENLENDİ: gönderici IBAN kodu BİRİNCİL + bilinmeyen banka → AI derin inceleme/kayıt", "test": 34,
      "bug": "QNB dekontu 'Enpara' tespit ediliyordu: ilk iş banka tespiti isim/domain imzasına dayalıydı; OCR "
             "footer'daki 'qnb.com'u kaçırınca Enpara'nın GEVŞEK imzası (yalnız 'ALICI ÜNVANI'+'EFT TUTARI' "
@@ -1170,6 +1181,28 @@ def _t34_bank_detection_sender_iban_first():
     return ok, f"qnb-sender-code={a}, ing-domain={b}, bilinmeyen-kod={c}, qnb-not-enpara={d}"
 
 
+def _t35_receiver_iban_ocr_tolerant():
+    """ALICI IBAN OCR-TOLERANSLI KURTARMA (QNB/Enpara): OCR 'ALICI IBAN'ı 'ALICI IRAN' (B→R) okur ve IBAN'a
+    boşluk sızarsa ('TR19...901 1 147...'), alıcı IBAN bulunamayıp göndericininkine düşüyordu → iki IBAN aynı
+    QNB → yanlış 'aynı-banka → SAHTE'. Kural: alıcı IBAN toleranslı çıkarılır (B↔R + boşluk temizliği + mod-97
+    onarımı), alıcı adına sızan IBAN temizlenir. Sonuç: gönderici QNB / alıcı Ziraat — FARKLI, geçerli."""
+    import extract as _E, banks as _b
+    txt = ("QNB Bank A.Ş. qnb.com.tr\nKEREM YAVUZ\n"
+           "TR350011100000000120439443 Alıcı : Remzi Koç Türkiye Cumhuriyeti Ziraat\nGIDEN FAST EFT\n"
+           "ALICI ÜNVANI: Remzi Koç ALICI IRAN: TR19000100901 1 147534405001\n"
+           "KATILIMCI: Türkiye Cumhuriyeti Ziraat Bankası A.Ş.\n"
+           "EFT TUTARI: 100.0 TL SORGU NO: 1642839263\n"
+           "MÜŞTERİ ÜNVANI: KEREM YAVUZ IBAN: TR350011100000000120439443\nGÖNDEREN: KEREM YAVUZ")
+    ex = _E.extract_fields(txt, txt, None)
+    s_ib = _b.normalize_iban(ex.sender.iban)
+    r_ib = _b.normalize_iban(ex.receiver.iban)
+    recv_ok = (r_ib == "TR190001009011147534405001" and _b.iban_valid(r_ib) is True)
+    diff_bank = (_b.iban_bank_code(s_ib) == "00111" and _b.iban_bank_code(r_ib) == "00010")
+    name_clean = (ex.receiver.name.strip().lower() == "remzi koç".lower())  # IBAN adına sızmamış
+    ok = recv_ok and diff_bank and name_clean
+    return ok, f"alıcı-iban={r_ib}(geçerli={_b.iban_valid(r_ib)}), farklı-banka={diff_bank}, ad-temiz={name_clean}({ex.receiver.name!r})"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1205,6 +1238,7 @@ _CHECKS = [
     (32, "İhraççı güvencesi: yanlış-atanan gönderici IBAN → sahte 'aynı-banka çelişkisi' yok", _t32_issuer_guard_no_false_samebank),
     (33, "YZ hükmü düzeltilmiş TAM veriyle uzlaştırılır (sahte→belirsiz, banka etiketi düzelir)", _t33_ai_verdict_reconciled_after_correction),
     (34, "Banka tespiti: gönderici IBAN kodu birincil (QNB≠Enpara), domain yedek, bilinmeyen kod", _t34_bank_detection_sender_iban_first),
+    (35, "Alıcı IBAN OCR-toleranslı kurtarma (ALICI IRAN + boşluk) → gönderici≠alıcı", _t35_receiver_iban_ocr_tolerant),
 ]
 
 

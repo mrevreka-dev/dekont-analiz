@@ -916,6 +916,18 @@ def extract_fields(text: str, reading_text: str = "", pdf_bytes: bytes | None = 
                 if _dm:
                     ex.receiver.name = _clean_name(_dm.group(1))
             ex.receiver.iban = banks.normalize_iban(_after_label(rt, "ALICI IBAN", _STOPS))
+            # OCR-TOLERANSLI ALICI IBAN: 'ALICI IBAN' etiketi OCR'da 'ALICI IRAN' (B→R) okunmuş ya da IBAN
+            # içine boşluk sızmışsa yukarıdaki _after_label boş/yanlış döner. Toleranslı çıkarımı DENE.
+            if banks.iban_valid(banks.normalize_iban(ex.receiver.iban or "")) is not True:
+                _rt_iban = receiver_iban_ocr_tolerant(rt)
+                if _rt_iban:
+                    ex.receiver.iban = _rt_iban
+            # ALICI ADINA SIZAN IBAN/ETİKET TEMİZLİĞİ: OCR'da 'ALICI ÜNVANI' ve 'ALICI IBAN' aynı satıra
+            # birleşince alıcı adı 'Remzi Koç ALICI IRAN: TR19...' gibi çıkabiliyor → 'alıcı/iban/iran/TR..'
+            # ve sonrasını at, sadece adı bırak.
+            if ex.receiver.name:
+                ex.receiver.name = _clean_name(re.split(
+                    r"\bal[ıi]c[ıi]\b|\b[ıi]?[br]an\b|TR\d{2}\d", ex.receiver.name, 1, re.I)[0])
             # Gönderen (MÜŞTERİ ÜNVANI daha güvenilir; yoksa GÖNDEREN)
             ex.sender.name = _clean_name(_after_label(rt, "MÜŞTERİ ÜNVANI", _STOPS)
                                          or _after_label(rt, "MUSTERI UNVANI", _STOPS)
@@ -1910,6 +1922,33 @@ def _reconstruct_split_iban(text: str, exclude: str = "") -> str:
             cand = partial + dm.group(1)
             if banks.iban_valid(cand) is True and cand != _ex:
                 return cand
+    return ""
+
+
+def receiver_iban_ocr_tolerant(text: str, exclude: str = "") -> str:
+    """ALICI/ALACAKLI IBAN'ını OCR-TOLERANSLI çıkarır. İki sık OCR hatasını yener: (1) 'IBAN' → 'IRAN'
+    (B→R okuması); (2) IBAN içine sızan tek boşluk/parça ('TR19...901 1 147...'). Etiketten sonraki TR-IBAN'ı
+    boşlukları temizleyip alır (26 karakter), mod-97 GEÇERSİZSE tek-rakam OCR onarımı dener. `exclude`:
+    gönderici IBAN'ı (aynı ise atla). Böylece alıcı IBAN göndericininkiyle karışmaz / boş kalmaz."""
+    if not text:
+        return ""
+    _ex = banks.normalize_iban(exclude or "")
+    # 'alıcı'/'alacaklı' + 'iban'/'iran'/'iban' (i̇ban) + IBAN gövdesi (boşluk toleranslı)
+    pats = [r"al[ıi]c[ıi]\s*(?:unvani[^T]{0,40})?[ıi]?[br]an\s*[:：]?\s*(TR[\d ]{24,36})",
+            r"alacakl[ıi]\s*[ıi]?[br]an\s*[:：]?\s*(TR[\d ]{24,36})"]
+    for pat in pats:
+        for m in re.finditer(pat, text, re.I):
+            raw = re.sub(r"\s", "", m.group(1)).upper()[:26]
+            if not re.fullmatch(r"TR\d{24}", raw):
+                continue
+            if raw == _ex:
+                continue
+            if banks.iban_valid(raw) is True:
+                return raw
+            _rep = banks.repair_iban_ocr(raw)      # mod-97 tek-rakam onarımı (benzersizse)
+            if banks.iban_valid(_rep) is True and _rep != _ex:
+                return _rep
+            return raw                             # geçersiz ama alıcı IBAN'ı bu; en azından ekrana yaz
     return ""
 
 
