@@ -906,16 +906,10 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                     continue
                 findings.append(Finding(_d["code"], _d["severity"], "content", _d["weight"],
                                         tr=_d["tr"], en=_d["en"], detail=_d.get("detail", "")))
-            # (KULLANICI KURALI) YAZAN BANKA ADI ↔ IBAN BANKA KODU — FOTOĞRAF DAHİL her girdide.
-            # Geçerli IBAN + açıkça yazan TANINAN banka adı şart olduğundan OCR'de de güvenilirdir;
-            # bu yüzden yukarıdaki fotoğraf-baskılamasına TABİ DEĞİLDİR. Uyuşmazlık → KESİN sahte.
-            _bnc_seen = {f.code for f in findings}
-            for _d in _auth.bank_name_iban_contradiction(text_layout, ex.sender.iban, ex.receiver.iban):
-                if _d["code"] in _bnc_seen:
-                    continue
-                _bnc_seen.add(_d["code"])
-                findings.append(Finding(_d["code"], _d["severity"], "content", _d["weight"],
-                                        tr=_d["tr"], en=_d["en"], detail=_d.get("detail", "")))
+            # NOT: YAZAN BANKA ADI ↔ IBAN KODU kontrolü BURADA (AI-öncesi ham veriyle) YAPILMAZ.
+            # Kullanıcı kuralı: bu ve benzeri alan-bağımlı denetimler DAİMA AI-DÜZELTİLMİŞ veri üzerinden
+            # çalışır (fotoğrafta OCR IBAN'ı bozuk okuyabilir → AI görüntüden düzeltir). Kontrol AI-sonrası
+            # blokta (b2) `_extracted_dict` (düzeltilmiş; AI yoksa orijinal) IBAN'larıyla yürütülür.
             # Alan-bazlı font tutarlılığı: TUTAR yabancı/ana-dışı bir fontta mı (yapıştırılmış)?
             _af = _auth.check_amount_font(pdf_bytes, ex.amount.value)
             if _af:
@@ -1309,6 +1303,26 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                         en=(f"{_who} BANK CONTRADICTION: stated {_who.lower()} bank '{_stated}' but the "
                             f"{_who.lower()} IBAN's bank code belongs to {_ibank} — different banks (possible forgery)."),
                         detail=f"stated={_cs} iban_bank={_ci}"))
+    except Exception:
+        pass
+
+    # (b2) YAZAN BANKA ADI ↔ IBAN — HAM METİN + AI-DÜZELTİLMİŞ IBAN (KULLANICI KURALI):
+    #     Yukarıdaki (b) 'bank_stated' alanına bağlıdır; VakıfBank gibi düzenlerde bu alan BOŞ kalabilir
+    #     (parser 'ALICI BANKA' metnini ayrı bir alana almaz, AI de bank_stated'i doldurmaz) → (b) atlanır.
+    #     Bu kontrol yazan banka adını doğrudan HAM METİNDEN ('ALICI/GÖNDEREN BANKA' etiketi) alır ve AI'ın
+    #     GÖRÜNTÜDEN DÜZELTTİĞİ (mod-97 geçerli) IBAN ile karşılaştırır → 'İLK (OCR) veri' değil, AI-doğrulanmış
+    #     veri esas alınır (kullanıcı kuralı). Tanınan iki farklı banka → RECEIVER/SENDER_BANK_MISMATCH (KESİN).
+    try:
+        import authenticity as _auth_b2
+        _s_ai_b2 = (_extracted_dict.get("sender", {}) or {}).get("iban") or ""
+        _r_ai_b2 = (_extracted_dict.get("receiver", {}) or {}).get("iban") or ""
+        _seen_b2 = {f.code for f in findings} | {f.code for f in _post_ai}
+        for _d in _auth_b2.bank_name_iban_contradiction(text_layout, _s_ai_b2, _r_ai_b2):
+            if _d["code"] in _seen_b2:
+                continue
+            _seen_b2.add(_d["code"])
+            _post_ai.append(Finding(_d["code"], _d["severity"], "content", _d["weight"],
+                                    tr=_d["tr"], en=_d["en"], detail=_d.get("detail", "")))
     except Exception:
         pass
 
