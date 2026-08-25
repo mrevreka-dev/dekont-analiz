@@ -156,56 +156,81 @@
   </div>
   {% endif %}
 
-  <!-- DENETİM KAPSAMI (banka bazlı: ne yapıldı / ne yapılamadı) -->
-  {% set cov = r.denetim_kapsami %}
-  {% if cov and cov.maddeler %}
-  {% set dcolor = {'yapıldı':'var(--good)','kusur':'var(--critical)','kısmi':'#d08700','yapılamadı':'var(--text-muted)'} %}
-  {% set dword = {'yapıldı':'YAPILDI','kusur':'KUSUR','kısmi':'KISMİ','yapılamadı':'YAPILAMADI'} %}
-  <div class="card" style="border-left:5px solid var(--accent)">
-    <div class="section-title" style="margin-top:0">
-      {{ 'DENETİM KAPSAMI' if L=='tr' else 'CHECK COVERAGE' }}
-      <span class="badge-soft" style="background:var(--accent);color:#fff">{{ cov.banka }}</span>
-    </div>
-    <div class="subline" style="margin-top:-4px;margin-bottom:10px">
-      Banka bazlı · {{ cov.ozet.yapildi }} yapıldı, {{ cov.ozet.kusur }} kusur,
-      {{ cov.ozet.kismi }} kısmi, {{ cov.ozet.yapilamadi }} yapılamadı
-    </div>
-    {% for m in cov.maddeler %}
-    <div style="display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--border)">
-      <span class="badge-soft" style="background:{{ dcolor.get(m.durum,'var(--text-muted)') }};color:#fff;flex:0 0 auto;min-width:78px;text-align:center">{{ dword.get(m.durum, m.durum)|upper }}</span>
-      <div><b>{{ m.alan }}</b><div style="color:var(--text-muted);font-size:13px">{{ m.sonuc }}</div></div>
-    </div>
-    {% endfor %}
-    <p style="font-size:11px;color:var(--text-muted);margin-top:8px">Tüm maddeler tespit edilen bankaya göre değerlendirilir. "Yapılamadı" olanlar, belge tipinin (ör. görüntü) izin vermediği denetimlerdir.</p>
+  <!-- TAHRİFAT / OYNAMA SİNYALLERİ (kural + YZ tespitleri) — YZ yorum alanının hemen ALTINDA -->
+  <div class="section-title">{{ 'TAHRİFAT / OYNAMA SİNYALLERİ' if L=='tr' else 'TAMPERING SIGNALS' }}</div>
+  {% set kf = findings|selectattr('code','equalto','KNOWN_FAKE')|list %}
+  {% if kf %}
+  <div class="card" style="border:1px solid var(--accent);background:color-mix(in srgb, var(--accent) 10%, transparent);margin-bottom:10px">
+    <div style="font-weight:700;color:var(--accent);margin-bottom:3px">ℹ {{ 'Kara-liste bilgisi' if L=='tr' else 'Blocklist note' }}</div>
+    <div style="font-size:12px;line-height:1.5">{{ kf[0].message }}</div>
+    {% if kf[0].detail %}<div class="detail">{{ kf[0].detail }}</div>{% endif %}
   </div>
   {% endif %}
+  {% set shown = findings|selectattr('weight','!=',0)|list %}
+  {% if shown %}
+    <p class="subline" style="margin-top:-4px">{{ 'Kural motoru ve yapay zeka taramasının tespit ettiği sinyaller (skoru bunlar belirler):' if L=='tr' else 'Signals detected by the rule engine and AI review (these drive the score):' }}</p>
+    {% for f in findings %}
+      {% if f.weight != 0 %}
+      <div class="finding">
+        <div class="bar" style="background:{{ sevcolor[f.severity] }}"></div>
+        <div>
+          <div class="msg">{{ f.message }}</div>
+          {% if f.detail %}<div class="detail">{{ f.detail }}</div>{% endif %}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">
+          <span class="tag" style="background:color-mix(in srgb, {{ sevcolor[f.severity] }} 15%, transparent);color:{{ sevcolor[f.severity] }}">{{ T.severity[f.severity] }}</span>
+          <span class="tag tag-cat">{{ T.category[f.category] }}</span>
+        </div>
+      </div>
+      {% endif %}
+    {% endfor %}
+  {% else %}
+    <div class="card bg-good" style="border:1px solid var(--good)">✓ {{ T.no_findings }}</div>
+  {% endif %}
 
-  <!-- KESİN CEVAPLAR (true/false/nötr) -->
+  <!-- ============================================================
+       DENETİM KAPSAMI (birleşik): KESİN CEVAPLAR + banka-bazlı maddeler + teknik özet
+       Tek tutarlı bölüm: headline sonucu SKOR/RİSK'ten türetilir → raporun geri kalanıyla ÇELİŞMEZ.
+       ============================================================ -->
+  {% set cov = r.denetim_kapsami %}
   {% set vd = r.verdicts %}
   {% set vstate = {'true':'var(--good)','false':'var(--critical)','neutral':'var(--text-muted)'} %}
   {% set vword_tr = {'true':'EVET','false':'HAYIR','neutral':'NÖTR'} %}
   {% set vword_en = {'true':'YES','false':'NO','neutral':'NEUTRAL'} %}
-  {% set ov = vd.overall.state %}
-  <div class="card" style="border-left:5px solid {{ vstate[ov] }}">
+  {% set dcolor = {'yapıldı':'var(--good)','kusur':'var(--critical)','kısmi':'#d08700','yapılamadı':'var(--text-muted)'} %}
+  {% set dword = {'yapıldı':'YAPILDI','kusur':'KUSUR','kısmi':'KISMİ','yapılamadı':'YAPILAMADI'} %}
+  {# TEK KAYNAK: genel 'güvenilir mi' sonucu risk seviyesinden gelir → tüm rapor bununla tutarlı #}
+  {% set ov_map = {'authentic':'true','low':'true','medium':'neutral','high':'false','critical':'false'} %}
+  {% set ov = ov_map[risk] %}
+  {% set ov_word_tr = {'authentic':'GÜVENİLİR','low':'GÜVENİLİR','medium':'ŞÜPHELİ','high':'GÜVENİLİR DEĞİL','critical':'GÜVENİLİR DEĞİL'} %}
+  {% set ov_word_en = {'authentic':'TRUSTWORTHY','low':'TRUSTWORTHY','medium':'SUSPICIOUS','high':'NOT TRUSTWORTHY','critical':'NOT TRUSTWORTHY'} %}
+  <div class="card" style="border-left:5px solid {{ riskcolor }}">
     <div class="section-title" style="margin-top:0">
-      {{ 'KESİN CEVAPLAR' if L=='tr' else 'DEFINITIVE ANSWERS' }}</div>
+      {{ 'DENETİM KAPSAMI & KESİN CEVAPLAR' if L=='tr' else 'CHECK COVERAGE & DEFINITIVE ANSWERS' }}
+      {% if cov %}<span class="badge-soft" style="background:var(--accent);color:#fff">{{ cov.banka }}</span>{% endif %}
+    </div>
     <div class="subline" style="margin-top:-4px;margin-bottom:12px">
       {{ 'Doğrulama modu' if L=='tr' else 'Verification mode' }}:
       <strong>{{ vd.mode_label_tr if L=='tr' else vd.mode_label_en }}</strong></div>
 
+    <!-- TEK, TUTARLI GENEL SONUÇ (skor/risk ile birebir) -->
     <div style="display:flex;align-items:flex-start;gap:12px;padding:12px;border-radius:10px;
-         background:rgba(128,128,128,0.06);margin-bottom:14px">
-      <span style="font-weight:800;font-size:15px;color:{{ vstate[ov] }};min-width:78px;text-align:center;
-            border:2px solid {{ vstate[ov] }};border-radius:8px;padding:6px 4px">
-        {{ (vword_tr[ov] if L=='tr' else vword_en[ov]) }}</span>
+         background:color-mix(in srgb, {{ riskcolor }} 8%, transparent);border:1px solid {{ riskcolor }};margin-bottom:14px">
+      <span style="font-weight:800;font-size:14px;color:{{ riskcolor }};min-width:120px;text-align:center;
+            border:2px solid {{ riskcolor }};border-radius:8px;padding:8px 4px">
+        {{ (ov_word_tr[risk] if L=='tr' else ov_word_en[risk]) }}</span>
       <div>
         <div style="font-weight:700;margin-bottom:2px">
-          {{ 'Dekont güvenilir mi (sahte değil)?' if L=='tr' else 'Is the receipt trustworthy (not forged)?' }}</div>
-        <div class="subline" style="margin:0">{{ vd.overall.label_tr if L=='tr' else vd.overall.label_en }}</div>
+          {{ 'Dekont güvenilir mi?' if L=='tr' else 'Is the receipt trustworthy?' }}
+          <span class="badge-soft" style="background:{{ riskcolor }};color:#fff">{{ r.score.authenticity_score }}/100 · {{ T.risk_label[risk] }}</span></div>
+        <div class="subline" style="margin:0">{{ r.score.verdict_tr if L=='tr' else r.score.verdict_en }}</div>
       </div>
     </div>
 
-    <table class="tbl">
+    <!-- KESİN CEVAPLAR (özet sorular) -->
+    <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">
+      {{ 'Kesin cevaplar' if L=='tr' else 'Definitive answers' }}</div>
+    <table class="tbl" style="margin-bottom:14px">
       <tbody>
       {% for c in vd['checks'] %}
         <tr>
@@ -222,6 +247,38 @@
       {% endfor %}
       </tbody>
     </table>
+
+    <!-- BANKA-BAZLI DENETİM MADDELERİ -->
+    {% if cov and cov.maddeler %}
+    <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">
+      {{ 'Banka-bazlı denetim maddeleri' if L=='tr' else 'Bank-based check items' }}
+      <span class="subline">· {{ cov.ozet.yapildi }} yapıldı · {{ cov.ozet.kusur }} kusur · {{ cov.ozet.kismi }} kısmi · {{ cov.ozet.yapilamadi }} yapılamadı</span></div>
+    {% for m in cov.maddeler %}
+    <div style="display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--border)">
+      <span class="badge-soft" style="background:{{ dcolor.get(m.durum,'var(--text-muted)') }};color:#fff;flex:0 0 auto;min-width:78px;text-align:center">{{ dword.get(m.durum, m.durum)|upper }}</span>
+      <div><b>{{ m.alan }}</b><div style="color:var(--text-muted);font-size:13px">{{ m.sonuc }}</div></div>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    <!-- TEKNİK ÖZET (eski KPI kartları buraya taşındı; tekrar eden alanlar elendi) -->
+    <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-top:14px">
+      {{ 'Teknik özet' if L=='tr' else 'Technical summary' }}</div>
+    {% set _rows = [
+      (T.integrity, r.subscores.integrity ~ '/100', r.subscores.integrity < 80),
+      (T.source_verifiability, r.subscores.source_verifiability ~ '/100', r.subscores.source_verifiability < 50),
+      (T.ai_likelihood, '%' ~ r.ai_trace.likelihood, r.ai_trace.likelihood >= 30),
+      (T.text_source, r.classification.text_source|upper ~ ' · ' ~ (('PDF ' ~ r.metadata.pdf_version) if r.classification.text_source!='ocr' else ('sayfa ' ~ r.metadata.page_count)), false),
+      (T.incremental, r.tamper.incremental_updates ~ (' · yeniden kayıt' if r.tamper.resaved_by_editor else ''), r.tamper.incremental_updates > 0),
+      ('QR / XML', (T.found if r.qr.found else T.not_found) ~ ' / ' ~ (T.found if r.embedded_xml.present else T.not_found), false)
+    ] %}
+    {% for lbl, val, warn in _rows %}
+    <div style="display:flex;gap:10px;align-items:baseline;padding:6px 0;border-top:1px solid var(--border)">
+      <div style="flex:0 0 46%;color:var(--text-muted);font-size:13px">{{ lbl }}</div>
+      <div style="font-weight:650;color:{{ 'var(--warning)' if warn else 'var(--text-primary)' }}">{{ val }}</div>
+    </div>
+    {% endfor %}
+    <p style="font-size:11px;color:var(--text-muted);margin-top:8px">Tüm maddeler tespit edilen bankaya göre değerlendirilir. "Yapılamadı/nötr" olanlar, belge tipinin (ör. fotoğraf) yapısal doğrulamaya izin vermediği denetimlerdir — bu bir "temiz" hükmü DEĞİLDİR; genel sonuç yukarıdaki skor/risk ve YZ değerlendirmesidir.</p>
   </div>
 
   <!-- TAHRİFAT / DEĞİŞİKLİK KARŞILAŞTIRMASI (Alan · Orijinal · Değiştirilmiş) -->
@@ -312,34 +369,8 @@
   </div>
   {% endif %}
 
-  <!-- STAT TILES -->
-  <div class="tiles" style="margin-top:16px">
-    <div class="tile"><div class="k">{{ T.ai_likelihood }}</div>
-      <div class="v" style="color:{{ 'var(--critical)' if r.ai_trace.likelihood>=60 else ('var(--warning)' if r.ai_trace.likelihood>=30 else 'var(--good)') }}">%{{ r.ai_trace.likelihood }}</div>
-      <div class="sub">{{ r.ai_trace.verdict.split('/')[0] if L=='tr' else r.ai_trace.verdict.split('/')[1] if '/' in r.ai_trace.verdict else r.ai_trace.verdict }}</div></div>
-    <div class="tile"><div class="k">{{ T.tamper_signals }}</div>
-      <div class="v" style="color:{{ 'var(--critical)' if r.tamper.critical_findings>0 else 'var(--text-primary)' }}">{{ r.tamper.findings_count }}</div>
-      <div class="sub">{{ r.tamper.critical_findings }} {{ 'yüksek/kritik' if L=='tr' else 'high/critical' }}</div></div>
-    <div class="tile"><div class="k">{{ T.incremental }}</div>
-      <div class="v" style="color:{{ 'var(--warning)' if r.tamper.incremental_updates>0 else 'var(--text-primary)' }}">{{ r.tamper.incremental_updates }}</div>
-      <div class="sub">{{ 'yeniden kayıt' if r.tamper.resaved_by_editor else '—' }}</div></div>
-    <div class="tile"><div class="k">{{ T.text_source }}</div>
-      <div class="v">{{ r.classification.text_source|upper }}</div>
-      <div class="sub">{{ T.pages }}: {{ r.metadata.page_count }} · PDF {{ r.metadata.pdf_version }}</div></div>
-  </div>
-
-  <!-- SUB-SCORES -->
-  {% set sscol = {True:'var(--good)', False:'var(--critical)'} %}
-  {% macro subcolor(v) %}{{ 'var(--good)' if v>=80 else ('var(--warning)' if v>=50 else 'var(--critical)') }}{% endmacro %}
-  <div class="tiles" style="margin-top:12px">
-    <div class="tile"><div class="k">{{ T.integrity }}</div>
-      <div class="v" style="color:{{ subcolor(r.subscores.integrity) }}">{{ r.subscores.integrity }}<span style="font-size:13px;color:var(--text-muted)">/100</span></div></div>
-    <div class="tile"><div class="k">{{ T.data_consistency }}</div>
-      <div class="v" style="color:{{ subcolor(r.subscores.data_consistency) }}">{{ r.subscores.data_consistency }}<span style="font-size:13px;color:var(--text-muted)">/100</span></div></div>
-    <div class="tile"><div class="k">{{ T.source_verifiability }}</div>
-      <div class="v" style="color:{{ subcolor(r.subscores.source_verifiability) }}">{{ r.subscores.source_verifiability }}<span style="font-size:13px;color:var(--text-muted)">/100</span></div>
-      <div class="sub">{{ T.qr_title }}: {{ T.found if r.qr.found else T.not_found }} · XML: {{ T.found if r.embedded_xml.present else T.not_found }}</div></div>
-  </div>
+  <!-- (Eski KPI kartları — AI/Düzenleme olasılığı, tahrifat sayısı, artımlı, metin kaynağı, alt-skorlar,
+       QR/XML — 'Denetim Kapsamı > Teknik özet' bölümüne taşındı; tekrar eden kartlar kaldırıldı.) -->
 
   <!-- REVISION COMPARISON -->
   {% if r.revision.has_prior and r.revision.changes %}
@@ -365,37 +396,7 @@
   </div>
   {% endif %}
 
-  <!-- TAMPER FINDINGS -->
-  <div class="section-title">{{ T.tamper_signals }}</div>
-  {# KARA-LİSTE BİLGİ BANDI: eşleşme tek başına 'sahte' hükmü değildir; bilgi olarak gösterilir #}
-  {% set kf = findings|selectattr('code','equalto','KNOWN_FAKE')|list %}
-  {% if kf %}
-  <div class="card" style="border:1px solid var(--accent);background:color-mix(in srgb, var(--accent) 10%, transparent);margin-bottom:10px">
-    <div style="font-weight:700;color:var(--accent);margin-bottom:3px">ℹ {{ 'Kara-liste bilgisi' if L=='tr' else 'Blocklist note' }}</div>
-    <div style="font-size:12px;line-height:1.5">{{ kf[0].message }}</div>
-    {% if kf[0].detail %}<div class="detail">{{ kf[0].detail }}</div>{% endif %}
-  </div>
-  {% endif %}
-  {% set shown = findings|selectattr('weight','!=',0)|list %}
-  {% if shown %}
-    {% for f in findings %}
-      {% if f.weight != 0 %}
-      <div class="finding">
-        <div class="bar" style="background:{{ sevcolor[f.severity] }}"></div>
-        <div>
-          <div class="msg">{{ f.message }}</div>
-          {% if f.detail %}<div class="detail">{{ f.detail }}</div>{% endif %}
-        </div>
-        <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">
-          <span class="tag" style="background:color-mix(in srgb, {{ sevcolor[f.severity] }} 15%, transparent);color:{{ sevcolor[f.severity] }}">{{ T.severity[f.severity] }}</span>
-          <span class="tag tag-cat">{{ T.category[f.category] }}</span>
-        </div>
-      </div>
-      {% endif %}
-    {% endfor %}
-  {% else %}
-    <div class="card bg-good" style="border:1px solid var(--good)">✓ {{ T.no_findings }}</div>
-  {% endif %}
+  <!-- (Tahrifat/Oynama Sinyalleri — YZ değerlendirmesinin hemen altına taşındı.) -->
 
   <!-- EXTRACTED INFO -->
   <div class="section-title">{{ T.extracted }}</div>
@@ -462,15 +463,38 @@
   <div class="grid grid-2" style="margin-top:16px">
     <div class="card">
       <div class="party-h"><span class="ph-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx="1"/><rect x="12" y="8" width="3" height="10" rx="1"/><rect x="17" y="5" width="3" height="13" rx="1"/></svg></span>{{ T.score_breakdown }}</div>
-      {% if r.score.breakdown %}
+      <p class="subline" style="margin-top:-6px;margin-bottom:8px">{{ 'Başlangıç 100 puan. Her kategori, altındaki bulgular yüzünden şu kadar düştü:' if L=='tr' else 'Starts at 100. Each category was reduced by the findings below it:' }}</p>
+      {% set _pen = r.score.breakdown|selectattr('penalty','>',0)|list %}
+      {% if _pen %}
         {% for b in r.score.breakdown %}
+        {% if b.penalty > 0 %}
         <div class="bd-row">
           <div class="bd-k">{{ T.category[b.category] }}</div>
           <div class="bd-track"><div class="bd-fill" style="width:{{ [b.penalty/45*100, 100]|min }}%;background:{{ 'var(--critical)' if b.penalty>=25 else ('var(--warning)' if b.penalty>=12 else 'var(--serious)') }}"></div></div>
           <div class="bd-v">−{{ b.penalty }}</div>
         </div>
+        {# BU KATEGORİYE DÜŞÜŞÜ YAPTIRAN BULGULAR — 'neden puan kırıldı' #}
+        {% set catfinds = findings|selectattr('category','equalto',b.category)|selectattr('weight','>',0)|list %}
+        {% if catfinds %}
+        <ul style="margin:2px 0 8px 0;padding-left:18px;line-height:1.5;font-size:12px;color:var(--text-secondary)">
+          {% for cf in catfinds %}<li><code>{{ cf.code }}</code> <span style="color:var(--critical);font-weight:700">−{{ cf.weight }}</span> · {{ cf.message[:130] }}{% if cf.message|length > 130 %}…{% endif %}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        {% endif %}
         {% endfor %}
-      {% else %}<p class="note">{{ T.no_findings }}</p>{% endif %}
+        <div class="bd-row" style="border-top:1px solid var(--border);margin-top:6px;padding-top:8px">
+          <div class="bd-k" style="font-weight:700">{{ 'Nihai skor' if L=='tr' else 'Final score' }}</div>
+          <div class="bd-track"><div class="bd-fill" style="width:{{ r.score.authenticity_score }}%;background:{{ riskcolor }}"></div></div>
+          <div class="bd-v" style="font-weight:800;color:{{ riskcolor }}">{{ r.score.authenticity_score }}/100</div>
+        </div>
+      {% else %}
+        <p class="note">{{ 'Ceza uygulanmadı (puan düşüren bulgu yok).' if L=='tr' else 'No penalty applied (no score-reducing finding).' }}</p>
+      {% endif %}
+      {% set _caps = findings|selectattr('code','in',['RECEIVER_BANK_MISMATCH','SENDER_BANK_MISMATCH','RAIL_SAMEBANK_MISMATCH','ISSUER_IBAN_MISMATCH','AMOUNT_MISMATCH','FEE_RAIL_MISMATCH','AI_FORENSIC_FLAG','EFT_SETTLEMENT_RISK','NOT_A_RECEIPT'])|selectattr('weight','>',0)|list %}
+      {% if _caps %}
+      <p class="note" style="margin-top:6px;color:var(--critical)">⚠ {{ 'Kesin/güçlü bir bulgu skoru doğrudan bir TAVANA çekti (kategori cezalarının toplamından bağımsız): ' if L=='tr' else 'A definitive/strong finding capped the score directly: ' }}{% for c in _caps %}<code>{{ c.code }}</code>{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+      {% endif %}
+      {% if r.score.max_possible < 100 %}<p class="note" style="margin-top:4px">{{ 'Belge tipi (ör. fotoğraf) yapısal doğrulamaya izin vermediğinden ulaşılabilir en yüksek skor' if L=='tr' else 'Doc-type cap' }}: {{ r.score.max_possible }}/100.</p>{% endif %}
     </div>
     <div class="card">
       <div class="party-h"><span class="ph-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>{{ T.timing_title }}</div>
