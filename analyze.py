@@ -1276,6 +1276,28 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                     "font than the document and appears pasted/altered. " + _alanlar),
                 detail="ai_gorsel_tahrifat"))
 
+    # (a2) ADLİ ŞÜPHECİ TARAMA (KATMAN 2): YZ'nin görsel-tahrifat DIŞINDA tespit ettiği mantıksal/adli kırmızı
+    #      bayraklar (referansta tekrarlı dolgu, iç tarih/saat mantığı, banka kodu/ad uyuşmazlığı, elektronik
+    #      belgenin fotoğrafı, e-belgede imza vb.). YÜKSEK GÜVENLİ (≥60) olanlar TEK bir AI_FORENSIC_FLAG
+    #      bulgusuna toplanır → skoru düşürür ve hüküm uzlaştırmasını tetikler.
+    if ai_adjudication:
+        try:
+            _cl = [c for c in (ai_adjudication.get("celiskiler") or []) if int(c.get("guven") or 0) >= 60]
+        except Exception:
+            _cl = []
+        if _cl:
+            _maxg = max(int(c.get("guven") or 0) for c in _cl)
+            _bayrak = "; ".join(f"{c.get('alan','')}: {c.get('aciklama','')}" for c in _cl)[:700]
+            # ağırlık güvenle ölçeklenir (≥60 → ~24; 100 → 40); category cap ('content') zaten sınırlar
+            _w = int(round(_maxg * 0.40))
+            _post_ai.append(Finding(
+                "AI_FORENSIC_FLAG", "high", "content", _w,
+                tr=("ADLİ ŞÜPHE (YZ tarama): belgede sahtecilik göstergesi olabilecek KIRMIZI BAYRAK(lar) "
+                    f"tespit edildi (en yüksek güven %{_maxg}). {_bayrak}"),
+                en=(f"FORENSIC RED FLAG (AI review): possible forgery indicator(s) detected (max confidence "
+                    f"{_maxg}%). {_bayrak}"),
+                detail=f"ai_celiskiler adet={len(_cl)} max_guven={_maxg}"))
+
     # (b) BANKA ADI ↔ IBAN KODU (GÖNDERİCİ ve ALICI, KATI KURAL): Dekontta YAZAN banka adı ile IBAN'ın banka
     #     kodu farklı bankaları gösteriyorsa çelişki. AI IBAN'ları düzelttikten SONRA, GEÇERLİ IBAN üzerinden
     #     çalışır → fotoğrafta da güvenilir (OCR ham okumasına değil, AI-doğrulanmış IBAN'a bakar).
@@ -1556,7 +1578,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     # bulgusu ya da YZ görsel-tahrifatı) YOKSA → hüküm eski veriye dayanıyordur, 'belirsiz'e çekilir ve
     # gerekçeye şeffaf bir düzeltme notu eklenir. Böylece 'düzeltilmiş alanlar' ile 'YZ hükmü' ASLA çelişmez.
     try:
-        _forgery_codes = {f.code for f in findings} & (set(_vd._CONTENT_TAMPER) | {"AI_VISUAL_TAMPER"})
+        _forgery_codes = {f.code for f in findings} & (set(_vd._CONTENT_TAMPER) | {"AI_VISUAL_TAMPER", "AI_FORENSIC_FLAG"})
         _ai_gt = bool((ai_adjudication or {}).get("gorsel_tahrifat"))
         _ai_v = str((ai_adjudication or {}).get("verdict") or "").lower()
         if ai_adjudication and _ai_v in ("sahte", "şüpheli", "supheli") and not _forgery_codes and not _ai_gt:
@@ -1576,7 +1598,11 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
         # iskeleti (düzeltilmiş veri) ile YZ yorumu ASLA çelişmez.
         elif ai_adjudication and _ai_v not in ("sahte", "şüpheli", "supheli") and _forgery_codes:
             _hard = [(f.code, f.tr) for f in findings if f.code in _forgery_codes]
-            _vd.escalate_verdict_on_hard_findings(ai_adjudication, _hard, _ai_v)
+            # DETERMINİSTİK kesin kod (banka-adı↔IBAN, aynı-banka vb.) varsa 'sahte'; yalnız YZ olasılıksal
+            # adli bayrağı (AI_FORENSIC_FLAG) varsa 'şüpheli' (aşırı kesin hüküm verme).
+            _det_hard = _forgery_codes - {"AI_FORENSIC_FLAG"}
+            _tv = "sahte" if _det_hard else "şüpheli"
+            _vd.escalate_verdict_on_hard_findings(ai_adjudication, _hard, _ai_v, target_verdict=_tv)
     except Exception:
         pass
 

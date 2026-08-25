@@ -349,20 +349,23 @@ def compute_verdicts(*, doc_type: str, input_kind: str, codes: set, cons: dict,
     }
 
 
-def escalate_verdict_on_hard_findings(ai_adjudication: dict, hard_findings, ai_verdict: str):
+def escalate_verdict_on_hard_findings(ai_adjudication: dict, hard_findings, ai_verdict: str,
+                                      target_verdict: str = "sahte"):
     """KULLANICI KURALI ('YZ yorumu OKUNAMAYAN değil NETLEŞMİŞ veriye dayanmalı'): YZ 'gerçek/belirsiz'
-    dediği hâlde alanlar düzeltildikten SONRAKİ NİHAİ bulgularda KESİN bir tahrifat/çelişki (hard_findings)
-    varsa, hüküm 'sahte'ye çekilir ve gerekçeye NETLEŞMİŞ veriye dayanan şeffaf bir not eklenir.
+    dediği hâlde alanlar düzeltildikten SONRAKİ NİHAİ bulgularda çelişki (hard_findings) varsa hüküm
+    yükseltilir ve gerekçeye NETLEŞMİŞ veriye dayanan şeffaf bir not eklenir. target_verdict: DETERMINİSTİK
+    kesin kod varsa 'sahte', yalnız olasılıksal YZ adli bayrağı varsa 'şüpheli'.
     hard_findings: [(code, tr_message), ...]. Döner: (guncellenen_ai_adjudication, degisti_mi)."""
     v = (ai_verdict or "").lower()
     if not ai_adjudication or v in ("sahte", "şüpheli", "supheli") or not hard_findings:
         return ai_adjudication, False
+    _tv = target_verdict if target_verdict in ("sahte", "şüpheli") else "sahte"
     _kanit = "; ".join(f"{c}: {t}" for c, t in hard_findings)[:700]
     ai_adjudication.setdefault("verdict_ham", v or "belirsiz")   # şeffaflık: YZ'nin ilk (ham) hükmü
-    ai_adjudication["verdict"] = "sahte"
+    ai_adjudication["verdict"] = _tv
     _note = (f"[DÜZELTME SONRASI UZLAŞTIRMA] YZ'nin ilk hükmü ('{v or 'belirsiz'}') OKUNAMAYAN/ham veriye "
              "dayanıyordu (ör. 'IBAN net okunamadı, karşılaştırma yapılamadı' demiş olsa da o alan "
-             "NETLEŞTİRİLİP rapora işlenmiştir). Raporun iskeletini oluşturan NETLEŞMİŞ veriyle DETERMINİSTİK "
-             f"ve KESİN bir çelişki bulundu → hüküm 'sahte'ye güncellendi. Kanıt: {_kanit} — ")
+             "NETLEŞTİRİLİP rapora işlenmiştir). Raporun iskeletini oluşturan NETLEŞMİŞ veriyle bir çelişki "
+             f"bulundu → hüküm '{_tv}'ye güncellendi. Kanıt: {_kanit} — ")
     ai_adjudication["reasoning_tr"] = _note + str(ai_adjudication.get("reasoning_tr") or "")
     return ai_adjudication, True

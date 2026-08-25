@@ -34,6 +34,19 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z22", "date": "2026-08-24 15:00", "area": "KATMAN 2: YZ 'adli şüpheci' tarama — her fotoğrafı sahtecilik gözüyle tarar; kırmızı bayraklar skorlanır; AI alanı sadeleşti", "test": 45,
+     "bug": "Motor yalnızca deterministik kuralları (banka-adı↔IBAN, aynı-banka FAST) ve YZ'nin GÖRSEL "
+            "tahrifatını yakalıyordu; 'referansta 8888/8888 dolgu', 'dekont tarihi işlemden önce', 'e-Dekont'un "
+            "fotoğrafı sunulmuş' gibi mantıksal/adli kırmızı bayrakları YZ metinde belirtse bile SKORA "
+            "yansımıyordu. Ayrıca 'Yapay Zeka Değerlendirmesi' alanı, 'Çıkarılan Bilgiler'de zaten olan "
+            "düzeltilmiş alan dökümünü tekrar gösteriyordu.",
+     "fix": "(1) ai_adjudicator prompt: 'ADLİ ŞÜPHECİ TARAMA' görevi + 'celiskiler' çıkışı — YZ her fotoğrafı "
+            "sahtecilik gözüyle tarar (dolgu numara, iç tarih/saat mantığı, banka kodu/ad uyuşmazlığı, "
+            "elektronik belgenin fotoğrafı, imza vb.). (2) analyze: yüksek-güvenli (≥60) celiskiler → tek "
+            "AI_FORENSIC_FLAG bulgusu (ağırlık güvenle ölçekli). (3) scoring: AI_FORENSIC_FLAG → skor ≤45 "
+            "('güvenilir' olamaz). (4) report.html: AI alanından 'düzeltilen alanlar' dökümü KALDIRILDI, yerine "
+            "'Adli şüphe — kırmızı bayraklar' bloğu; düzeltilmiş veriler Çıkarılan Bilgiler'de kalır. Test #45 "
+            "skorlamayı kilitler; prompt davranışı canlıda doğrulanır."},
     {"id": "Z21", "date": "2026-08-24 14:30", "area": "KULLANICI KURALI: YZ yorumu NETLEŞMİŞ veriyle uzlaştırılır (gerçek→sahte) + denetim kapsamı maddeleri netleştirildi", "test": 44,
      "bug": "(1) YZ tek geçişte hem alan düzeltiyor hem hüküm veriyordu; bir alanı 'net okunamadı' deyip "
             "çelişkiyi mazur görüp 'gerçek' diyordu (IBAN'ı corrected_fields'a yazdığı hâlde). Uzlaştırma "
@@ -1541,6 +1554,22 @@ def _t44_ai_verdict_escalated_on_hard_finding():
     return True, "YZ hükmü: kesin çelişki varsa netleşmiş veriyle 'sahte'ye çekilir; yoksa korunur."
 
 
+def _t45_ai_forensic_flag_scored():
+    """(KATMAN 2 — adli şüpheci tarama) YZ'nin görsel-tahrifat DIŞINDA bulduğu yüksek-güvenli kırmızı bayrak
+    (celiskiler → AI_FORENSIC_FLAG) skoru 'güvenilir' olamayacak seviyeye (≤45) çeker; bayrak yokken image_only
+    tavanı (72) korunur (yanlış-pozitif yok)."""
+    import scoring
+    from forensics import Finding
+    finds = [Finding("AI_FORENSIC_FLAG", "high", "content", 32, tr="ref 8888/8888 tekrarlı dolgu", en="")]
+    res = scoring.compute_score(finds, "image_only")
+    if res.authenticity_score > 45:
+        return False, f"AI_FORENSIC_FLAG skoru ≤45'e çekmedi: {res.authenticity_score}"
+    res2 = scoring.compute_score([], "image_only")
+    if res2.authenticity_score < 60:
+        return False, f"bayrak yokken skor gereksiz düştü (FP): {res2.authenticity_score}"
+    return True, f"AI_FORENSIC_FLAG → skor {res.authenticity_score} (≤45); bayrak yokken tavan {res2.authenticity_score} korunur."
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1586,6 +1615,7 @@ _CHECKS = [
     (42, "FAST + gönderici=alıcı banka → KESİN sahte; 'FAST Giden Anlık Ödeme' FAST tanınır", _t42_fast_samebank_definitive_fake),
     (43, "AI boş bank_stated'i görüntüden doldurur (dolu olanı ezmez) → çelişki kuralı fotoğrafta çalışır", _t43_ai_fills_empty_bank_stated),
     (44, "YZ 'gerçek' dese de netleşmiş veride kesin çelişki varsa hüküm 'sahte'ye çekilir (verdict_ham korunur)", _t44_ai_verdict_escalated_on_hard_finding),
+    (45, "KATMAN 2: YZ adli şüphe kırmızı bayrağı (celiskiler) → AI_FORENSIC_FLAG, skor ≤45 (bayrak yokken tavan korunur)", _t45_ai_forensic_flag_scored),
 ]
 
 

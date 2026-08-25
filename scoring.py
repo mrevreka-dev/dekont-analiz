@@ -189,6 +189,8 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 12)
     if "AI_VISUAL_TAMPER" in codes:          # YZ: yazı tipi/yapıştırma uyuşmazlığı (görsel tahrifat)
         score = min(score, 20)
+    if "AI_FORENSIC_FLAG" in codes:          # YZ adli şüphe kırmızı bayrağı (≥60 güven) → 'güvenilir' OLAMAZ
+        score = min(score, 45)               # olasılıksal seviye (deterministik ≤8 değil): yüksek/orta risk
     if "STATEMENT_BALANCE_BREAK" in codes:   # hesap hareketinde bakiye zinciri kırık
         score = min(score, 10)
     if "STATEMENT_ROW_COUNT_MISMATCH" in codes:   # beyan≠gerçek: satır silinmiş

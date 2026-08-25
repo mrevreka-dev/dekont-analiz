@@ -131,6 +131,11 @@ _SCHEMA_HINT = (
     '  "gorsel_tahrifat": [ {"alan":"tutar (yazıyla)","aciklama":"yazıyla yazılan tutar belgenin '
     'genel yazı tipinden farklı bir fontta/kalınlıkta — sonradan yapıştırılmış görünüyor","guven":85} ], '
     '// GÖRÜNTÜDE font/kalınlık/hizalama uyuşmazlığı gördüğün alanlar; yoksa boş bırak\n'
+    '  "celiskiler": [ {"alan":"Referans Numarası","aciklama":"referans \'8888/8888\' tekrarlı DOLGU '
+    'değeri gibi — gerçek işlemde olmaz","guven":80} ],  // ADLİ ŞÜPHE (görsel-tahrifat DIŞINDA): '
+    'numarada tekrarlı dolgu, iç tarih/saat mantığı (dekont tarihi < işlem zamanı vb.), banka kodu/ad '
+    'uyuşmazlığı, ELEKTRONİK belgenin fotoğrafı olması, e-belgede imza/karalama, tutar aritmetiği. '
+    'Bulduğun HER kırmızı bayrağı yaz; yoksa []\n'
     '  "islem_kanali": {"kanal":"EFT | FAST | HAVALE | belirsiz","aninda_gecer":true,'
     '"kanit":"ücret kalemi/başlık/IBAN kodu kanıtı"},  // İşlem hangi kanaldan gitti? EFT=anında GEÇMEZ '
     '(aninda_gecer=false, RİSKLİ); FAST/HAVALE=anında geçer (true). Ücret kalemine bak: "GEÇ EFT/EFT '
@@ -240,6 +245,17 @@ def _build_prompt(extraction: dict, findings: list, bank_ctx: str, input_kind: s
         "güven). ÇOK ÖNEMLİ: DEĞER tutarlılığı (75.000 = YetmişBeşBin) FONT tutarlılığı DEĞİLDİR — DEĞERE değil "
         "HARF BİÇİMİNE bak; belge geneli ince/monospace iken yazıyla tutar KALIN/oransal (Arial Bold gibi) ise "
         "değer eşleşse bile TAHRİFATtır, yüksek güvenle yaz. Tutarsızlık yoksa [] bırak ama denetimi ATLAMA.\n"
+        "3.5) ADLİ ŞÜPHECİ TARAMA — ZORUNLU (özellikle FOTOĞRAF/ekran görüntüsü dekontlarda). Bir sahtecilik "
+        "uzmanı gibi ŞÜPHEYLE tara; görsel-tahrifat DIŞINDA kalan mantıksal/adli kırmızı bayrakları 'celiskiler'e "
+        "{alan, aciklama, guven} yaz: (a) referans/işlem/sıra/sorgu numarasında TEKRARLI DOLGU deseni "
+        "(8888/8888, 0000, 1111, 1234, aynı grubun tekrarı) — gerçek işlemde olmaz; (b) İÇ TARİH/SAAT MANTIĞI: "
+        "dekont/belge tarihi işlem zamanından ÖNCE olamaz, gelecek tarih olamaz, valör-işlem tutarsızlığı; "
+        "(c) alıcı/gönderici banka ADININ ÖNÜNDEKİ KOD ile bankanın gerçek kodunun uyuşmazlığı; (d) GİB/e-Dekont/"
+        "e-fatura gibi ELEKTRONİK üretilmiş bir belgenin FOTOĞRAFI/ekran görüntüsü verilmişse (aslı doğrulanabilir "
+        "PDF'tir → güven DÜŞÜK, celiskiler'e 'orijinal dijital belge yerine fotoğraf sunulmuş' yaz); (e) elektronik "
+        "belgede EL-İMZASI/karalama; (f) tutar aritmetiğinin tutmaması. Emin değilsen DÜŞÜK güven ver, uydurma. "
+        "Bu kırmızı bayraklar hükmü ve güveni DOĞRUDAN etkiler — temiz görünen bir foto bile bu bayrakları "
+        "taşıyorsa 'gerçek' DEME.\n"
         "4) KANITA DAYALI HÜKÜM + güven yüzdesi. HÜKÜM KURALI: SAHTE = somut çelişki/tahrifat var (banka "
         "adı≠IBAN kodu, aynı-banka ama EFT/FAST, farklı-banka ama havale, numara tekrarı, font/yapıştırma, "
         "tutar aritmetiği tutmuyor, dijitalde IBAN mod-97 hatası). GERÇEK = hiçbir somut çelişki/tahrifat YOK "
@@ -470,6 +486,14 @@ def _sanitize(obj: dict) -> dict:
         {"alan": str(x.get("alan", ""))[:80], "aciklama": str(x.get("aciklama", ""))[:400],
          "guven": max(0, min(100, int(x.get("guven") or 0))) if str(x.get("guven") or "").strip().isdigit() else 0}
         for x in gt if isinstance(x, dict)][:10]
+    # ADLİ ŞÜPHECİ TARAMA (Katman 2): görsel-tahrifat DIŞINDAKİ mantıksal/adli kırmızı bayraklar
+    # (referansta tekrarlı dolgu, iç tarih/saat mantığı, banka kodu/ad uyuşmazlığı, elektronik belgenin
+    # fotoğrafı, e-belgede imza vb.). Yüksek güvenli olanlar skorlanan bulguya (AI_FORENSIC_FLAG) dönüşür.
+    cl = obj.get("celiskiler") or obj.get("red_flags") or []
+    out["celiskiler"] = [
+        {"alan": str(x.get("alan", ""))[:80], "aciklama": str(x.get("aciklama", ""))[:400],
+         "guven": max(0, min(100, int(x.get("guven") or 0))) if str(x.get("guven") or "").strip().isdigit() else 0}
+        for x in cl if isinstance(x, dict)][:12]
     im = obj.get("improvement_notes") or []
     out["improvement_notes"] = [
         {"bank": str(x.get("bank", "")), "field": str(x.get("field", "")),
