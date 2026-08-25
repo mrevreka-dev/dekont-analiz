@@ -34,6 +34,25 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z25", "date": "2026-08-25 08:30", "area": "KULLANICI KURALI (GENELLEŞTİRİLDİ): PDF'te dijital metin katmanı YOKSA (foto/ekran görüntüsü PDF'e sarılmış) → KESİN sahte + analiz ANINDA kesilir", "test": 47,
+     "bug": "SINGLE_PHOTO_PDF kuralı yalnız DEKONTLAR için (is_receipt) çalışıyordu; hesap özeti/başka belge "
+            "türleri için image-only PDF yakalanmıyordu. Ayrıca kural analizi KESMİYORDU: image-only PDF yine "
+            "OCR'a + YZ'ye giriyor, fotoğrafın gürültülü OCR metni üzerinde STATEMENT_BALANCE_BREAK gibi "
+            "denetimler YANLIŞ-POZİTİF üretebiliyordu (canlı örnek: 40367ce2 Ziraat foto-PDF, bakiye zinciri "
+            "OCR rakam hatası yüzünden 'kırık' göründü). Kullanıcı: dijital metin (XML/veri) katmanı olmayan "
+            "PDF sahteciliktir, tarama orada bırakılmalı — tüm belge tiplerinde.",
+     "fix": "analyze.py: metin çıkarımından HEMEN sonra _no_text_pdf = (input_kind=='pdf' and digital_text_len<40) "
+            "kapısı. True ise: (1) PDF_NO_TEXT_LAYER (critical) bulgusu eklenir; (2) OCR ATLANIR (text_source='none'); "
+            "(3) Vision ATLANIR; (4) YZ adjudicate ATLANIR (AI açık olsa bile) → maliyet + OCR-gürültüsü yanlış-"
+            "pozitifi önlenir; (5) NOT_A_RECEIPT bastırılır (yanıltıcı olmasın). Kriter 'XML' değil DİJİTAL METİN "
+            "KATMANI'dır (bank PDF'leri her zaman seçilebilir metin taşır). Doğrudan görsel yüklemesi "
+            "(input_kind=='image') KURAL DIŞI — foto zaten görseldir, görsel-adli+YZ yoluna gider. scoring: "
+            "PDF_NO_TEXT_LAYER → skor ≤8. verdicts: _CONTENT_TAMPER (güvenilir DEĞİL). ai_adjudicator: "
+            "_HARD_FAKE_CODES (düşünme açılmaz). store: _FAKE_CODES. Test #47 iki-yönlü kilitler (foto-PDF→tetik+"
+            "AI-atla; görsel yüklemesi→tetiklemez).",
+     "not": "Bu, Z24'te bulunan STATEMENT_BALANCE_BREAK yanlış-pozitifini de kökten çözer: foto-PDF artık OCR'a "
+            "hiç girmediğinden gürültülü rakamlar üzerinde bakiye-zinciri matematiği YAPILMAZ. (Balance-check'in "
+            "işaret/sıra-agnostik sağlamlaştırması dijital-metinli gerçek özetler için ayrıca ele alınacak.)"},
     {"id": "Z24", "date": "2026-08-25 07:10", "area": "ÖZ-DENETİM ÖNBELLEĞİ CANLIDA TAZELENMİYORDU: batarya boyunca YZ GLOBAL kapatılır (canlı ağ çağrısı yok)",
      "bug": "Canlı sunucuda /api/v1/self_check önbelleği bayat kalıyordu (total=45, generated_at eski, "
             "age_seconds=null). Kök neden: sunucuda API anahtarı olduğundan ai_adjudicator.is_enabled()=True; "
@@ -1635,6 +1654,40 @@ def _t46_thinking_escalation_policy():
     return True, "Eskalasyon: sahte/kesin-temizde açılmaz; belirsiz/düşük-güven/foto-tavan'da açılır; tutar tetikleyicisi yok."
 
 
+def _t47_pdf_no_text_layer_hard_stop():
+    """PDF DİJİTAL METİN KATMANI KAPISI (kullanıcı kuralı — GENEL, tüm belge tipleri): input_kind=='pdf'
+    ama seçilebilir dijital metin YOKSA (bir fotoğraf/ekran görüntüsü PDF'e sarılmış) → PDF_NO_TEXT_LAYER
+    (KESİN sahte, skor ≤8) ve analiz BURADA kesilir: OCR/Vision/YZ çalışMAZ, yanlış NOT_A_RECEIPT ya da
+    STATEMENT_BALANCE_BREAK ÜRETİLMEZ. İki-yönlü kilit: (a) foto-PDF → tetiklenir + AI atlanır (AI açık olsa
+    bile); (b) doğrudan GÖRSEL yüklemesi (input_kind=='image') → tetiklenMEZ (foto zaten görseldir, kural
+    yalnız PDF kabına sarılmış görsele uygulanır). (c) dijital-metin PDF'lerde tetiklenmediği tüm bataryayla
+    (çok sayıda geçerli dijital dekont senaryosu) zaten doğrulanır."""
+    import analyze, ai_adjudicator, io
+    from PIL import Image
+    _b = io.BytesIO()
+    Image.new("RGB", (900, 600), "white").save(_b, format="PDF")   # metin katmanı YOK foto-PDF
+    photo_pdf = _b.getvalue()
+    o_ai = ai_adjudicator.is_enabled
+    ai_adjudicator.is_enabled = lambda: True   # sunucu gibi AI AÇIK; hard-stop yine de AI'ı atlamalı
+    try:
+        rep = analyze.analyze_document(photo_pdf, "x.pdf", input_kind="pdf", use_store=False)
+        rep_img = analyze.analyze_document(photo_pdf, "x.jpg", input_kind="image", use_store=False)
+    finally:
+        ai_adjudicator.is_enabled = o_ai
+    codes = {f.get("code") for f in rep.get("findings_tr", [])}
+    codes_img = {f.get("code") for f in rep_img.get("findings_tr", [])}
+    sc = rep.get("score", {}) or {}
+    fired = "PDF_NO_TEXT_LAYER" in codes
+    low = (sc.get("authenticity_score") if sc.get("authenticity_score") is not None else 99) <= 8
+    ai_skipped = rep.get("yapay_zeka_degerlendirmesi") is None
+    no_false = not ({"NOT_A_RECEIPT", "STATEMENT_BALANCE_BREAK"} & codes)
+    ts_none = (rep.get("extracted", {}) or {}).get("text_source") == "none"
+    img_not_fired = "PDF_NO_TEXT_LAYER" not in codes_img
+    ok = fired and low and ai_skipped and no_false and ts_none and img_not_fired
+    return ok, (f"foto-pdf-tetik={fired}, skor≤8={low}, AI-atlandı={ai_skipped}, yanlış-kod-yok={no_false}, "
+                f"text_source=none={ts_none}, görsel-tetiklemez={img_not_fired}")
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1682,6 +1735,7 @@ _CHECKS = [
     (44, "YZ 'gerçek' dese de netleşmiş veride kesin çelişki varsa hüküm 'sahte'ye çekilir (verdict_ham korunur)", _t44_ai_verdict_escalated_on_hard_finding),
     (45, "KATMAN 2: YZ adli şüphe kırmızı bayrağı (celiskiler) → AI_FORENSIC_FLAG, skor ≤45 (bayrak yokken tavan korunur)", _t45_ai_forensic_flag_scored),
     (46, "Koşullu düşünme eskalasyonu: sahte/kesin-temizde açılmaz, yalnız 'durum'da açılır (tutar tetikleyicisi yok)", _t46_thinking_escalation_policy),
+    (47, "PDF metin katmanı yok (foto PDF'e sarılmış) → PDF_NO_TEXT_LAYER, skor ≤8, analiz kesilir (OCR/YZ yok); görsel yüklemesi tetiklemez", _t47_pdf_no_text_layer_hard_stop),
 ]
 
 

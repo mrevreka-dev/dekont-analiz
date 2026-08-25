@@ -14,7 +14,7 @@ from dataclasses import asdict
 import pikepdf
 
 from pdf_structure import analyze_structure_bytes, classify_producer
-from forensics import classify_doc_type, detect
+from forensics import classify_doc_type, detect, Finding
 from extract import extract_text_digital, extract_fields
 import ocr
 from image_forensics import analyze_image, ImageForensics
@@ -387,7 +387,20 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     struct.text_char_count = digital_text_len
     text_source = "digital"
     ocr_candidates = []
-    if digital_text_len < 40:
+    # === PDF DİJİTAL METİN KATMANI KAPISI (kullanıcı kuralı — GENEL, tüm belge tipleri) ===
+    # input_kind=='pdf' iken seçilebilir dijital metin YOKSA (digital_text_len<40), belge
+    # gerçekte bir fotoğraf/ekran görüntüsünün PDF'e SARILMIŞ hâlidir. Gerçek banka belgeleri
+    # (dekont VE hesap özeti — tümü) her zaman dijital metin katmanı taşır. Bir görseli PDF'e
+    # koymak, orijinal dijital belge yerine düzenlenebilir bir görüntü sunulduğunu gösterir →
+    # KESİN sahtecilik. Analizi BURADA KES: OCR/Vision/YZ ve içerik denetimleri ÇALIŞTIRILMAZ
+    # (maliyet + OCR-gürültüsü kaynaklı yanlış-pozitif önlenir). NOT: doğrudan görsel yüklemesi
+    # (input_kind=='image') BU KURALIN DIŞINDADIR — foto zaten görseldir; o yol görsel-adli +
+    # YZ eskalasyonuna gider. Kriter 'XML' değil, DİJİTAL METİN KATMANI'dır (bank PDF'leri XML
+    # taşımak zorunda değildir ama daima seçilebilir metin taşır).
+    _no_text_pdf = (input_kind == "pdf" and digital_text_len < 40)
+    if _no_text_pdf:
+        text_source = "none"          # metin katmanı yok → OCR'a bile girmeden kesilecek
+    elif digital_text_len < 40:
         # HIZ: doğrudan FOTOĞRAF yüklemesinde ve Vision açıkken tesseract'ı TEK-HIZLI geçişe indir
         # (doğru okumayı zaten Vision yapar → çok-varyantlı ~9s tesseract boşa gitmesin). Taranmış
         # PDF'lerde ya da Vision kapalıyken tam (çok-varyantlı) OCR korunur (kalite düşmez).
@@ -414,6 +427,23 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     # 4) Yapısal tahrifat bulguları
     findings = detect(struct, digital_text_len, doc_type)
 
+    # 4.5) PDF METİN KATMANI YOK → KESİN sahtecilik, analiz burada durur (bkz. yukarıdaki kapı).
+    if _no_text_pdf:
+        findings.append(Finding(
+            "PDF_NO_TEXT_LAYER", "critical", "content", 45,
+            tr="Yüklenen PDF, seçilebilir DİJİTAL METİN KATMANI içermiyor — içine bir fotoğraf/ekran "
+               "görüntüsü gömülmüş (image-only). Gerçek banka belgeleri (dekont ve hesap özeti) her zaman "
+               "dijital metin katmanı taşır. Bir görselin PDF'e sarılması, orijinal dijital belge yerine "
+               "düzenlenebilir bir görüntü sunulduğunu gösterir → KESİN sahtecilik riski. Analiz burada "
+               "durduruldu (OCR/yapay zekâ çalıştırılmadı). Lütfen bankanızın uygulamasından ORİJİNAL "
+               "DİJİTAL PDF belgeyi (metin katmanlı) gönderin.",
+            en="The uploaded PDF has NO selectable digital TEXT LAYER — a photo/screenshot is embedded inside "
+               "it (image-only). Genuine bank documents (receipts and account statements) always carry a "
+               "digital text layer. Wrapping an image in a PDF shows an editable picture was presented instead "
+               "of the original digital document → DEFINITIVE forgery risk. Analysis stopped here (no OCR/AI "
+               "was run). Please submit the ORIGINAL digital PDF (with a text layer) from your bank's app.",
+            detail=f"doc_type={doc_type}, digital_text_len={digital_text_len}"))
+
     # 5) Alan çıkarımı (geometrik çıkarım için pdf_bytes de verilir)
     extraction = extract_fields(text_layout, text_read, pdf_bytes if text_source == "digital" else None)
     # OCR: birden çok varyanttan alanları birleştir (kötü fotoğraf dayanıklılığı)
@@ -437,7 +467,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     # (alıcı adı, alıcı IBAN, tutar, işlem tarihi) EN AZ BİRİ okunamazsa ücretli Vision'a git.
     # Dördü de okunduysa (kaliteli foto) ücretli servise hiç gidilmez → maliyet tasarrufu.
     vision_result = None
-    if text_source in ("ocr", "none"):
+    if text_source in ("ocr", "none") and not _no_text_pdf:   # metin katmanı yok PDF → Vision'a girme (kesildi)
         import vision_ocr
         import banks as _bkv
         _crit_required = (extraction.receiver.name, extraction.receiver.iban,
@@ -563,7 +593,8 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 ai = img_forensics.ai_score
 
     # 6.5) İLERİ ANALİZLER: revizyon karşılaştırması, QR, gömülü XML, veri tutarlılığı
-    from forensics import Finding
+    # (Finding modül başında import edildi — burada tekrar local import ETME; aksi hâlde
+    #  fonksiyon kapsamında 'Finding' local sayılıp yukarıdaki erken kullanımda UnboundLocalError olur.)
     import revision as _rev, qrxml as _qx, consistency as _cons
 
     ex = extraction
@@ -751,7 +782,8 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 detail=f"beyan={_cc['beyan']} gerçek={_cc['gercek']}"))
 
     # --- Bu bir dekont değil ---
-    if not is_receipt and not is_statement and extraction.text_source in ("ocr", "none", "vision"):
+    if (not is_receipt and not is_statement and not _no_text_pdf
+            and extraction.text_source in ("ocr", "none", "vision")):
         findings.append(Finding(
             "NOT_A_RECEIPT", "critical", "content", 0,
             tr="BU DOSYA BİR BANKA DEKONTU DEĞİLDİR. Yüklenen görselde dekont içeriği (banka adı, IBAN, tutar, "
@@ -1214,7 +1246,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     ai_adjudication = None
     try:
         import ai_adjudicator as _aj
-        if _aj.is_enabled():
+        if _aj.is_enabled() and not _no_text_pdf:   # metin katmanı yok PDF → YZ'ye gitme (kesin sahte, analiz kesildi)
             _ex_dict = extraction.as_dict()
             _find_dicts = [{"code": f.code, "severity": f.severity, "weight": f.weight, "tr": f.tr}
                            for f in findings]

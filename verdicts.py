@@ -25,6 +25,7 @@ TRUE, FALSE, NEUTRAL = "true", "false", "neutral"
 
 # İçerik oynamasını KESİN kanıtlayan bulgular (revizyon farkı, bakiye kırılması, satır silme)
 _CONTENT_TAMPER = {"REV_CONTENT_CHANGED", "REV_AMOUNT_CHANGED", "REV_FIELD_CHANGED",
+                   "PDF_NO_TEXT_LAYER",
                    "STATEMENT_BALANCE_BREAK", "STATEMENT_ROW_COUNT_MISMATCH", "AMOUNT_MISMATCH",
                    "RECEIPT_NO_DATE_MISMATCH", "PRODUCER_MISMATCH", "BROWSER_RERENDER",
                    "FONT_BROWSER_RERENDER", "FONT_SET_MISMATCH", "INTERNAL_DATE_MISMATCH", "PDFIUM_PRODUCED",

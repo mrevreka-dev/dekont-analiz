@@ -191,6 +191,8 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 20)
     if "AI_FORENSIC_FLAG" in codes:          # YZ adli şüphe kırmızı bayrağı (≥60 güven) → 'güvenilir' OLAMAZ
         score = min(score, 45)               # olasılıksal seviye (deterministik ≤8 değil): yüksek/orta risk
+    if "PDF_NO_TEXT_LAYER" in codes:         # PDF'te dijital metin katmanı yok = foto PDF'e sarılmış (KESİN sahte)
+        score = min(score, 8)
     if "STATEMENT_BALANCE_BREAK" in codes:   # hesap hareketinde bakiye zinciri kırık
         score = min(score, 10)
     if "STATEMENT_ROW_COUNT_MISMATCH" in codes:   # beyan≠gerçek: satır silinmiş

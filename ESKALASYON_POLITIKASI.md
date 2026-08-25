@@ -35,7 +35,10 @@ Aşağıdakilerden **herhangi biri** yeterlidir:
    → "temiz görünüyor ama yapısal doğrulanamıyor". *(En önemli tetikleyici — İş Bankası tipi durum.)*
 2. **AI hükmü "belirsiz"** ya da **düşük-güvenli (%40–70) bir bayrak** kaldırdı → modelin kendisi emin değil.
 3. **Deterministik yumuşak ipucu** var ama kesin eşiğin altında (sınırda tarih farkı, kesinleşmemiş referans şüphesi vb.).
-4. **Dijital olması gereken belgenin fotoğrafı/ekran görüntüsü** (e-Dekont / GİB / e-fatura ibaresi + `image_only`).
+4. **Dijital olması gereken belgenin fotoğrafı/ekran görüntüsü** — YALNIZ **doğrudan görsel yüklemesinde**
+   (`input_kind=='image'`; e-Dekont / GİB / e-fatura ibaresi + `image_only`). **PDF kabına sarılmış, metin
+   katmanı olmayan görsel BU MADDENİN DIŞINDADIR:** o durum düşünmeyi tetiklemez — `PDF_NO_TEXT_LAYER` ile
+   **ANINDA KESİN sahte** işaretlenir ve analiz orada durur (bkz. Z25 — OCR/Vision/YZ hiç çalışmaz).
 5. **Bilinmeyen banka / az-örnekli şablon** (`UNKNOWN_BANK_CODE`).
 6. **Kara-liste yakın-eşleşmesi** (`KNOWN_FAKE`), başka güçlü bulgu yokken.
 
