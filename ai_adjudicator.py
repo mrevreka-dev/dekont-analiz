@@ -408,8 +408,17 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
     # Aksi halde ESKİ davranış: düşünme KAPALI (hızlı/ucuz, dolu JSON).
     if thinking_budget and int(thinking_budget) >= 1024:
         _tb = int(thinking_budget)
-        body = {"model": model, "max_tokens": _tb + 1400,
-                "thinking": {"type": "enabled", "budget_tokens": _tb},
+        # YENİ API (claude-sonnet-5 / opus-4.x): eski 'thinking:{type:enabled,budget_tokens}'
+        # ARTIK DESTEKLENMİYOR (HTTP 400). Adaptive düşünme + output_config.effort kullanılır;
+        # budget_tokens kaldırıldı, derinliği 'effort' (low/medium/high, vars. high) belirler.
+        # max_tokens hâlâ TAVAN — düşünme + JSON çıktısı için bol pay bırak (aksi hâlde model
+        # tüm token'ı düşünmeye harcayıp boş JSON döndürebilir; _recover yine de kurtarır).
+        _eff = str(os.environ.get("DEKONT_THINK_EFFORT", "high")).strip().lower()
+        if _eff not in ("low", "medium", "high"):
+            _eff = "high"
+        body = {"model": model, "max_tokens": _tb + 2000,
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": _eff},
                 "messages": [{"role": "user", "content": content}]}
     else:
         body = {"model": model, "max_tokens": 1400, "thinking": {"type": "disabled"},
