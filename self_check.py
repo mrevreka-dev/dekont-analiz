@@ -34,6 +34,22 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z24", "date": "2026-08-25 07:10", "area": "ÖZ-DENETİM ÖNBELLEĞİ CANLIDA TAZELENMİYORDU: batarya boyunca YZ GLOBAL kapatılır (canlı ağ çağrısı yok)",
+     "bug": "Canlı sunucuda /api/v1/self_check önbelleği bayat kalıyordu (total=45, generated_at eski, "
+            "age_seconds=null). Kök neden: sunucuda API anahtarı olduğundan ai_adjudicator.is_enabled()=True; "
+            "AI'ı mock'lamayan invariant testleri analyze_document çağırınca GERÇEK Anthropic AI çağrısı "
+            "yapıyordu → run() bataryası yavaşlıyor/asılıyor, arka plan yeniden-hesabı (_sc_compute_and_store) "
+            "hiç tamamlanmıyor, önbellek 46 test'e tazelenmiyordu. Yerelde API anahtarı yok (is_enabled=False) "
+            "olduğundan batarya hızlı bitiyor, 46/46 çıkıyordu — sorun yalnız canlıda görünüyordu.",
+     "fix": "run() artık test döngüsünü bir GUARD ile sarar: batarya süresince ai_adjudicator.is_enabled "
+            "GLOBAL olarak lambda:False yapılır; finally'de orijinal geri yüklenir. analyze.py AI bloğunu "
+            "`if is_enabled()` ile geçtiğinden False iken should_adjudicate/adjudicate HİÇ çağrılmaz → canlı "
+            "ağ çağrısı olmaz, batarya deterministik ve hızlı (~2.5s) biter, arka plan hesabı tamamlanıp "
+            "önbellek 46/46'ya tazelenir. should_adjudicate'e DOKUNULMAZ (test #23 onu doğrudan sınar); kendi "
+            "is_enabled=True mock'u yapan testler (ör. #33) kendi save/restore'u ile iç içe doğru çalışır. "
+            "Canlı analiz trafiği ETKİLENMEZ — guard yalnız run() bataryası süresince aktiftir, sonra AI eski "
+            "hâline döner. (Bu bir altyapı düzeltmesidir; ayrı numaralı invariant test EKLENMEDİ — run() çağıran "
+            "bir test özyineleme yaratırdı; davranış canlıda önbellek total=46 + age_seconds dolu ile doğrulanır.)"},
     {"id": "Z23", "date": "2026-08-25 03:30", "area": "KOŞULLU DÜŞÜNME ESKALASYONU: önce düşünmesiz AI incelemesi; yalnız 'gri bölge/durum' dekontlarda ikinci düşünmeli tur (varsayılan KAPALI)", "test": 46,
      "bug": "Web servisi her fotoğrafı düşünmesiz tek AI turuyla değerlendiriyordu; ince desenleri (ör. İş "
             "Bankası dekontundaki '8888/8888' dolgu referansı, dekont<işlem tarihi) yakalayamayıp 'gerçek' "
@@ -1670,20 +1686,43 @@ _CHECKS = [
 
 
 def run() -> dict:
-    """Tüm değişmez testlerini çalıştırır. Döner: özet + her testin sonucu + geliştirme günlüğü."""
+    """Tüm değişmez testlerini çalıştırır. Döner: özet + her testin sonucu + geliştirme günlüğü.
+
+    ÖNEMLİ (canlı sunucu): Test bataryası boyunca YZ değerlendiricisi GLOBAL olarak
+    KAPATILIR. Sebep: sunucuda API anahtarı olduğundan ai_adjudicator.is_enabled True'dur;
+    AI'ı mock'lamayan testler analyze_document çağırınca GERÇEK ağ AI çağrısı yapardı →
+    batarya yavaşlar/asılır, arka plan yeniden-hesabı bitmez, önbellek tazelenmez. Her test
+    zaten kendi ihtiyacı olan AI davranışını yerelde mock'lar (kendi save/restore'u ile),
+    bu global kapatma onların içinde iç içe doğru çalışır. finally ile orijinaller geri yüklenir."""
     # Her testi, onu doğuran geliştirme kaydıyla eşleştir → o iyileştirmenin tarih+saati
     _date_by_test = {it["test"]: it["date"] for it in IMPROVEMENTS if it.get("test")}
     checks = []
     passed = 0
-    for cid, name, fn in _CHECKS:
-        try:
-            ok, detail = fn()
-        except Exception as e:
-            ok, detail = False, f"İSTİSNA: {e} | {traceback.format_exc(limit=1)}"
-        if ok:
-            passed += 1
-        checks.append({"id": cid, "name": name, "ok": bool(ok), "detail": detail,
-                       "date": _date_by_test.get(cid, "")})
+    # --- GLOBAL AI-KAPATMA GUARD'I (yalnız batarya süresince) ---
+    # Yalnız is_enabled kapatılır: analyze.py, AI bloğunu `if is_enabled()` ile geçer;
+    # False iken should_adjudicate/adjudicate HİÇ çağrılmaz → canlı ağ çağrısı olmaz.
+    # should_adjudicate'e DOKUNULMAZ (test #23 onu doğrudan sınar). Kendi is_enabled=True
+    # mock'u yapan testler (ör. #33) kendi save/restore'u ile iç içe doğru çalışır.
+    _ai_saved = None
+    try:
+        import ai_adjudicator as _aj_sc
+        _ai_saved = _aj_sc.is_enabled
+        _aj_sc.is_enabled = lambda: False
+    except Exception:
+        _aj_sc = None
+    try:
+        for cid, name, fn in _CHECKS:
+            try:
+                ok, detail = fn()
+            except Exception as e:
+                ok, detail = False, f"İSTİSNA: {e} | {traceback.format_exc(limit=1)}"
+            if ok:
+                passed += 1
+            checks.append({"id": cid, "name": name, "ok": bool(ok), "detail": detail,
+                           "date": _date_by_test.get(cid, "")})
+    finally:
+        if _aj_sc is not None and _ai_saved is not None:
+            _aj_sc.is_enabled = _ai_saved
     return {
         "all_ok": passed == len(_CHECKS),
         "passed": passed,
