@@ -200,11 +200,13 @@ _SCHEMA_HINT = (
     '  "gorsel_tahrifat": [ {"alan":"tutar (yazıyla)","aciklama":"yazıyla yazılan tutar belgenin '
     'genel yazı tipinden farklı bir fontta/kalınlıkta — sonradan yapıştırılmış görünüyor","guven":85} ], '
     '// GÖRÜNTÜDE font/kalınlık/hizalama uyuşmazlığı gördüğün alanlar; yoksa boş bırak\n'
-    '  "celiskiler": [ {"alan":"Referans Numarası","aciklama":"referans \'8888/8888\' tekrarlı DOLGU '
-    'değeri gibi — gerçek işlemde olmaz","guven":80} ],  // ADLİ ŞÜPHE (görsel-tahrifat DIŞINDA): '
-    'numarada tekrarlı dolgu, iç tarih/saat mantığı (dekont tarihi < işlem zamanı vb.), banka kodu/ad '
-    'uyuşmazlığı, ELEKTRONİK belgenin fotoğrafı olması, e-belgede imza/karalama, tutar aritmetiği. '
-    'Bulduğun HER kırmızı bayrağı yaz; yoksa []\n'
+    '  "celiskiler": [ {"alan":"İşlem Tarihi","aciklama":"dekont oluşturma tarihi işlem zamanından ÖNCE '
+    '— mantıksal çelişki","guven":80} ],  // ADLİ ŞÜPHE (görsel-tahrifat DIŞINDA): iç tarih/saat mantığı '
+    '(dekont tarihi < işlem zamanı vb.), banka kodu/ad uyuşmazlığı, ELEKTRONİK belgenin fotoğrafı olması, '
+    'e-belgede imza/karalama, tutar aritmetiği, numarada GERÇEKTEN uydurma dolgu. '
+    'ÖNEMLİ İSTİSNA — banka SABİT ŞABLON alanları DOLGU DEĞİLDİR, bayrak KALDIRMA: örn. İş Bankası '
+    '"Sorgu No" DAİMA ".../447/8888/8888" biçiminde sabit şablon taşır; bu NORMALDİR (gerçek benzersiz '
+    'kimlik ref_no\'dur). Bulduğun HER GERÇEK kırmızı bayrağı yaz; yoksa []\n'
     '  "islem_kanali": {"kanal":"EFT | FAST | HAVALE | belirsiz","aninda_gecer":true,'
     '"kanit":"ücret kalemi/başlık/IBAN kodu kanıtı"},  // İşlem hangi kanaldan gitti? EFT=anında GEÇMEZ '
     '(aninda_gecer=false, RİSKLİ); FAST/HAVALE=anında geçer (true). Ücret kalemine bak: "GEÇ EFT/EFT '
@@ -465,6 +467,14 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
         print(f"[adjudicator] model={model} verdict={_san.get('verdict')} conf={_san.get('confidence')} "
               f"gorsel_tahrifat={len(_gt)} corrected={list((_san.get('corrected_fields') or {}).keys())} "
               f"reasoning={_rz!r}", flush=True)
+        # TANI: YZ'nin kaldırdığı 'celiskiler' (adli şüphe kırmızı bayrakları) — alan + güven + kısa açıklama.
+        # Eskalasyonu tetikleyen düşük-güvenli (%40-70) bayrağın TAM olarak hangi alan olduğunu görmek için
+        # (ör. 'Referans Numarası %55' → 8888/8888 gibi). gorsel_tahrifat içeriğini de birlikte döker.
+        _cl = _san.get("celiskiler") or []
+        if _cl or _gt:
+            _fmt = lambda L: [f"{(d.get('alan') or '?')}~g{d.get('guven')}:{(d.get('aciklama') or '')[:70]}"
+                              for d in L if isinstance(d, dict)]
+            print(f"[adjudicator] BAYRAKLAR celiskiler={_fmt(_cl)} gorsel_tahrifat={_fmt(_gt)}", flush=True)
     except Exception:
         pass
     return _san
