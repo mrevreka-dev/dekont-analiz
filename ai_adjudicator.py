@@ -64,6 +64,75 @@ def is_enabled() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
+def is_thinking_enabled() -> bool:
+    """KOŞULLU DÜŞÜNME özelliği açık mı? Varsayılan KAPALI — mevcut davranış hiç değişmez.
+    Railway'de DEKONT_THINK_ENABLED=1 yapılınca, ESKALASYON_POLITIKASI.md kurallarına göre yalnız
+    'gri bölge/durum' dekontlarında ikinci bir düşünmeli tur çalışır."""
+    return str(os.environ.get("DEKONT_THINK_ENABLED", "")).strip().lower() in ("1", "true", "yes", "on")
+
+
+# Zaten 'sahte' saydığımız (düşünmeye gerek olmayan) kesin/deterministik tahrifat kodları.
+_HARD_FAKE_CODES = {
+    "RECEIVER_BANK_MISMATCH", "SENDER_BANK_MISMATCH", "RAIL_SAMEBANK_MISMATCH", "ISSUER_IBAN_MISMATCH",
+    "AMOUNT_MISMATCH", "SAMEBANK_RAIL_CONTRADICTION", "INTERBANK_HAVALE_CONTRADICTION",
+    "REV_AMOUNT_CHANGED", "REV_CONTENT_CHANGED", "ID_FIELD_MISMATCH", "ID_CHECKSUM_INVALID",
+    "PDFIUM_PRODUCED", "NOT_A_RECEIPT",
+}
+
+
+def should_escalate_to_thinking(ai_result, findings, extraction, input_kind="pdf", text_source="digital"):
+    """ESKALASYON POLİTİKASI (bkz. ESKALASYON_POLITIKASI.md) — TÜM BANKALAR, banka ayrımı YOK.
+
+    Akış: Her dekont ÖNCE düşünmeden AI incelemesine girer (bu fonksiyon O TURDAN SONRA çağrılır).
+    Bulgular/AI 'sahte' diyorsa ya da belge kesin temizse → düşünme AÇILMAZ (zaten karar verildi).
+    Yalnız ortada bir 'DURUM' (ne kesin sahte ne kesin temiz; şüphe var ama kesinleşmedi) varsa
+    → düşünmeyi tetikle. TUTAR tetikleyicisi YOKTUR.
+    Döner: (tetikle_mi: bool, sebep: str)."""
+    import re as _re
+    ai = ai_result or {}
+    verdict = str(ai.get("verdict") or "").lower()
+    codes = set()
+    for f in (findings or []):
+        c = getattr(f, "code", None) if not isinstance(f, dict) else f.get("code")
+        if c:
+            codes.add(c)
+
+    # 1) ZATEN SAHTE → düşünme yok (iş orada biter)
+    if verdict == "sahte":
+        return False, "zaten sahte (AI hükmü)"
+    if codes & _HARD_FAKE_CODES:
+        return False, "zaten kesin/deterministik sahte bulgu var"
+
+    is_image = (input_kind == "image") or (text_source in ("ocr", "vision"))
+
+    # 2) 'DURUM' TETİKLEYİCİLERİ (gri bölge / kararsızlık / şüphe var ama kesinleşmemiş)
+    if verdict == "belirsiz":
+        return True, "AI hükmü 'belirsiz'"
+    for _lst in ((ai.get("celiskiler") or []), (ai.get("gorsel_tahrifat") or [])):
+        for x in _lst:
+            try:
+                g = int(x.get("guven") or 0)
+            except Exception:
+                g = 0
+            if 40 <= g <= 70:
+                return True, f"düşük-güvenli bayrak (%{g})"
+    if "UNKNOWN_BANK_CODE" in codes:
+        return True, "bilinmeyen banka kodu/şablon"
+    if "KNOWN_FAKE" in codes:
+        return True, "kara-liste yakın eşleşmesi"
+    _raw = (extraction or {}).get("raw_text") or ""
+    if is_image and _re.search(r"e-?dekont|g[iİ]b|e-?fatura|elektronik olarak", _raw, _re.I):
+        return True, "dijital olması gereken belgenin fotoğrafı/ekran görüntüsü"
+    # Fotoğraf image-tavanında ama puan düşüren HİÇBİR bulgu yok → 'temiz görünüyor ama doğrulanamıyor'
+    _strong = [f for f in (findings or [])
+               if (getattr(f, "weight", 0) if not isinstance(f, dict) else f.get("weight", 0)) and
+                  (getattr(f, "weight", 0) if not isinstance(f, dict) else f.get("weight", 0)) > 0]
+    if is_image and not _strong:
+        return True, "fotoğraf: güçlü bulgu yok + yapısal doğrulama yok (temiz görünüyor ama doğrulanamıyor)"
+
+    return False, "durum yok (kesin temiz ya da düşünmeye değmez)"
+
+
 def _get(d: dict, dotted: str):
     cur = d
     for part in dotted.split("."):
@@ -295,7 +364,8 @@ def _build_prompt(extraction: dict, findings: list, bank_ctx: str, input_kind: s
 
 
 def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=None,
-               input_kind: str = "pdf", text_source: str = "digital", timeout: float = 45.0) -> dict | None:
+               input_kind: str = "pdf", text_source: str = "digital", timeout: float = 45.0,
+               thinking_budget: int = 0) -> dict | None:
     """YZ değerlendiricisini çalıştırır. Dönen dict rapora EK alan olarak konur; hata/kapalıysa None."""
     if not is_enabled():
         return None
@@ -333,8 +403,17 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
     # ÜRETMEDEN kesiliyordu (stop_reason=max_tokens, content=['thinking']) → boş yanıt + YÜKSEK MALİYET
     # (her çağrı 4096 düşünme token'ı). Düşünmeyi KAPATIYORUZ: model doğrudan JSON üretir → hızlı, ucuz,
     # dolu yanıt. 2048 token forensic JSON için yeterli.
-    body = {"model": model, "max_tokens": 1400, "thinking": {"type": "disabled"},
-            "messages": [{"role": "user", "content": content}]}
+    # KOŞULLU DÜŞÜNME (ESKALASYON_POLITIKASI.md): thinking_budget>0 ise yalnız o 'gri bölge' turunda
+    # düşünme AÇILIR (düşünme token'ları max_tokens'a dahildir → tavanı bütçe+çıktı olacak şekilde büyüt).
+    # Aksi halde ESKİ davranış: düşünme KAPALI (hızlı/ucuz, dolu JSON).
+    if thinking_budget and int(thinking_budget) >= 1024:
+        _tb = int(thinking_budget)
+        body = {"model": model, "max_tokens": _tb + 1400,
+                "thinking": {"type": "enabled", "budget_tokens": _tb},
+                "messages": [{"role": "user", "content": content}]}
+    else:
+        body = {"model": model, "max_tokens": 1400, "thinking": {"type": "disabled"},
+                "messages": [{"role": "user", "content": content}]}
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(API_URL, data=data, method="POST")
     req.add_header("x-api-key", api_key)

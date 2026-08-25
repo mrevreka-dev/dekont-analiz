@@ -1229,6 +1229,30 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                     text_source=extraction.text_source)
                 if ai_adjudication is not None:
                     ai_adjudication["tetik_nedenleri"] = _reasons
+                    # KOŞULLU DÜŞÜNME (ESKALASYON_POLITIKASI.md) — TÜM BANKALAR: önce (yukarıda) DÜŞÜNMESİZ
+                    # AI incelemesi yapıldı. Bulgular/AI 'sahte' değilse ve ortada bir 'DURUM' (gri bölge)
+                    # varsa, TEK bir düşünmeli tur daha atılır ve sonucu esas alınır. VARSAYILAN KAPALI
+                    # (DEKONT_THINK_ENABLED=1 ile açılır) → mevcut davranış değişmez.
+                    try:
+                        if _aj.is_thinking_enabled():
+                            _go2, _why2 = _aj.should_escalate_to_thinking(
+                                ai_adjudication, findings, _ex_dict, input_kind, extraction.text_source)
+                            print(f"[adjudicator] düşünme eskalasyonu={_go2} sebep={_why2}", flush=True)
+                            if _go2:
+                                import os as _os_th
+                                _tb = int(_os_th.environ.get("DEKONT_THINK_BUDGET", "3000") or 3000)
+                                _ai2 = _aj.adjudicate(
+                                    _ex_dict, _find_dicts, _auth_aj.bank_key(ex.bank),
+                                    pil_image=locals().get("pil"), input_kind=input_kind,
+                                    text_source=extraction.text_source, timeout=90.0, thinking_budget=_tb)
+                                if _ai2 is not None:
+                                    _ai2["tetik_nedenleri"] = _reasons
+                                    _ai2["dusunme"] = {"acildi": True, "sebep": _why2, "butce": _tb}
+                                    ai_adjudication = _ai2
+                                else:
+                                    ai_adjudication["dusunme"] = {"acildi": False, "sebep": _why2 + " (düşünme turu boş döndü)"}
+                    except Exception as _et:
+                        print(f"[adjudicator] düşünme eskalasyon hatası: {type(_et).__name__}: {_et}", flush=True)
                     # ÖĞREN: YZ'nin doğruladığı banka-bazlı etiket ipuçlarını kalıcı store'a yaz
                     # → sonraki dekontlarda otomatik uygulanır (kod değişmeden 'öğren-uygula').
                     if use_store:

@@ -34,6 +34,17 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z23", "date": "2026-08-25 03:30", "area": "KOŞULLU DÜŞÜNME ESKALASYONU: önce düşünmesiz AI incelemesi; yalnız 'gri bölge/durum' dekontlarda ikinci düşünmeli tur (varsayılan KAPALI)", "test": 46,
+     "bug": "Web servisi her fotoğrafı düşünmesiz tek AI turuyla değerlendiriyordu; ince desenleri (ör. İş "
+            "Bankası dekontundaki '8888/8888' dolgu referansı, dekont<işlem tarihi) yakalayamayıp 'gerçek' "
+            "diyordu. Düşünmeyi her dekontta açmak ise ~3-5× maliyet demek.",
+     "fix": "ESKALASYON_POLITIKASI.md (tüm bankalar): Her dekont ÖNCE düşünmeden AI incelemesine girer. Bulgular/"
+            "AI 'sahte' diyorsa ya da belge kesin temizse düşünme AÇILMAZ. Yalnız bir 'DURUM' (AI belirsiz / "
+            "düşük-güvenli %40-70 bayrak / fotoğraf image-tavanında güçlü bulgu yok / dijital-olmalı belgenin "
+            "fotoğrafı / bilinmeyen banka / kara-liste yakın-eşleşme) varsa TEK düşünmeli tur atılır ve esas "
+            "alınır. TUTAR tetikleyicisi YOK. ai_adjudicator.should_escalate_to_thinking + adjudicate(thinking_"
+            "budget) + analyze koşullu ikinci tur. Varsayılan KAPALI (DEKONT_THINK_ENABLED=1). Test #46 karar "
+            "mantığını kilitler; canlı düşünme davranışı bayrak açılınca doğrulanır."},
     {"id": "Z22", "date": "2026-08-24 15:00", "area": "KATMAN 2: YZ 'adli şüpheci' tarama — her fotoğrafı sahtecilik gözüyle tarar; kırmızı bayraklar skorlanır; AI alanı sadeleşti", "test": 45,
      "bug": "Motor yalnızca deterministik kuralları (banka-adı↔IBAN, aynı-banka FAST) ve YZ'nin GÖRSEL "
             "tahrifatını yakalıyordu; 'referansta 8888/8888 dolgu', 'dekont tarihi işlemden önce', 'e-Dekont'un "
@@ -1570,6 +1581,44 @@ def _t45_ai_forensic_flag_scored():
     return True, f"AI_FORENSIC_FLAG → skor {res.authenticity_score} (≤45); bayrak yokken tavan {res2.authenticity_score} korunur."
 
 
+def _t46_thinking_escalation_policy():
+    """ESKALASYON POLİTİKASI (bkz. ESKALASYON_POLITIKASI.md): önce DÜŞÜNMESİZ AI; 'sahte' ya da kesin temizde
+    düşünme AÇILMAZ; yalnız 'DURUM' (AI belirsiz / düşük-güvenli bayrak / fotoğraf tavanda güçlü bulgu yok /
+    e-belge fotoğrafı / bilinmeyen banka / kara-liste) varsa TETİKLENİR. Tutar tetikleyicisi YOK."""
+    import ai_adjudicator as AJ
+    from forensics import Finding
+    # (1) zaten sahte → tetiklenmez
+    go, _ = AJ.should_escalate_to_thinking({"verdict": "sahte"}, [], {}, "image", "ocr")
+    if go:
+        return False, "sahte iken düşünme AÇILDI (açılmamalı)"
+    # (2) deterministik kesin bulgu → tetiklenmez
+    go, _ = AJ.should_escalate_to_thinking({"verdict": "gerçek"},
+            [Finding("RECEIVER_BANK_MISMATCH", "critical", "content", 46, tr="x", en="x")], {}, "image", "ocr")
+    if go:
+        return False, "kesin bulgu varken düşünme AÇILDI"
+    # (3) fotoğraf + güçlü bulgu yok + AI gerçek → TETİKLENİR ('İş Bankası' durumu)
+    go, why = AJ.should_escalate_to_thinking({"verdict": "gerçek"},
+            [Finding("IMAGE_ONLY_DOC", "info", "content", 0, tr="x", en="x"),
+             Finding("RAIL_IS_FAST", "info", "content", 0, tr="x", en="x")],
+            {"raw_text": "x"}, "image", "ocr")
+    if not go:
+        return False, f"fotoğraf-tavan durumunda düşünme AÇILMADI ({why})"
+    # (4) AI belirsiz → TETİKLENİR
+    go, _ = AJ.should_escalate_to_thinking({"verdict": "belirsiz"}, [], {}, "image", "ocr")
+    if not go:
+        return False, "belirsizde düşünme AÇILMADI"
+    # (5) temiz dijital PDF + bulgu yok + gerçek → tetiklenMEZ (yanlış-pozitif olmasın)
+    go, _ = AJ.should_escalate_to_thinking({"verdict": "gerçek"}, [], {}, "pdf", "digital")
+    if go:
+        return False, "temiz dijital PDF'te gereksiz düşünme (FP)"
+    # (6) düşük-güvenli (%55) bayrak → TETİKLENİR
+    go, _ = AJ.should_escalate_to_thinking(
+            {"verdict": "gerçek", "celiskiler": [{"alan": "ref", "aciklama": "x", "guven": 55}]}, [], {}, "pdf", "digital")
+    if not go:
+        return False, "düşük-güvenli bayrakta düşünme AÇILMADI"
+    return True, "Eskalasyon: sahte/kesin-temizde açılmaz; belirsiz/düşük-güven/foto-tavan'da açılır; tutar tetikleyicisi yok."
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1616,6 +1665,7 @@ _CHECKS = [
     (43, "AI boş bank_stated'i görüntüden doldurur (dolu olanı ezmez) → çelişki kuralı fotoğrafta çalışır", _t43_ai_fills_empty_bank_stated),
     (44, "YZ 'gerçek' dese de netleşmiş veride kesin çelişki varsa hüküm 'sahte'ye çekilir (verdict_ham korunur)", _t44_ai_verdict_escalated_on_hard_finding),
     (45, "KATMAN 2: YZ adli şüphe kırmızı bayrağı (celiskiler) → AI_FORENSIC_FLAG, skor ≤45 (bayrak yokken tavan korunur)", _t45_ai_forensic_flag_scored),
+    (46, "Koşullu düşünme eskalasyonu: sahte/kesin-temizde açılmaz, yalnız 'durum'da açılır (tutar tetikleyicisi yok)", _t46_thinking_escalation_policy),
 ]
 
 
