@@ -110,11 +110,13 @@
     </div>
     {% endif %}
 
-    {% if ai.corrected_fields %}
-    <div style="margin:8px 0">
-      <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">Yeniden okunan / düzeltilen alanlar</div>
+    {# NOT: Yeniden okunan/düzeltilen alanlar burada GÖSTERİLMEZ — o veriler 'Çıkarılan Bilgiler' bölümünde
+       (AI ile güncellenmiş hâlleriyle) zaten yer alır. Bu alan yalnızca ADLİ ŞÜPHECİ DEĞERLENDİRMEdir. #}
+    {% if ai.celiskiler %}
+    <div style="margin:8px 0;padding:10px 12px;background:color-mix(in srgb, var(--warning) 12%, transparent);border:1px solid var(--warning);border-radius:8px">
+      <div style="font-size:12px;font-weight:700;color:var(--warning);text-transform:uppercase;letter-spacing:.04em">⚑ Adli şüphe — kırmızı bayraklar</div>
       <ul style="margin:6px 0 0;padding-left:18px;line-height:1.6">
-        {% for k, v in ai.corrected_fields.items() %}<li><code>{{ k }}</code> → <strong>{{ v }}</strong></li>{% endfor %}
+        {% for c in ai.celiskiler %}<li><strong>{{ c.alan }}</strong>: {{ c.aciklama }}{% if c.guven %} <span class="badge-soft" style="opacity:.8">güven %{{ c.guven }}</span>{% endif %}</li>{% endfor %}
       </ul>
     </div>
     {% endif %}
