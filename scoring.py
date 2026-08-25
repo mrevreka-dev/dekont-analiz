@@ -191,6 +191,10 @@ def compute_score(findings: list[Finding], doc_type: str,
         score = min(score, 20)
     if "AI_FORENSIC_FLAG" in codes:          # YZ adli şüphe kırmızı bayrağı (≥60 güven) → 'güvenilir' OLAMAZ
         score = min(score, 45)               # olasılıksal seviye (deterministik ≤8 değil): yüksek/orta risk
+    if "AI_DEEP_DOUBT" in codes:             # DERİN (düşünmeli) tur hükmü 'şüpheli' → 'düşük risk/güvenilir' OLAMAZ
+        score = min(score, 55)               # 'Orta Risk / Şüpheli' bandı (medium): derin-AI şüphesini dürüstçe yansıtır
+    if "AI_DEEP_FAKE" in codes:              # DERİN (düşünmeli) tur hükmü 'sahte' → güçlü sinyal
+        score = min(score, 20)               # kritik: derin-AI 'sahte' dedi (tek forensic bayraktan daha güçlü)
     if "PDF_NO_TEXT_LAYER" in codes:         # PDF'te dijital metin katmanı yok = foto PDF'e sarılmış (KESİN sahte)
         score = min(score, 8)
     if "STATEMENT_BALANCE_BREAK" in codes:   # hesap hareketinde bakiye zinciri kırık

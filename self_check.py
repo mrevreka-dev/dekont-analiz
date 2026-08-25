@@ -34,6 +34,26 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z26", "date": "2026-08-25 09:30", "area": "DERİN (DÜŞÜNMELİ) TUR OTORİTESİ: düşünme 'şüpheli/sahte' dediğinde skora yansır + düşünme HTTP 400 (adaptive) + 8888 prompt düzeltmesi + tanı log", "test": 48,
+     "bug": "(1) Düşünme modu canlıda HİÇ çalışmıyordu: eskalasyon doğru tetikleniyor ama adjudicate ikinci turu "
+            "eski 'thinking:{type:enabled,budget_tokens}' formatıyla HTTP 400 alıyordu (claude-sonnet-5 bunu "
+            "desteklemiyor) → sessizce sığ sonuca düşüyordu. (2) 8888/8888: prompt'un celiskiler ÖRNEĞİ birebir "
+            "'referans 8888/8888 tekrarlı DOLGU' diyordu → AI her İş Bankası dekontunda buna kırmızı bayrak "
+            "kaldırıyordu; oysa 8888/8888 STANDART İş Bankası Sorgu No şablonudur (farklı gönderen/tutarlı 4+ "
+            "dekontta birebir aynı — teyitli). (3) Düşünme turu 'şüpheli' dönse bile bayraklar <60 güvende "
+            "kalınca AI_FORENSIC_FLAG üretilmiyor, skor 72/düşük kalıyordu → derin-AI 'şüpheli' derken rapor "
+            "'düşük risk' diyordu (çelişki). (4) Eskalasyonu tetikleyen bayrağın hangi alan olduğu log'da yoktu.",
+     "fix": "(1) adjudicate: düşünme çağrısı YENİ API — thinking:{type:'adaptive'} + output_config:{effort} "
+            "(DEKONT_THINK_EFFORT, vars. high; budget_tokens kaldırıldı, max_tokens tavan). (2) prompt: yanlış "
+            "8888 örneği kaldırıldı, yerine nötr örnek + açık İSTİSNA: 'İş Bankası Sorgu No daima /447/8888/8888 "
+            "sabit şablonu taşır, NORMALDİR, bayrak kaldırma; gerçek kimlik ref_no'dur'. (3) analyze (a3): "
+            "dusunme.acildi=True VE hüküm 'şüpheli'→AI_DEEP_DOUBT (skor ≤55, 'Orta Risk/Şüpheli'), 'sahte'→"
+            "AI_DEEP_FAKE (skor ≤20, kritik, _CONTENT_TAMPER+_FAKE_CODES). Bu kodlar uzlaştırma kümesine eklendi "
+            "→ anti-halüsinasyon kapısı hükmü artık 'belirsiz'e çekmez (derin tur otoriterdir). Verdict ENUM'una "
+            "bağlı → yanlış-pozitif yok; yalnız düşünme GERÇEKTEN açıldığında. (4) tanı log: '[adjudicator] "
+            "BAYRAKLAR celiskiler=[alan~gGÜVEN:açıklama] gorsel_tahrifat=[...]'. Test #48 iki-yönlü kilitler.",
+     "not": "Canlı log doğruladı: 8888 bayrağı KAYBOLDU; düşünme turu HTTP 400 olmadan çalıştı ve hükmü "
+            "gerçek(82)→şüpheli(58)'e çekti (derin tur daha skeptik). Kullanıcı kuralı: 8888 standart, sahte değil."},
     {"id": "Z25", "date": "2026-08-25 08:30", "area": "KULLANICI KURALI (GENELLEŞTİRİLDİ): PDF'te dijital metin katmanı YOKSA (foto/ekran görüntüsü PDF'e sarılmış) → KESİN sahte + analiz ANINDA kesilir", "test": 47,
      "bug": "SINGLE_PHOTO_PDF kuralı yalnız DEKONTLAR için (is_receipt) çalışıyordu; hesap özeti/başka belge "
             "türleri için image-only PDF yakalanmıyordu. Ayrıca kural analizi KESMİYORDU: image-only PDF yine "
@@ -1688,6 +1708,76 @@ def _t47_pdf_no_text_layer_hard_stop():
                 f"text_source=none={ts_none}, görsel-tetiklemez={img_not_fired}")
 
 
+def _t48_deep_thinking_verdict_authoritative():
+    """DERİN (DÜŞÜNMELİ) TUR OTORİTESİ (kullanıcı kuralı): Düşünme turu gri-bölgede AÇILDIYSA ve hükmü
+    'şüpheli' ise, tek tek bayraklar <60 güvende (AI_FORENSIC_FLAG yok) kalsa BİLE bu skora YANSIR
+    (AI_DEEP_DOUBT → skor ≤55 = 'Orta Risk / Şüpheli') ve YZ hükmü 'belirsiz'e ÇEKİLMEZ. İki-yönlü:
+    (a) düşünme AÇIK (dusunme.acildi=True) → AI_DEEP_DOUBT + skor≤55 + hüküm 'şüpheli' KALIR;
+    (b) düşünme KAPALI (sığ tek tur) → AI_DEEP_DOUBT YOK ve şüpheli, somut kanıt yokken 'belirsiz'e çekilir."""
+    import analyze, ai_adjudicator, banks, ocr, vision_ocr
+    from PIL import Image
+    def vi(body):
+        for kk in range(100):
+            c = "TR%02d%s" % (kk, body)
+            if banks.iban_valid(c) is True:
+                return c
+    isb = vi("0006400000000123456789")      # İş Bankası 00064
+    vak = vi("0001500000000987654321")      # VakıfBank 00015
+    ocr_text = "TÜRKİYE İŞ BANKASI\nFAST Giden\nSorgu No 21.08.2026/447/8888/8888\n"
+    adj = {"verdict": "şüpheli", "confidence": 58,
+           "reasoning_tr": "IBAN'lar geçerli, banka kodları uyumlu; ancak e-Dekont'un fotoğrafı + imza şüphesi.",
+           "corrected_fields": {"sender.iban": isb, "receiver.iban": vak,
+                                "sender.name": "İSMAİL VEDAT GÜLER", "receiver.name": "Cebrail Başıgüzel",
+                                "amount.value": 75000.0},
+           "celiskiler": [{"alan": "İmza", "aciklama": "e-Dekont üzerinde el yazısı imza", "guven": 55}],
+           "gorsel_tahrifat": []}
+    o_ai = (ai_adjudicator.is_enabled, ai_adjudicator.should_adjudicate, ai_adjudicator.adjudicate,
+            ai_adjudicator.is_thinking_enabled, ai_adjudicator.should_escalate_to_thinking)
+    o_v = (vision_ocr.is_configured, vision_ocr.extract_from_image, ocr.ocr_pdf_candidates,
+           ocr.ocr_available, ocr.render_page_to_image)
+    def _setup():
+        ai_adjudicator.is_enabled = lambda: True
+        ai_adjudicator.should_adjudicate = lambda *a, **k: (True, ["test"])
+        ai_adjudicator.adjudicate = lambda *a, **k: dict(adj)
+        vision_ocr.is_configured = lambda: True
+        vision_ocr.extract_from_image = lambda *a, **k: {
+            "bank": "Türkiye İş Bankası", "sender_iban": isb, "receiver_iban": vak,
+            "sender_name": "İSMAİL VEDAT GÜLER", "receiver_name": "Cebrail Başıgüzel"}
+        ocr.ocr_available = lambda: True
+        ocr.ocr_pdf_candidates = lambda *a, **k: [ocr_text]
+        ocr.render_page_to_image = lambda *a, **k: Image.new("RGB", (600, 400), "white")
+    try:
+        # (a) DÜŞÜNME AÇIK
+        _setup()
+        ai_adjudicator.is_thinking_enabled = lambda: True
+        ai_adjudicator.should_escalate_to_thinking = lambda *a, **k: (True, "düşük-güvenli bayrak (%55)")
+        rep_on = analyze.analyze_document(_blank_pdf(), "x.png", input_kind="image", use_store=False)
+        # (b) DÜŞÜNME KAPALI
+        _setup()
+        ai_adjudicator.is_thinking_enabled = lambda: False
+        ai_adjudicator.should_escalate_to_thinking = lambda *a, **k: (False, "kapalı")
+        rep_off = analyze.analyze_document(_blank_pdf(), "x.png", input_kind="image", use_store=False)
+    finally:
+        (ai_adjudicator.is_enabled, ai_adjudicator.should_adjudicate, ai_adjudicator.adjudicate,
+         ai_adjudicator.is_thinking_enabled, ai_adjudicator.should_escalate_to_thinking) = o_ai
+        (vision_ocr.is_configured, vision_ocr.extract_from_image, ocr.ocr_pdf_candidates,
+         ocr.ocr_available, ocr.render_page_to_image) = o_v
+    codes_on = {f.get("code") for f in rep_on.get("findings_tr", [])}
+    sc_on = (rep_on.get("score", {}) or {}).get("authenticity_score")
+    aj_on = rep_on.get("yapay_zeka_degerlendirmesi") or {}
+    deep_fired = "AI_DEEP_DOUBT" in codes_on
+    scored = (sc_on is not None and sc_on <= 55)          # 'düşük risk' (≥70) OLAMAZ
+    verdict_kept = (str(aj_on.get("verdict") or "").lower() in ("şüpheli", "supheli"))
+    # (b) düşünme kapalı: AI_DEEP_DOUBT yok + hüküm belirsize çekildi
+    codes_off = {f.get("code") for f in rep_off.get("findings_tr", [])}
+    aj_off = rep_off.get("yapay_zeka_degerlendirmesi") or {}
+    off_no_deep = "AI_DEEP_DOUBT" not in codes_off
+    off_belirsiz = (str(aj_off.get("verdict") or "").lower() == "belirsiz")
+    ok = deep_fired and scored and verdict_kept and off_no_deep and off_belirsiz
+    return ok, (f"[düşünme AÇIK] AI_DEEP_DOUBT={deep_fired}, skor={sc_on}(≤55={scored}), hüküm-şüpheli-kaldı={verdict_kept} | "
+                f"[düşünme KAPALI] deep-yok={off_no_deep}, belirsiz={off_belirsiz}")
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1736,6 +1826,7 @@ _CHECKS = [
     (45, "KATMAN 2: YZ adli şüphe kırmızı bayrağı (celiskiler) → AI_FORENSIC_FLAG, skor ≤45 (bayrak yokken tavan korunur)", _t45_ai_forensic_flag_scored),
     (46, "Koşullu düşünme eskalasyonu: sahte/kesin-temizde açılmaz, yalnız 'durum'da açılır (tutar tetikleyicisi yok)", _t46_thinking_escalation_policy),
     (47, "PDF metin katmanı yok (foto PDF'e sarılmış) → PDF_NO_TEXT_LAYER, skor ≤8, analiz kesilir (OCR/YZ yok); görsel yüklemesi tetiklemez", _t47_pdf_no_text_layer_hard_stop),
+    (48, "Derin (düşünmeli) tur 'şüpheli' → skora yansır (AI_DEEP_DOUBT, ≤55/Orta-Şüpheli) + hüküm korunur; düşünme kapalıyken sığ şüpheli belirsize çekilir", _t48_deep_thinking_verdict_authoritative),
 ]
 
 

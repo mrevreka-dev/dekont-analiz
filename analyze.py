@@ -1354,6 +1354,30 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                     f"{_maxg}%). {_bayrak}"),
                 detail=f"ai_celiskiler adet={len(_cl)} max_guven={_maxg}"))
 
+    # (a3) DERİN (DÜŞÜNMELİ) TUR OTORİTESİ — kullanıcı kuralı: Düşünme turu gri-bölgede AÇILDIYSA
+    #      (dusunme.acildi=True) ve NİHAİ hükmü 'şüpheli'/'sahte' ise, bu PAHALI derin analizin kasıtlı
+    #      skeptik sonucudur → tek tek bayraklar <60 güvende kalıp AI_FORENSIC_FLAG üretmese BİLE skora
+    #      YANSIMALIDIR. Aksi halde derin-AI 'şüpheli' derken rapor 'düşük risk/güvenilir' der (çelişki).
+    #      Verdict ENUM'una bağlıdır (serbest metne değil) → yanlış-pozitif riski yok; yalnız düşünme
+    #      GERÇEKTEN açıldığında devreye girer (sığ tek-tur 'şüpheli'si bunu tetiklemez — o hâlâ 7.96
+    #      anti-halüsinasyon kapısına tabidir).
+    if ai_adjudication:
+        _dus = ai_adjudication.get("dusunme") or {}
+        _dv = str(ai_adjudication.get("verdict") or "").lower()
+        if _dus.get("acildi") and _dv in ("şüpheli", "supheli", "sahte"):
+            _drz = str(ai_adjudication.get("reasoning_tr") or "")[:400]
+            if _dv == "sahte":
+                _dcode, _dsev, _dw = "AI_DEEP_FAKE", "critical", 55
+            else:
+                _dcode, _dsev, _dw = "AI_DEEP_DOUBT", "high", 30
+            _post_ai.append(Finding(
+                _dcode, _dsev, "content", _dw,
+                tr=(f"DERİN İNCELEME (düşünme turu) HÜKMÜ: gri-bölge dekontunda açılan düşünmeli AI turu "
+                    f"belgeyi '{_dv}' olarak değerlendirdi → 'güvenilir/düşük risk' sayılamaz. {_drz}"),
+                en=(f"DEEP REVIEW (thinking pass) VERDICT: the thinking pass opened for this gray-zone "
+                    f"receipt judged the document '{_dv}' → cannot be treated as trustworthy/low-risk. {_drz}"),
+                detail=f"dusunme=acildi verdict={_dv}"))
+
     # (b) BANKA ADI ↔ IBAN KODU (GÖNDERİCİ ve ALICI, KATI KURAL): Dekontta YAZAN banka adı ile IBAN'ın banka
     #     kodu farklı bankaları gösteriyorsa çelişki. AI IBAN'ları düzelttikten SONRA, GEÇERLİ IBAN üzerinden
     #     çalışır → fotoğrafta da güvenilir (OCR ham okumasına değil, AI-doğrulanmış IBAN'a bakar).
@@ -1634,7 +1658,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     # bulgusu ya da YZ görsel-tahrifatı) YOKSA → hüküm eski veriye dayanıyordur, 'belirsiz'e çekilir ve
     # gerekçeye şeffaf bir düzeltme notu eklenir. Böylece 'düzeltilmiş alanlar' ile 'YZ hükmü' ASLA çelişmez.
     try:
-        _forgery_codes = {f.code for f in findings} & (set(_vd._CONTENT_TAMPER) | {"AI_VISUAL_TAMPER", "AI_FORENSIC_FLAG"})
+        _forgery_codes = {f.code for f in findings} & (set(_vd._CONTENT_TAMPER) | {"AI_VISUAL_TAMPER", "AI_FORENSIC_FLAG", "AI_DEEP_DOUBT", "AI_DEEP_FAKE"})
         _ai_gt = bool((ai_adjudication or {}).get("gorsel_tahrifat"))
         _ai_v = str((ai_adjudication or {}).get("verdict") or "").lower()
         if ai_adjudication and _ai_v in ("sahte", "şüpheli", "supheli") and not _forgery_codes and not _ai_gt:
