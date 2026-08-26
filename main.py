@@ -6,8 +6,12 @@ from __future__ import annotations
 
 import os
 import json
+import asyncio
+import functools
 from typing import Any, Optional
 
+import anyio
+from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, UploadFile, File, Request, Header, HTTPException, Form
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +25,39 @@ from i18n import t as i18n_t
 BASE = os.path.dirname(__file__)
 MAX_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", 25 * 1024 * 1024))  # 25 MB
 API_KEYS = {k.strip() for k in os.environ.get("DEKONT_API_KEYS", "").split(",") if k.strip()}
+
+# ======================================================================
+#  EŞZAMANLILIK (ASYNC) — çok sayıda talebi PARALEL karşılamak için
+# ----------------------------------------------------------------------
+#  SORUN: Ağır analiz (OCR + Vision + YZ; düşünme turuyla istek başına ~100 sn'ye
+#  kadar) BLOKLAYICI, senkron bir çağrıdır. async endpoint içinde DOĞRUDAN
+#  çağrılırsa uvicorn event loop'unu tüm o süre boyunca dondurur → gelen bütün
+#  istekler tek sıraya dizilir (paralellik SIFIR), yük arttıkça yanıtlar giderek
+#  gecikir. (Düşünme modu eklendiğinden süre uzadı, etki büyüdü.)
+#  ÇÖZÜM: Ağır işi run_in_threadpool ile THREADPOOL'a taşırız → event loop serbest
+#  kalır, istekler ayrı thread'lerde AYNI ANDA ilerler. Eşzamanlı ağır analiz
+#  sayısını bir semafor ile sınırlarız (bellek/CPU/again maliyet koruması).
+# ======================================================================
+_MAX_CONCURRENT = max(1, int(os.environ.get("DEKONT_MAX_CONCURRENT_ANALYSES", "8")))
+_analyze_sem: "asyncio.Semaphore | None" = None
+
+
+async def _to_thread(func, *args, **kwargs):
+    """Bloklayıcı bir fonksiyonu event loop'u dondurmadan threadpool'da çalıştırır."""
+    if kwargs:
+        func = functools.partial(func, **kwargs)
+    return await run_in_threadpool(func, *args)
+
+
+async def _analyze_async(prepared, filename, kind, use_store: bool = True):
+    """analyze_document'i THREADPOOL'da + eşzamanlılık tavanı altında çalıştırır.
+    Böylece bu istek beklerken (OCR/Vision/YZ) diğer istekler paralel karşılanır."""
+    global _analyze_sem
+    if _analyze_sem is None:                       # startup henüz koşmadıysa yedek
+        _analyze_sem = asyncio.Semaphore(_MAX_CONCURRENT)
+    async with _analyze_sem:
+        return await _to_thread(analyze_document, prepared, filename,
+                                input_kind=kind, use_store=use_store)
 
 _API_DESC = """
 Banka dekontlarında **tahrifat/oynama, yapay zeka izi ve sahtecilik** tespiti yapan
@@ -59,6 +96,16 @@ async def _warm_self_check() -> None:
     planda taze hesabı başlat. Böylece /api/v1/self_check ilk yoklamadan itibaren
     ANINDA (bayat da olsa) bir sonuç döndürebilir. Hata olsa da uygulama açılışını
     ASLA engellemez."""
+    # Eşzamanlılık altyapısını kur: analiz semaforu + threadpool tavanı.
+    global _analyze_sem
+    try:
+        _analyze_sem = asyncio.Semaphore(_MAX_CONCURRENT)
+        # run_in_threadpool AnyIO'nun varsayılan thread limitini kullanır (vars. 40).
+        # Analizler + diğer threadpool işleri için yeterli pay bırak (semafor asıl tavandır).
+        limiter = anyio.to_thread.current_default_thread_limiter()
+        limiter.total_tokens = max(limiter.total_tokens, _MAX_CONCURRENT + 8)
+    except Exception:
+        pass
     try:
         import self_check
         self_check.start_background_warm()
@@ -266,18 +313,18 @@ async def analyze_web(request: Request, file: UploadFile = File(...), lang: str 
     if len(data) > MAX_BYTES:
         raise HTTPException(413, "File too large")
     try:
-        prepared, kind = prepare_input(data, file.filename or "")
+        prepared, kind = await _to_thread(prepare_input, data, file.filename or "")
     except Exception:
         return templates.TemplateResponse("index.html",
             {"request": request, "L": L, "T": T, "version": ENGINE_VERSION, "error": T["err_not_pdf"]},
             status_code=400)
     try:
-        report = analyze_document(prepared, file.filename or "document.pdf", input_kind=kind)
+        report = await _analyze_async(prepared, file.filename or "document.pdf", kind)
     except Exception as e:
         return templates.TemplateResponse("index.html",
             {"request": request, "L": L, "T": T, "version": ENGINE_VERSION,
              "error": f"{T['err_failed']} ({e})"}, status_code=500)
-    _save_problem_sample(data, file.filename or "", report)
+    await _to_thread(_save_problem_sample, data, file.filename or "", report)
     return templates.TemplateResponse("report.html", {
         "request": request, "L": L, "T": T, "version": ENGINE_VERSION,
         "r": report, "report_json": json.dumps(report, ensure_ascii=False, indent=2),
@@ -502,14 +549,14 @@ async def analyze_api(file: UploadFile = File(...), x_api_key: str | None = Head
     if len(data) > MAX_BYTES:
         raise HTTPException(413, "File too large.")
     try:
-        prepared, kind = prepare_input(data, file.filename or "")
+        prepared, kind = await _to_thread(prepare_input, data, file.filename or "")
     except Exception:
         raise HTTPException(415, "Only PDF or image (JPG/PNG) files are supported.")
     try:
-        report = analyze_document(prepared, file.filename or "document.pdf", input_kind=kind)
+        report = await _analyze_async(prepared, file.filename or "document.pdf", kind)
     except Exception as e:
         raise HTTPException(500, f"Analysis failed: {e}")
-    _save_problem_sample(data, file.filename or "", report)
+    await _to_thread(_save_problem_sample, data, file.filename or "", report)
     return JSONResponse(build_summary(report))
 
 
@@ -553,7 +600,7 @@ async def analyze_video_api(file: UploadFile = File(...), x_api_key: str | None 
         tmp.write(data)
         tmp.flush()
         tmp.close()
-        result = _vf.analyze_video(tmp.name)
+        result = await _to_thread(_vf.analyze_video, tmp.name)
     except Exception as e:
         raise HTTPException(500, f"Video analysis failed: {e}")
     finally:
@@ -585,7 +632,7 @@ async def video_web(file: UploadFile = File(...)):
         tmp.write(data)
         tmp.flush()
         tmp.close()
-        r = _vf.analyze_video(tmp.name)
+        r = await _to_thread(_vf.analyze_video, tmp.name)
     except Exception as e:
         return HTMLResponse(f"<p>Analiz hatası: {e}</p>", status_code=500)
     finally:
@@ -813,15 +860,15 @@ async def analyze_url_api(body: UrlBody, x_api_key: str | None = Header(default=
     _check_api_key(x_api_key)
     import url_fetch
     try:
-        data, fname = url_fetch.fetch(body.url, MAX_BYTES)
+        data, fname = await _to_thread(url_fetch.fetch, body.url, MAX_BYTES)
     except ValueError as e:
         raise HTTPException(400, str(e))
     try:
-        prepared, kind = prepare_input(data, fname)
+        prepared, kind = await _to_thread(prepare_input, data, fname)
     except Exception:
         raise HTTPException(415, "URL yalnızca PDF veya görsel (JPG/PNG) içermelidir.")
     try:
-        report = analyze_document(prepared, fname or "document.pdf", input_kind=kind)
+        report = await _analyze_async(prepared, fname or "document.pdf", kind)
     except Exception as e:
         raise HTTPException(500, f"Analysis failed: {e}")
     return JSONResponse(build_summary(report))
@@ -851,8 +898,8 @@ async def compare_api(files: list[UploadFile] = File(...), x_api_key: str | None
         if len(data) > MAX_BYTES:
             raise HTTPException(413, f"File too large: {f.filename}")
         try:
-            prepared, kind = prepare_input(data, f.filename or "")
-            reports.append(analyze_document(prepared, f.filename or "document.pdf", input_kind=kind, use_store=False))
+            prepared, kind = await _to_thread(prepare_input, data, f.filename or "")
+            reports.append(await _analyze_async(prepared, f.filename or "document.pdf", kind, use_store=False))
         except Exception as e:
             raise HTTPException(500, f"Analysis failed for {f.filename}: {e}")
     if len(reports) < 2:
@@ -888,9 +935,9 @@ async def compare_url_api(body: UrlsBody, x_api_key: str | None = Header(default
     reports = []
     for u in body.urls:
         try:
-            data, fname = url_fetch.fetch(u, MAX_BYTES)
-            prepared, kind = prepare_input(data, fname)
-            reports.append(analyze_document(prepared, fname or "document.pdf", input_kind=kind, use_store=False))
+            data, fname = await _to_thread(url_fetch.fetch, u, MAX_BYTES)
+            prepared, kind = await _to_thread(prepare_input, data, fname)
+            reports.append(await _analyze_async(prepared, fname or "document.pdf", kind, use_store=False))
         except ValueError as e:
             raise HTTPException(400, f"{u}: {e}")
         except Exception as e:
@@ -930,8 +977,8 @@ async def compare_web(request: Request, files: list[UploadFile] = File(...), lan
         if len(data) > MAX_BYTES:
             raise HTTPException(413, "File too large")
         try:
-            prepared, kind = prepare_input(data, f.filename or "")
-            reports.append(analyze_document(prepared, f.filename or "document.pdf", input_kind=kind, use_store=False))
+            prepared, kind = await _to_thread(prepare_input, data, f.filename or "")
+            reports.append(await _analyze_async(prepared, f.filename or "document.pdf", kind, use_store=False))
         except Exception:
             continue
     if len(reports) < 2:

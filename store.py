@@ -77,7 +77,16 @@ def _db_path() -> str:
 def _connect():
     path = _db_path()
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    con = sqlite3.connect(path, timeout=5, check_same_thread=False)
+    con = sqlite3.connect(path, timeout=15, check_same_thread=False)
+    # EŞZAMANLI ERİŞİM: WAL modu okuyucuları yazıcıdan bağımsızlaştırır; busy_timeout kilit
+    # çakışmasında 'database is locked' yerine bekletir. Web servisi artık istekleri PARALEL
+    # işlediğinden (threadpool), birden çok analiz aynı anda DB'ye yazabilir.
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA busy_timeout=15000")     # 15 sn: kilit çakışmasında bekle
+        con.execute("PRAGMA synchronous=NORMAL")     # WAL ile güvenli + hızlı
+    except Exception:
+        pass
     con.execute("""CREATE TABLE IF NOT EXISTS receipts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         bank TEXT, seq_number TEXT, seq_len INTEGER,
