@@ -14,7 +14,7 @@ from dataclasses import asdict
 import pikepdf
 
 from pdf_structure import analyze_structure_bytes, classify_producer
-from forensics import classify_doc_type, detect, Finding
+from forensics import classify_doc_type, detect
 from extract import extract_text_digital, extract_fields
 import ocr
 from image_forensics import analyze_image, ImageForensics
@@ -387,20 +387,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     struct.text_char_count = digital_text_len
     text_source = "digital"
     ocr_candidates = []
-    # === PDF DİJİTAL METİN KATMANI KAPISI (kullanıcı kuralı — GENEL, tüm belge tipleri) ===
-    # input_kind=='pdf' iken seçilebilir dijital metin YOKSA (digital_text_len<40), belge
-    # gerçekte bir fotoğraf/ekran görüntüsünün PDF'e SARILMIŞ hâlidir. Gerçek banka belgeleri
-    # (dekont VE hesap özeti — tümü) her zaman dijital metin katmanı taşır. Bir görseli PDF'e
-    # koymak, orijinal dijital belge yerine düzenlenebilir bir görüntü sunulduğunu gösterir →
-    # KESİN sahtecilik. Analizi BURADA KES: OCR/Vision/YZ ve içerik denetimleri ÇALIŞTIRILMAZ
-    # (maliyet + OCR-gürültüsü kaynaklı yanlış-pozitif önlenir). NOT: doğrudan görsel yüklemesi
-    # (input_kind=='image') BU KURALIN DIŞINDADIR — foto zaten görseldir; o yol görsel-adli +
-    # YZ eskalasyonuna gider. Kriter 'XML' değil, DİJİTAL METİN KATMANI'dır (bank PDF'leri XML
-    # taşımak zorunda değildir ama daima seçilebilir metin taşır).
-    _no_text_pdf = (input_kind == "pdf" and digital_text_len < 40)
-    if _no_text_pdf:
-        text_source = "none"          # metin katmanı yok → OCR'a bile girmeden kesilecek
-    elif digital_text_len < 40:
+    if digital_text_len < 40:
         # HIZ: doğrudan FOTOĞRAF yüklemesinde ve Vision açıkken tesseract'ı TEK-HIZLI geçişe indir
         # (doğru okumayı zaten Vision yapar → çok-varyantlı ~9s tesseract boşa gitmesin). Taranmış
         # PDF'lerde ya da Vision kapalıyken tam (çok-varyantlı) OCR korunur (kalite düşmez).
@@ -427,23 +414,6 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     # 4) Yapısal tahrifat bulguları
     findings = detect(struct, digital_text_len, doc_type)
 
-    # 4.5) PDF METİN KATMANI YOK → KESİN sahtecilik, analiz burada durur (bkz. yukarıdaki kapı).
-    if _no_text_pdf:
-        findings.append(Finding(
-            "PDF_NO_TEXT_LAYER", "critical", "content", 45,
-            tr="Yüklenen PDF, seçilebilir DİJİTAL METİN KATMANI içermiyor — içine bir fotoğraf/ekran "
-               "görüntüsü gömülmüş (image-only). Gerçek banka belgeleri (dekont ve hesap özeti) her zaman "
-               "dijital metin katmanı taşır. Bir görselin PDF'e sarılması, orijinal dijital belge yerine "
-               "düzenlenebilir bir görüntü sunulduğunu gösterir → KESİN sahtecilik riski. Analiz burada "
-               "durduruldu (OCR/yapay zekâ çalıştırılmadı). Lütfen bankanızın uygulamasından ORİJİNAL "
-               "DİJİTAL PDF belgeyi (metin katmanlı) gönderin.",
-            en="The uploaded PDF has NO selectable digital TEXT LAYER — a photo/screenshot is embedded inside "
-               "it (image-only). Genuine bank documents (receipts and account statements) always carry a "
-               "digital text layer. Wrapping an image in a PDF shows an editable picture was presented instead "
-               "of the original digital document → DEFINITIVE forgery risk. Analysis stopped here (no OCR/AI "
-               "was run). Please submit the ORIGINAL digital PDF (with a text layer) from your bank's app.",
-            detail=f"doc_type={doc_type}, digital_text_len={digital_text_len}"))
-
     # 5) Alan çıkarımı (geometrik çıkarım için pdf_bytes de verilir)
     extraction = extract_fields(text_layout, text_read, pdf_bytes if text_source == "digital" else None)
     # OCR: birden çok varyanttan alanları birleştir (kötü fotoğraf dayanıklılığı)
@@ -467,7 +437,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     # (alıcı adı, alıcı IBAN, tutar, işlem tarihi) EN AZ BİRİ okunamazsa ücretli Vision'a git.
     # Dördü de okunduysa (kaliteli foto) ücretli servise hiç gidilmez → maliyet tasarrufu.
     vision_result = None
-    if text_source in ("ocr", "none") and not _no_text_pdf:   # metin katmanı yok PDF → Vision'a girme (kesildi)
+    if text_source in ("ocr", "none"):
         import vision_ocr
         import banks as _bkv
         _crit_required = (extraction.receiver.name, extraction.receiver.iban,
@@ -593,8 +563,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 ai = img_forensics.ai_score
 
     # 6.5) İLERİ ANALİZLER: revizyon karşılaştırması, QR, gömülü XML, veri tutarlılığı
-    # (Finding modül başında import edildi — burada tekrar local import ETME; aksi hâlde
-    #  fonksiyon kapsamında 'Finding' local sayılıp yukarıdaki erken kullanımda UnboundLocalError olur.)
+    from forensics import Finding
     import revision as _rev, qrxml as _qx, consistency as _cons
 
     ex = extraction
@@ -782,8 +751,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                 detail=f"beyan={_cc['beyan']} gerçek={_cc['gercek']}"))
 
     # --- Bu bir dekont değil ---
-    if (not is_receipt and not is_statement and not _no_text_pdf
-            and extraction.text_source in ("ocr", "none", "vision")):
+    if not is_receipt and not is_statement and extraction.text_source in ("ocr", "none", "vision"):
         findings.append(Finding(
             "NOT_A_RECEIPT", "critical", "content", 0,
             tr="BU DOSYA BİR BANKA DEKONTU DEĞİLDİR. Yüklenen görselde dekont içeriği (banka adı, IBAN, tutar, "
@@ -925,23 +893,29 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                     findings.append(Finding(_idt["code"], _idt["severity"], "content", _idt["weight"],
                                             tr=_idt["tr"], en=_idt["en"], detail=_idt.get("detail", "")))
             # Deterministik IBAN/banka-tutarlılığı (mod-97, ihracçı-taraf, alıcı-bankası)
+            import banks as _bkv_val
+            _rcv_iban_valid = _bkv_val.iban_valid(_bkv_val.normalize_iban(ex.receiver.iban or "")) is True
             for _d in _auth.deterministic_checks(_bkey, ex.sender.iban, ex.receiver.iban,
                                                  ex.receiver.bank, ex.all_ibans):
                 # FOTOĞRAF/OCR: IBAN'a-dayalı sert kontroller GÜVENİLMEZDİR — pikselden okuma
                 # (ister tesseract ister vision) rakamları/basamak sırasını bozabilir (yoğun
                 # monospace IBAN). Gerçek dekontta IBAN her zaman geçerlidir; fotoğrafta geçersiz
                 # çıkması bir OKUMA HATASIDIR, tahrifat kanıtı DEĞİL. Bu yüzden TÜM fotoğraflarda
-                # (input_kind=='image', vision dahil) VE taranmış/ocr PDF'lerde IBAN_INVALID/
-                # ISSUER/RECEIVER_BANK bastırılır — yalnız dijital-metin PDF'te normal çalışır.
+                # (input_kind=='image', vision dahil) VE taranmış/ocr PDF'lerde IBAN_INVALID/ISSUER
+                # bastırılır — yalnız dijital-metin PDF'te normal çalışır.
                 if (input_kind == "image" or extraction.text_source == "ocr") and _d["code"] in (
-                        "IBAN_INVALID", "ISSUER_IBAN_MISMATCH", "RECEIVER_BANK_MISMATCH"):
+                        "IBAN_INVALID", "ISSUER_IBAN_MISMATCH"):
+                    continue
+                # RECEIVER_BANK_MISMATCH (alıcı banka adı ≠ IBAN banka kodu): fotoğrafta yalnızca alıcı IBAN
+                # mod-97 GEÇERSİZSE bastırılır (o zaman OCR yanlış okumuş olabilir). IBAN mod-97 GEÇERLİYSE
+                # fotoğrafta da GÖSTERİLİR: geçerli bir IBAN'ın OCR artefaktı olma ihtimali yok denecek kadar
+                # düşüktür (tek hane hatası bile mod-97'yi bozar), dolayısıyla etiketle (ör. 'Garanti' yazıp
+                # IBAN 'Ziraat' olması) çelişkisi GERÇEK bir tahrifat işaretidir — kaçırılmamalı.
+                if (input_kind == "image" or extraction.text_source == "ocr") \
+                        and _d["code"] == "RECEIVER_BANK_MISMATCH" and not _rcv_iban_valid:
                     continue
                 findings.append(Finding(_d["code"], _d["severity"], "content", _d["weight"],
                                         tr=_d["tr"], en=_d["en"], detail=_d.get("detail", "")))
-            # NOT: YAZAN BANKA ADI ↔ IBAN KODU kontrolü BURADA (AI-öncesi ham veriyle) YAPILMAZ.
-            # Kullanıcı kuralı: bu ve benzeri alan-bağımlı denetimler DAİMA AI-DÜZELTİLMİŞ veri üzerinden
-            # çalışır (fotoğrafta OCR IBAN'ı bozuk okuyabilir → AI görüntüden düzeltir). Kontrol AI-sonrası
-            # blokta (b2) `_extracted_dict` (düzeltilmiş; AI yoksa orijinal) IBAN'larıyla yürütülür.
             # Alan-bazlı font tutarlılığı: TUTAR yabancı/ana-dışı bir fontta mı (yapıştırılmış)?
             _af = _auth.check_amount_font(pdf_bytes, ex.amount.value)
             if _af:
@@ -1246,7 +1220,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     ai_adjudication = None
     try:
         import ai_adjudicator as _aj
-        if _aj.is_enabled() and not _no_text_pdf:   # metin katmanı yok PDF → YZ'ye gitme (kesin sahte, analiz kesildi)
+        if _aj.is_enabled():
             _ex_dict = extraction.as_dict()
             _find_dicts = [{"code": f.code, "severity": f.severity, "weight": f.weight, "tr": f.tr}
                            for f in findings]
@@ -1261,33 +1235,6 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                     text_source=extraction.text_source)
                 if ai_adjudication is not None:
                     ai_adjudication["tetik_nedenleri"] = _reasons
-                    # KOŞULLU DÜŞÜNME (ESKALASYON_POLITIKASI.md) — TÜM BANKALAR: önce (yukarıda) DÜŞÜNMESİZ
-                    # AI incelemesi yapıldı. Bulgular/AI 'sahte' değilse ve ortada bir 'DURUM' (gri bölge)
-                    # varsa, TEK bir düşünmeli tur daha atılır ve sonucu esas alınır. VARSAYILAN KAPALI
-                    # (DEKONT_THINK_ENABLED=1 ile açılır) → mevcut davranış değişmez.
-                    try:
-                        if _aj.is_thinking_enabled():
-                            _go2, _why2 = _aj.should_escalate_to_thinking(
-                                ai_adjudication, findings, _ex_dict, input_kind, extraction.text_source)
-                            print(f"[adjudicator] düşünme eskalasyonu={_go2} sebep={_why2}", flush=True)
-                            if _go2:
-                                import os as _os_th
-                                _tb = int(_os_th.environ.get("DEKONT_THINK_BUDGET", "3000") or 3000)
-                                # PERFORMANS: düşünme turu zaman aşımı env ile (vars. 25 sn, eskiden 90).
-                                # first-pass (≤20s) + düşünme (≤25s) ≈ ≤45s → client timeout'una takılmaz.
-                                _tt = float(_os_th.environ.get("DEKONT_THINK_TIMEOUT", "25") or 25)
-                                _ai2 = _aj.adjudicate(
-                                    _ex_dict, _find_dicts, _auth_aj.bank_key(ex.bank),
-                                    pil_image=locals().get("pil"), input_kind=input_kind,
-                                    text_source=extraction.text_source, timeout=_tt, thinking_budget=_tb)
-                                if _ai2 is not None:
-                                    _ai2["tetik_nedenleri"] = _reasons
-                                    _ai2["dusunme"] = {"acildi": True, "sebep": _why2, "butce": _tb}
-                                    ai_adjudication = _ai2
-                                else:
-                                    ai_adjudication["dusunme"] = {"acildi": False, "sebep": _why2 + " (düşünme turu boş döndü)"}
-                    except Exception as _et:
-                        print(f"[adjudicator] düşünme eskalasyon hatası: {type(_et).__name__}: {_et}", flush=True)
                     # ÖĞREN: YZ'nin doğruladığı banka-bazlı etiket ipuçlarını kalıcı store'a yaz
                     # → sonraki dekontlarda otomatik uygulanır (kod değişmeden 'öğren-uygula').
                     if use_store:
@@ -1335,52 +1282,6 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                     "font than the document and appears pasted/altered. " + _alanlar),
                 detail="ai_gorsel_tahrifat"))
 
-    # (a2) ADLİ ŞÜPHECİ TARAMA (KATMAN 2): YZ'nin görsel-tahrifat DIŞINDA tespit ettiği mantıksal/adli kırmızı
-    #      bayraklar (referansta tekrarlı dolgu, iç tarih/saat mantığı, banka kodu/ad uyuşmazlığı, elektronik
-    #      belgenin fotoğrafı, e-belgede imza vb.). YÜKSEK GÜVENLİ (≥60) olanlar TEK bir AI_FORENSIC_FLAG
-    #      bulgusuna toplanır → skoru düşürür ve hüküm uzlaştırmasını tetikler.
-    if ai_adjudication:
-        try:
-            _cl = [c for c in (ai_adjudication.get("celiskiler") or []) if int(c.get("guven") or 0) >= 60]
-        except Exception:
-            _cl = []
-        if _cl:
-            _maxg = max(int(c.get("guven") or 0) for c in _cl)
-            _bayrak = "; ".join(f"{c.get('alan','')}: {c.get('aciklama','')}" for c in _cl)[:700]
-            # ağırlık güvenle ölçeklenir (≥60 → ~24; 100 → 40); category cap ('content') zaten sınırlar
-            _w = int(round(_maxg * 0.40))
-            _post_ai.append(Finding(
-                "AI_FORENSIC_FLAG", "high", "content", _w,
-                tr=("ADLİ ŞÜPHE (YZ tarama): belgede sahtecilik göstergesi olabilecek KIRMIZI BAYRAK(lar) "
-                    f"tespit edildi (en yüksek güven %{_maxg}). {_bayrak}"),
-                en=(f"FORENSIC RED FLAG (AI review): possible forgery indicator(s) detected (max confidence "
-                    f"{_maxg}%). {_bayrak}"),
-                detail=f"ai_celiskiler adet={len(_cl)} max_guven={_maxg}"))
-
-    # (a3) DERİN (DÜŞÜNMELİ) TUR OTORİTESİ — kullanıcı kuralı: Düşünme turu gri-bölgede AÇILDIYSA
-    #      (dusunme.acildi=True) ve NİHAİ hükmü 'şüpheli'/'sahte' ise, bu PAHALI derin analizin kasıtlı
-    #      skeptik sonucudur → tek tek bayraklar <60 güvende kalıp AI_FORENSIC_FLAG üretmese BİLE skora
-    #      YANSIMALIDIR. Aksi halde derin-AI 'şüpheli' derken rapor 'düşük risk/güvenilir' der (çelişki).
-    #      Verdict ENUM'una bağlıdır (serbest metne değil) → yanlış-pozitif riski yok; yalnız düşünme
-    #      GERÇEKTEN açıldığında devreye girer (sığ tek-tur 'şüpheli'si bunu tetiklemez — o hâlâ 7.96
-    #      anti-halüsinasyon kapısına tabidir).
-    if ai_adjudication:
-        _dus = ai_adjudication.get("dusunme") or {}
-        _dv = str(ai_adjudication.get("verdict") or "").lower()
-        if _dus.get("acildi") and _dv in ("şüpheli", "supheli", "sahte"):
-            _drz = str(ai_adjudication.get("reasoning_tr") or "")[:400]
-            if _dv == "sahte":
-                _dcode, _dsev, _dw = "AI_DEEP_FAKE", "critical", 55
-            else:
-                _dcode, _dsev, _dw = "AI_DEEP_DOUBT", "high", 30
-            _post_ai.append(Finding(
-                _dcode, _dsev, "content", _dw,
-                tr=(f"DERİN İNCELEME (düşünme turu) HÜKMÜ: gri-bölge dekontunda açılan düşünmeli AI turu "
-                    f"belgeyi '{_dv}' olarak değerlendirdi → 'güvenilir/düşük risk' sayılamaz. {_drz}"),
-                en=(f"DEEP REVIEW (thinking pass) VERDICT: the thinking pass opened for this gray-zone "
-                    f"receipt judged the document '{_dv}' → cannot be treated as trustworthy/low-risk. {_drz}"),
-                detail=f"dusunme=acildi verdict={_dv}"))
-
     # (b) BANKA ADI ↔ IBAN KODU (GÖNDERİCİ ve ALICI, KATI KURAL): Dekontta YAZAN banka adı ile IBAN'ın banka
     #     kodu farklı bankaları gösteriyorsa çelişki. AI IBAN'ları düzelttikten SONRA, GEÇERLİ IBAN üzerinden
     #     çalışır → fotoğrafta da güvenilir (OCR ham okumasına değil, AI-doğrulanmış IBAN'a bakar).
@@ -1408,26 +1309,6 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                         en=(f"{_who} BANK CONTRADICTION: stated {_who.lower()} bank '{_stated}' but the "
                             f"{_who.lower()} IBAN's bank code belongs to {_ibank} — different banks (possible forgery)."),
                         detail=f"stated={_cs} iban_bank={_ci}"))
-    except Exception:
-        pass
-
-    # (b2) YAZAN BANKA ADI ↔ IBAN — HAM METİN + AI-DÜZELTİLMİŞ IBAN (KULLANICI KURALI):
-    #     Yukarıdaki (b) 'bank_stated' alanına bağlıdır; VakıfBank gibi düzenlerde bu alan BOŞ kalabilir
-    #     (parser 'ALICI BANKA' metnini ayrı bir alana almaz, AI de bank_stated'i doldurmaz) → (b) atlanır.
-    #     Bu kontrol yazan banka adını doğrudan HAM METİNDEN ('ALICI/GÖNDEREN BANKA' etiketi) alır ve AI'ın
-    #     GÖRÜNTÜDEN DÜZELTTİĞİ (mod-97 geçerli) IBAN ile karşılaştırır → 'İLK (OCR) veri' değil, AI-doğrulanmış
-    #     veri esas alınır (kullanıcı kuralı). Tanınan iki farklı banka → RECEIVER/SENDER_BANK_MISMATCH (KESİN).
-    try:
-        import authenticity as _auth_b2
-        _s_ai_b2 = (_extracted_dict.get("sender", {}) or {}).get("iban") or ""
-        _r_ai_b2 = (_extracted_dict.get("receiver", {}) or {}).get("iban") or ""
-        _seen_b2 = {f.code for f in findings} | {f.code for f in _post_ai}
-        for _d in _auth_b2.bank_name_iban_contradiction(text_layout, _s_ai_b2, _r_ai_b2):
-            if _d["code"] in _seen_b2:
-                continue
-            _seen_b2.add(_d["code"])
-            _post_ai.append(Finding(_d["code"], _d["severity"], "content", _d["weight"],
-                                    tr=_d["tr"], en=_d["en"], detail=_d.get("detail", "")))
     except Exception:
         pass
 
@@ -1500,6 +1381,22 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                     "Even if genuine, the payment may not have arrived — confirm the money landed before "
                     "crediting. Only HAVALE and FAST settle instantly and finally."),
                 detail="rail=eft source=ai"))
+        # (c2-b) FAST/HAVALE VISION ESKALASYONU (özellikle QNB fotoğrafları): kural motoru rail'i HİÇ
+        #     üretemediyse (fotoğrafta 'GİDEN FAST EFT'/'GİDEN EFT'/ücret kalemi okunamadı → RAIL kodu yok)
+        #     ve YZ görüntüden kanalı FAST ya da HAVALE okuduysa, bu bilgiyi EKLERİZ ki işlem türü ekrana
+        #     BOŞ gelmesin. ÇELİŞKİ KORUMASI: yalnız HİÇBİR rail kodu yokken çalışır (kural motoru bir rail
+        #     belirlediyse o OTORİTERDİR, YZ ezmez). EFT yukarıda ayrıca ele alınır (risk uyarısıyla).
+        _has_any_rail = bool(_exist_codes_eft & _RAIL_CODES_ALL)
+        if _ai_kanal in ("FAST", "HAVALE") and not _has_any_rail:
+            _ai_rail_code = "RAIL_IS_FAST" if _ai_kanal == "FAST" else "RAIL_IS_HAVALE"
+            _ai_rail_tr = ("İşlem türü FAST (YZ görüntü incelemesi) — para anında ve kesin hesaba geçer."
+                           if _ai_kanal == "FAST" else
+                           "İşlem türü banka-içi HAVALE (YZ görüntü incelemesi) — para anında hesaba geçer.")
+            _ai_rail_en = ("Transaction rail is FAST (AI image review) — settles instantly and finally."
+                           if _ai_kanal == "FAST" else
+                           "Intra-bank HAVALE (AI image review) — settles instantly.")
+            _post_ai.append(Finding(_ai_rail_code, "info", "content", 0,
+                                    tr=_ai_rail_tr, en=_ai_rail_en, detail=f"rail={_ai_kanal.lower()} source=ai"))
     except Exception:
         pass
 
@@ -1661,7 +1558,7 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
     # bulgusu ya da YZ görsel-tahrifatı) YOKSA → hüküm eski veriye dayanıyordur, 'belirsiz'e çekilir ve
     # gerekçeye şeffaf bir düzeltme notu eklenir. Böylece 'düzeltilmiş alanlar' ile 'YZ hükmü' ASLA çelişmez.
     try:
-        _forgery_codes = {f.code for f in findings} & (set(_vd._CONTENT_TAMPER) | {"AI_VISUAL_TAMPER", "AI_FORENSIC_FLAG", "AI_DEEP_DOUBT", "AI_DEEP_FAKE"})
+        _forgery_codes = {f.code for f in findings} & (set(_vd._CONTENT_TAMPER) | {"AI_VISUAL_TAMPER"})
         _ai_gt = bool((ai_adjudication or {}).get("gorsel_tahrifat"))
         _ai_v = str((ai_adjudication or {}).get("verdict") or "").lower()
         if ai_adjudication and _ai_v in ("sahte", "şüpheli", "supheli") and not _forgery_codes and not _ai_gt:
@@ -1673,19 +1570,6 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                          "tahrifat kanıtı BULUNAMADI → hüküm 'belirsiz'e güncellendi. Özgünlük ayrı, işlem "
                          "kanalı riski (EFT ise) ayrı değerlendirilir. — ")
             ai_adjudication["reasoning_tr"] = _rec_note + str(ai_adjudication.get("reasoning_tr") or "")
-        # TERS YÖN (KULLANICI KURALI: 'YZ yorumu OKUNAMAYAN değil NETLEŞMİŞ veriye dayanmalı'): YZ bir alanı
-        # 'net okunamadı' deyip çelişkiyi mazur görebilir (ör. IBAN'ı corrected_fields'a yazdığı hâlde 'IBAN
-        # okunamadı, karşılaştırma yapılamadı' der ve 'gerçek' hükmü verir). Alanlar düzeltildikten SONRAKİ
-        # NİHAİ bulgularda KESİN bir tahrifat/çelişki kodu varsa, YZ 'gerçek/belirsiz' demiş olsa BİLE hüküm
-        # 'sahte'ye çekilir ve gerekçeye NETLEŞMİŞ veriye dayanan şeffaf bir not eklenir. Böylece rapor
-        # iskeleti (düzeltilmiş veri) ile YZ yorumu ASLA çelişmez.
-        elif ai_adjudication and _ai_v not in ("sahte", "şüpheli", "supheli") and _forgery_codes:
-            _hard = [(f.code, f.tr) for f in findings if f.code in _forgery_codes]
-            # DETERMINİSTİK kesin kod (banka-adı↔IBAN, aynı-banka vb.) varsa 'sahte'; yalnız YZ olasılıksal
-            # adli bayrağı (AI_FORENSIC_FLAG) varsa 'şüpheli' (aşırı kesin hüküm verme).
-            _det_hard = _forgery_codes - {"AI_FORENSIC_FLAG"}
-            _tv = "sahte" if _det_hard else "şüpheli"
-            _vd.escalate_verdict_on_hard_findings(ai_adjudication, _hard, _ai_v, target_verdict=_tv)
     except Exception:
         pass
 

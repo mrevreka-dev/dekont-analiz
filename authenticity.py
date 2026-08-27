@@ -586,7 +586,21 @@ def deterministic_checks(bkey: str, sender_iban: str, receiver_iban: str,
         iban_bank = _b.bank_from_iban(r_iban)               # IBAN kodundan resmi ad
         stated = _canon_bank(receiver_bank_text)
         iban_canon = _canon_bank(iban_bank)
-        if iban_canon and stated and iban_canon != stated:
+        # ALAN-KARIŞMASI KORUMASI: Vision/OCR bazen İHRAÇÇI/GÖNDERİCİ bankasını 'alıcı bankası' alanına
+        # yazar (ör. QNB dekontunda alıcı bankası 'QNB' okunur). Bu, gerçek bir 'alıcı banka ≠ IBAN'
+        # ÇELİŞKİSİ DEĞİL, bir okuma karışmasıdır → ÇELİŞKİ ÜRETME. Yalnız alıcı etiketi hem ihraççı
+        # bankasından hem gönderici IBAN bankasından FARKLIYSA gerçek çelişki sayılır (ör. VakıfBank
+        # dekontunda alıcı 'Garanti' yazıp IBAN 'Ziraat' olması: üçü de farklı → gerçek tahrifat).
+        _issuer_codes = _ISSUER_IBAN_CODES.get(bkey) or set()
+        _issuer_canon = ""
+        for _ic in _issuer_codes:
+            _nm = _b.IBAN_BANK_CODES.get(_ic)
+            if _nm:
+                _issuer_canon = _canon_bank(_nm)
+                break
+        _sender_canon = _canon_bank(_b.bank_from_iban(s_iban)) if s_iban else ""
+        _label_is_issuer = bool(stated) and stated in (_issuer_canon, _sender_canon)
+        if iban_canon and stated and iban_canon != stated and not _label_is_issuer:
             out.append({
                 "code": "RECEIVER_BANK_MISMATCH", "severity": "high", "weight": 36,
                 "tr": f"ALICI BANKASI ÇELİŞKİSİ: Dekontta alıcı bankası ‘{receiver_bank_text}’ yazıyor, ancak "
@@ -595,63 +609,6 @@ def deterministic_checks(bkey: str, sender_iban: str, receiver_iban: str,
                 "en": f"RECEIVER BANK CONTRADICTION: the stated receiver bank is '{receiver_bank_text}', but the "
                       f"receiver IBAN's bank code belongs to {iban_bank}. Name and IBAN point to different banks "
                       f"— the receiver name/bank or IBAN may have been altered (possible forgery).",
-                "detail": f"stated={stated} iban_bank={iban_canon}",
-            })
-    return out
-
-
-# --- (KULLANICI KURALI) YAZAN BANKA ADI ↔ IBAN BANKA KODU — FOTOĞRAFTA DA, KESİN -----------
-# Dekontta açıkça bir ALICI/GÖNDEREN BANKA adı yazıyorsa, o tarafın IBAN'ının banka kodu AYNI
-# bankayı göstermek ZORUNDADIR. Göstermiyorsa KESİN SAHTE (banka adı ya da IBAN değiştirilmiş).
-# Bu kontrol, deterministik kontrolün aksine FOTOĞRAFTA da güvenle çalışır; çünkü iki GÜÇLÜ
-# koşula dayanır: (1) IBAN mod-97 GEÇERLİ — rastgele bir OCR hatası mod-97'yi geçemez, yani
-# geçerli IBAN'ın banka kodu güvenilirdir; (2) metinde AÇIKÇA yazan, TANINAN bir banka adı.
-# İkisi birden sağlandığında bu bir OCR gürültüsü değil, gerçek bir çelişkidir. Yazan banka adı,
-# IBAN-otoritesiyle EZİLEBİLEN 'bank' alanından DEĞİL, doğrudan HAM METİNDEN alınır.
-_RCV_BANK_LABELS = ("ALICI BANKA", "ALAN BANKA", "ALACAKLI BANKA")
-_SND_BANK_LABELS = ("GONDEREN BANKA", "GÖNDEREN BANKA", "BORCLU BANKA", "BORÇLU BANKA")
-
-
-def _stated_bank_after_label(text: str, labels) -> str:
-    """Ham metinde etiketten ('ALICI BANKA' vb.) sonra yazan banka adını TANINAN bir bankaya
-    çözer; tanınmıyorsa '' döner. Yalnız BİLİNEN banka adlarında tetiklendiği için yanlış-pozitif
-    riski düşüktür (serbest metin/eksik ad → '')."""
-    if not text:
-        return ""
-    for lab in labels:
-        for m in re.finditer(re.escape(lab) + r"\s*[:：]?\s*(.+)", text, re.I):
-            seg = m.group(1)
-            seg = re.split(r"\s{2,}|TR\d|SORGU|İŞLEM|ISLEM|IBAN|HESAP|\d{3,}", seg, flags=re.I)[0]
-            canon = _canon_bank(seg)
-            if canon:
-                return canon
-    return ""
-
-
-def bank_name_iban_contradiction(text: str, sender_iban: str, receiver_iban: str) -> list[dict]:
-    """(KULLANICI KURALI) Dekontta yazan ALICI/GÖNDEREN banka adı ile o tarafın IBAN banka kodu
-    FARKLI bankaları gösteriyorsa KESİN SAHTE. Fotoğrafta da çalışır (geçerli IBAN + açıkça yazan
-    tanınan banka adı şartıyla). Döner: bulgu dict listesi (boş = çelişki yok)."""
-    import banks as _b
-    out = []
-    for who, iban, labels, code in (
-            ("Alıcı", receiver_iban, _RCV_BANK_LABELS, "RECEIVER_BANK_MISMATCH"),
-            ("Gönderici", sender_iban, _SND_BANK_LABELS, "SENDER_BANK_MISMATCH")):
-        iban_n = _b.normalize_iban(iban or "")
-        if not iban_n or _b.iban_valid(iban_n) is not True:
-            continue
-        stated = _stated_bank_after_label(text, labels)
-        iban_canon = _canon_bank(_b.bank_from_iban(iban_n))
-        if stated and iban_canon and stated != iban_canon:
-            out.append({
-                "code": code, "severity": "critical", "weight": 46,
-                "tr": f"{who.upper()} BANKASI ÇELİŞKİSİ (KESİN SAHTE): Dekontta {who.lower()} bankası "
-                      f"‘{stated}’ yazıyor, ancak {who.lower()} IBAN'ının banka kodu {iban_canon}’a ait. "
-                      f"Geçerli bir IBAN'ın banka kodu, yazan banka adıyla BİREBİR aynı olmak zorundadır; "
-                      f"farklıysa banka adı ya da IBAN sonradan değiştirilmiştir — SAHTE.",
-                "en": f"{who} BANK CONTRADICTION (DEFINITIVE FORGERY): stated {who.lower()} bank ‘{stated}’ "
-                      f"but the {who.lower()} IBAN's bank code belongs to {iban_canon}. A valid IBAN's bank "
-                      f"code must exactly match the stated bank; a mismatch means the name or IBAN was altered.",
                 "detail": f"stated={stated} iban_bank={iban_canon}",
             })
     return out
@@ -775,8 +732,7 @@ def detect_transfer_rail(text: str) -> str | None:
     """İşlem kanalını (rail) metinden çıkarır. Senaryo/Dekont Tipi'ne DEĞİL, işlem
     başlığı ve ÜCRET etiketine bakar (İş Bankası FAST'i 'DEKONT/EFT' tipiyle basar)."""
     n = _tr_low(text)
-    if ("fast ucreti" in n or "giden fast" in n or "gelen fast" in n or "fast islemi" in n
-            or "fast giden" in n or "fast gelen" in n or "fast anlik" in n):
+    if "fast ucreti" in n or "giden fast" in n or "gelen fast" in n or "fast islemi" in n:
         return "fast"
     if "havale ucreti" in n or "dekont/hvl" in n or "hesaptan hesaba havale" in n or "havale+vergi" in n:
         return "havale"

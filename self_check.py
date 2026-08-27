@@ -34,129 +34,32 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
-    {"id": "Z26", "date": "2026-08-25 09:30", "area": "DERİN (DÜŞÜNMELİ) TUR OTORİTESİ: düşünme 'şüpheli/sahte' dediğinde skora yansır + düşünme HTTP 400 (adaptive) + 8888 prompt düzeltmesi + tanı log", "test": 48,
-     "bug": "(1) Düşünme modu canlıda HİÇ çalışmıyordu: eskalasyon doğru tetikleniyor ama adjudicate ikinci turu "
-            "eski 'thinking:{type:enabled,budget_tokens}' formatıyla HTTP 400 alıyordu (claude-sonnet-5 bunu "
-            "desteklemiyor) → sessizce sığ sonuca düşüyordu. (2) 8888/8888: prompt'un celiskiler ÖRNEĞİ birebir "
-            "'referans 8888/8888 tekrarlı DOLGU' diyordu → AI her İş Bankası dekontunda buna kırmızı bayrak "
-            "kaldırıyordu; oysa 8888/8888 STANDART İş Bankası Sorgu No şablonudur (farklı gönderen/tutarlı 4+ "
-            "dekontta birebir aynı — teyitli). (3) Düşünme turu 'şüpheli' dönse bile bayraklar <60 güvende "
-            "kalınca AI_FORENSIC_FLAG üretilmiyor, skor 72/düşük kalıyordu → derin-AI 'şüpheli' derken rapor "
-            "'düşük risk' diyordu (çelişki). (4) Eskalasyonu tetikleyen bayrağın hangi alan olduğu log'da yoktu.",
-     "fix": "(1) adjudicate: düşünme çağrısı YENİ API — thinking:{type:'adaptive'} + output_config:{effort} "
-            "(DEKONT_THINK_EFFORT, vars. high; budget_tokens kaldırıldı, max_tokens tavan). (2) prompt: yanlış "
-            "8888 örneği kaldırıldı, yerine nötr örnek + açık İSTİSNA: 'İş Bankası Sorgu No daima /447/8888/8888 "
-            "sabit şablonu taşır, NORMALDİR, bayrak kaldırma; gerçek kimlik ref_no'dur'. (3) analyze (a3): "
-            "dusunme.acildi=True VE hüküm 'şüpheli'→AI_DEEP_DOUBT (skor ≤55, 'Orta Risk/Şüpheli'), 'sahte'→"
-            "AI_DEEP_FAKE (skor ≤20, kritik, _CONTENT_TAMPER+_FAKE_CODES). Bu kodlar uzlaştırma kümesine eklendi "
-            "→ anti-halüsinasyon kapısı hükmü artık 'belirsiz'e çekmez (derin tur otoriterdir). Verdict ENUM'una "
-            "bağlı → yanlış-pozitif yok; yalnız düşünme GERÇEKTEN açıldığında. (4) tanı log: '[adjudicator] "
-            "BAYRAKLAR celiskiler=[alan~gGÜVEN:açıklama] gorsel_tahrifat=[...]'. Test #48 iki-yönlü kilitler.",
-     "not": "Canlı log doğruladı: 8888 bayrağı KAYBOLDU; düşünme turu HTTP 400 olmadan çalıştı ve hükmü "
-            "gerçek(82)→şüpheli(58)'e çekti (derin tur daha skeptik). Kullanıcı kuralı: 8888 standart, sahte değil."},
-    {"id": "Z25", "date": "2026-08-25 08:30", "area": "KULLANICI KURALI (GENELLEŞTİRİLDİ): PDF'te dijital metin katmanı YOKSA (foto/ekran görüntüsü PDF'e sarılmış) → KESİN sahte + analiz ANINDA kesilir", "test": 47,
-     "bug": "SINGLE_PHOTO_PDF kuralı yalnız DEKONTLAR için (is_receipt) çalışıyordu; hesap özeti/başka belge "
-            "türleri için image-only PDF yakalanmıyordu. Ayrıca kural analizi KESMİYORDU: image-only PDF yine "
-            "OCR'a + YZ'ye giriyor, fotoğrafın gürültülü OCR metni üzerinde STATEMENT_BALANCE_BREAK gibi "
-            "denetimler YANLIŞ-POZİTİF üretebiliyordu (canlı örnek: 40367ce2 Ziraat foto-PDF, bakiye zinciri "
-            "OCR rakam hatası yüzünden 'kırık' göründü). Kullanıcı: dijital metin (XML/veri) katmanı olmayan "
-            "PDF sahteciliktir, tarama orada bırakılmalı — tüm belge tiplerinde.",
-     "fix": "analyze.py: metin çıkarımından HEMEN sonra _no_text_pdf = (input_kind=='pdf' and digital_text_len<40) "
-            "kapısı. True ise: (1) PDF_NO_TEXT_LAYER (critical) bulgusu eklenir; (2) OCR ATLANIR (text_source='none'); "
-            "(3) Vision ATLANIR; (4) YZ adjudicate ATLANIR (AI açık olsa bile) → maliyet + OCR-gürültüsü yanlış-"
-            "pozitifi önlenir; (5) NOT_A_RECEIPT bastırılır (yanıltıcı olmasın). Kriter 'XML' değil DİJİTAL METİN "
-            "KATMANI'dır (bank PDF'leri her zaman seçilebilir metin taşır). Doğrudan görsel yüklemesi "
-            "(input_kind=='image') KURAL DIŞI — foto zaten görseldir, görsel-adli+YZ yoluna gider. scoring: "
-            "PDF_NO_TEXT_LAYER → skor ≤8. verdicts: _CONTENT_TAMPER (güvenilir DEĞİL). ai_adjudicator: "
-            "_HARD_FAKE_CODES (düşünme açılmaz). store: _FAKE_CODES. Test #47 iki-yönlü kilitler (foto-PDF→tetik+"
-            "AI-atla; görsel yüklemesi→tetiklemez).",
-     "not": "Bu, Z24'te bulunan STATEMENT_BALANCE_BREAK yanlış-pozitifini de kökten çözer: foto-PDF artık OCR'a "
-            "hiç girmediğinden gürültülü rakamlar üzerinde bakiye-zinciri matematiği YAPILMAZ. (Balance-check'in "
-            "işaret/sıra-agnostik sağlamlaştırması dijital-metinli gerçek özetler için ayrıca ele alınacak.)"},
-    {"id": "Z24", "date": "2026-08-25 07:10", "area": "ÖZ-DENETİM ÖNBELLEĞİ CANLIDA TAZELENMİYORDU: batarya boyunca YZ GLOBAL kapatılır (canlı ağ çağrısı yok)",
-     "bug": "Canlı sunucuda /api/v1/self_check önbelleği bayat kalıyordu (total=45, generated_at eski, "
-            "age_seconds=null). Kök neden: sunucuda API anahtarı olduğundan ai_adjudicator.is_enabled()=True; "
-            "AI'ı mock'lamayan invariant testleri analyze_document çağırınca GERÇEK Anthropic AI çağrısı "
-            "yapıyordu → run() bataryası yavaşlıyor/asılıyor, arka plan yeniden-hesabı (_sc_compute_and_store) "
-            "hiç tamamlanmıyor, önbellek 46 test'e tazelenmiyordu. Yerelde API anahtarı yok (is_enabled=False) "
-            "olduğundan batarya hızlı bitiyor, 46/46 çıkıyordu — sorun yalnız canlıda görünüyordu.",
-     "fix": "run() artık test döngüsünü bir GUARD ile sarar: batarya süresince ai_adjudicator.is_enabled "
-            "GLOBAL olarak lambda:False yapılır; finally'de orijinal geri yüklenir. analyze.py AI bloğunu "
-            "`if is_enabled()` ile geçtiğinden False iken should_adjudicate/adjudicate HİÇ çağrılmaz → canlı "
-            "ağ çağrısı olmaz, batarya deterministik ve hızlı (~2.5s) biter, arka plan hesabı tamamlanıp "
-            "önbellek 46/46'ya tazelenir. should_adjudicate'e DOKUNULMAZ (test #23 onu doğrudan sınar); kendi "
-            "is_enabled=True mock'u yapan testler (ör. #33) kendi save/restore'u ile iç içe doğru çalışır. "
-            "Canlı analiz trafiği ETKİLENMEZ — guard yalnız run() bataryası süresince aktiftir, sonra AI eski "
-            "hâline döner. (Bu bir altyapı düzeltmesidir; ayrı numaralı invariant test EKLENMEDİ — run() çağıran "
-            "bir test özyineleme yaratırdı; davranış canlıda önbellek total=46 + age_seconds dolu ile doğrulanır.)"},
-    {"id": "Z23", "date": "2026-08-25 03:30", "area": "KOŞULLU DÜŞÜNME ESKALASYONU: önce düşünmesiz AI incelemesi; yalnız 'gri bölge/durum' dekontlarda ikinci düşünmeli tur (varsayılan KAPALI)", "test": 46,
-     "bug": "Web servisi her fotoğrafı düşünmesiz tek AI turuyla değerlendiriyordu; ince desenleri (ör. İş "
-            "Bankası dekontundaki '8888/8888' dolgu referansı, dekont<işlem tarihi) yakalayamayıp 'gerçek' "
-            "diyordu. Düşünmeyi her dekontta açmak ise ~3-5× maliyet demek.",
-     "fix": "ESKALASYON_POLITIKASI.md (tüm bankalar): Her dekont ÖNCE düşünmeden AI incelemesine girer. Bulgular/"
-            "AI 'sahte' diyorsa ya da belge kesin temizse düşünme AÇILMAZ. Yalnız bir 'DURUM' (AI belirsiz / "
-            "düşük-güvenli %40-70 bayrak / fotoğraf image-tavanında güçlü bulgu yok / dijital-olmalı belgenin "
-            "fotoğrafı / bilinmeyen banka / kara-liste yakın-eşleşme) varsa TEK düşünmeli tur atılır ve esas "
-            "alınır. TUTAR tetikleyicisi YOK. ai_adjudicator.should_escalate_to_thinking + adjudicate(thinking_"
-            "budget) + analyze koşullu ikinci tur. Varsayılan KAPALI (DEKONT_THINK_ENABLED=1). Test #46 karar "
-            "mantığını kilitler; canlı düşünme davranışı bayrak açılınca doğrulanır."},
-    {"id": "Z22", "date": "2026-08-24 15:00", "area": "KATMAN 2: YZ 'adli şüpheci' tarama — her fotoğrafı sahtecilik gözüyle tarar; kırmızı bayraklar skorlanır; AI alanı sadeleşti", "test": 45,
-     "bug": "Motor yalnızca deterministik kuralları (banka-adı↔IBAN, aynı-banka FAST) ve YZ'nin GÖRSEL "
-            "tahrifatını yakalıyordu; 'referansta 8888/8888 dolgu', 'dekont tarihi işlemden önce', 'e-Dekont'un "
-            "fotoğrafı sunulmuş' gibi mantıksal/adli kırmızı bayrakları YZ metinde belirtse bile SKORA "
-            "yansımıyordu. Ayrıca 'Yapay Zeka Değerlendirmesi' alanı, 'Çıkarılan Bilgiler'de zaten olan "
-            "düzeltilmiş alan dökümünü tekrar gösteriyordu.",
-     "fix": "(1) ai_adjudicator prompt: 'ADLİ ŞÜPHECİ TARAMA' görevi + 'celiskiler' çıkışı — YZ her fotoğrafı "
-            "sahtecilik gözüyle tarar (dolgu numara, iç tarih/saat mantığı, banka kodu/ad uyuşmazlığı, "
-            "elektronik belgenin fotoğrafı, imza vb.). (2) analyze: yüksek-güvenli (≥60) celiskiler → tek "
-            "AI_FORENSIC_FLAG bulgusu (ağırlık güvenle ölçekli). (3) scoring: AI_FORENSIC_FLAG → skor ≤45 "
-            "('güvenilir' olamaz). (4) report.html: AI alanından 'düzeltilen alanlar' dökümü KALDIRILDI, yerine "
-            "'Adli şüphe — kırmızı bayraklar' bloğu; düzeltilmiş veriler Çıkarılan Bilgiler'de kalır. Test #45 "
-            "skorlamayı kilitler; prompt davranışı canlıda doğrulanır."},
-    {"id": "Z21", "date": "2026-08-24 14:30", "area": "KULLANICI KURALI: YZ yorumu NETLEŞMİŞ veriyle uzlaştırılır (gerçek→sahte) + denetim kapsamı maddeleri netleştirildi", "test": 44,
-     "bug": "(1) YZ tek geçişte hem alan düzeltiyor hem hüküm veriyordu; bir alanı 'net okunamadı' deyip "
-            "çelişkiyi mazur görüp 'gerçek' diyordu (IBAN'ı corrected_fields'a yazdığı hâlde). Uzlaştırma "
-            "kapısı yalnız TEK yöndeydi (sahte→belirsiz). (2) Denetim kapsamı maddeleri okunamayan veriyle "
-            "genel/yanıltıcı yazıyordu: IBAN karşılaştırması 'iki taraf okunamadı' (hangi taraf belirsiz), "
-            "TCKN 'okunamadı/boş' (şablonda alan yokken bile), Tutar 'ücret/toplam eksik' (ücret DOLU olsa "
-            "bile, toplam satırı olmayan şablonda her seferinde 'hata'), Üretim 'EXIF yok' (nasıl oluştuğu/"
-            "düzenlendiği yazılmıyordu).",
-     "fix": "(1) verdicts.escalate_verdict_on_hard_findings + analyze uzlaştırma kapısına TERS yön: YZ 'gerçek/"
-            "belirsiz' dese de NETLEŞMİŞ bulgularda KESİN çelişki (RECEIVER_BANK_MISMATCH vb.) varsa hüküm "
-            "'sahte'ye çekilir, verdict_ham korunur, gerekçeye netleşmiş-veri notu eklenir. (2) coverage.py: "
-            "IBAN karşılaştırması hangi tarafın eksik olduğunu (gönderici IBAN dekontta YOK/ihraççıdan biliniyor) "
-            "yazar; TCKN şablonda alan yoksa 'yapıldı: alan yok' der; Tutar toplam satırı olmayan şablonda "
-            "'kusur değil' der; Üretim maddesi oluşturma yolu (recapture/ekran görüntüsü/foto) + düzenleme izini "
-            "(ELA/zemin/gürültü) yazar. Test #44 kilitler."},
-    {"id": "Z20", "date": "2026-08-24 14:00", "area": "KULLANICI KURALI: AI'ın okuduğu bank_stated boş alana uygulanır → banka-adı↔IBAN kuralı fotoğrafta çalışır", "test": 43,
-     "bug": "Sahte VakıfBank dekontu deploy sonrası hâlâ %72 alıyordu. Gerçek rapor kanıtladı: AI 'receiver."
-            "bank_stated'i 'Türkiye Garanti Bankası A.Ş.' olarak DOĞRU okuyor ve corrected_fields'a koyuyordu, "
-            "AMA apply_corrections 'bank_stated'i HİÇ uygulamıyordu (parts[-1] != 'bank_stated' guard'ı her "
-            "durumda blokluyordu). Sonuç: extracted.receiver.bank_stated='' kalıyor, banka-adı↔IBAN kontrolü "
-            "(bank_stated'e dayanır) atlanıyor. OCR da etiketi 'ALIC] BANKA' gibi bozuk okuduğundan ham-metin "
-            "yolu da tutmuyordu. AI 'gerçek %78' diyerek çelişkiyi ayrıca mazur görüyordu.",
-     "fix": "apply_corrections: 'bank_stated' alanı BOŞsa AI'ın görüntüden okuduğu değeri UYGULA; DOLUsa "
-            "(OCR okumuşsa) KORU (AI ezmesin). Böylece extracted.receiver.bank_stated='Türkiye Garanti "
-            "Bankası A.Ş.' olur, mevcut çelişki kontrolü AI-doğrulanmış veriyle tetiklenir → RECEIVER_BANK_"
-            "MISMATCH, skor ≤8 (KESİN sahte) — AI'ın 'gerçek' yorumundan BAĞIMSIZ. Test #43 kilitler."},
-    {"id": "Z19", "date": "2026-08-24 12:10", "area": "KULLANICI KURALI: yazan banka adı ↔ IBAN banka kodu uyuşmazlığı → KESİN sahte (fotoğrafta da)", "test": 41,
-     "bug": "Dekontta ALICI BANKA olarak 'Türkiye Garanti Bankası' yazıp alıcı IBAN'ın banka kodu BAŞKA "
-            "bankaya (ör. 00010 Ziraat / 00067 Yapı Kredi) ait olan sahte VakıfBank dekontları yalnız %72 "
-            "alıyordu (image_only tavanı = hiçbir güçlü bulgu yok). İki neden: (1) deterministik "
-            "RECEIVER_BANK_MISMATCH FOTOĞRAFTA bastırılıyordu; (2) mevcut kontrol IBAN-otoritesiyle EZİLEN "
-            "'receiver.bank' alanına bakıyordu, dekontta YAZAN adı değil → yazan=IBAN çıkıp çelişki doğmuyordu.",
-     "fix": "authenticity.bank_name_iban_contradiction(): YAZAN banka adını HAM METİNDEN ('ALICI/GÖNDEREN "
-            "BANKA' etiketi) alır, o tarafın GEÇERLİ (mod-97) IBAN'ının banka koduyla karşılaştırır; farklı "
-            "TANINAN bankalar → RECEIVER/SENDER_BANK_MISMATCH (critical). analyze.py bunu FOTOĞRAF-baskılamasına "
-            "TABİ OLMADAN çağırır (geçerli IBAN + açıkça yazan tanınan ad = güvenilir). scoring: bu kodlar skoru "
-            "≤8'e çeker (KESİN sahte). Test #41 kilitler."},
-    {"id": "Z18", "date": "2026-08-24 12:10", "area": "KULLANICI KURALI: FAST + gönderici=alıcı banka → KESİN sahte; 'FAST Giden Anlık Ödeme' FAST tanınır", "test": 42,
-     "bug": "detect_transfer_rail 'FAST Giden Anlık Ödeme' (VakıfBank başlığı) ibaresini FAST saymıyordu "
-            "('giden fast' arıyordu, sıralama ters) → bu bankanın FAST dekontlarında rail hiç FAST çıkmıyor, "
-            "dolayısıyla FAST+aynı-banka (RAIL_SAMEBANK_MISMATCH) çelişkisi hiç değerlendirilmiyordu.",
-     "fix": "detect_transfer_rail'e 'fast giden' / 'fast gelen' / 'fast anlik' işaretleri eklendi. check_rail_bank "
-            "(FAST/EFT ama gönderici ve alıcı IBAN aynı banka → RAIL_SAMEBANK_MISMATCH, skor ≤6) artık bu "
-            "dekontlarda da tetiklenir. Test #42 kilitler."},
+    {"id": "Z19", "date": "2026-08-24 06:40", "area": "ALICI BANKA ÇELİŞKİSİ fotoğrafta da yakalanıyor (geçerli IBAN ise): sahadaki VakıfBank yanlış-negatifi", "test": 43,
+     "bug": "Sahada VakıfBank fotoğrafı: 'ALICI BANKA: Türkiye Garanti Bankası A.Ş.' yazarken alıcı IBAN "
+            "TR20 0001 00... = 00010 (Ziraat). Gerçek bir dekontta alıcı banka IBAN'dan türetilir → çelişemez; "
+            "bu güçlü bir tahrifat işareti. Ama servis 'gerçek, skor 72, düşük risk' dedi (yanlış-negatif). "
+            "Neden: RECEIVER_BANK_MISMATCH tüm fotoğraf/OCR taramalarında KOŞULSUZ bastırılıyordu (OCR IBAN'ı "
+            "yanlış okuyabilir gerekçesiyle).",
+     "fix": "Bastırma koşullandırıldı: alıcı IBAN mod-97 GEÇERSİZSE fotoğrafta bastırılır (OCR hatası olabilir); "
+            "GEÇERLİYSE fotoğrafta da GÖSTERİLİR. Gerekçe: geçerli bir IBAN'ın OCR artefaktı olma ihtimali yok "
+            "denecek kadar düşük (tek hane hatası mod-97'yi bozar), dolayısıyla etiketle çelişkisi gerçek "
+            "tahrifattır. IBAN_INVALID/ISSUER_IBAN_MISMATCH bastırması aynen korundu. Test #43 kilitler.",
+     "not": "Kullanıcı test dekontu; 'ver servisin verdiği cevabı da incele' — servis çelişkiyi kaçırıyordu, giderildi."},
+    {"id": "Z18", "date": "2026-08-24 04:25", "area": "BANKA-BAZLI İYİLEŞTİRMELER + DOUBLE-CHECK: skor %100'de bile AI teyidi; QNB vision rail eskalasyonu; REF-no ±1 tolerans", "test": 42,
+     "bug": "Son taramaların banka-bazlı teşhisi: (1) Kullanıcı, skor %100 olsa da AI'ın çift-kontrol yapmasını "
+            "istedi — should_adjudicate temiz dijital PDF'lerde AI'ı çağırmıyordu (Garanti PDF'lerde ai_ok=0). "
+            "(2) QNB fotoğraflarında tesseract 'GİDEN FAST EFT'/'GİDEN EFT' ücret/rail etiketini okuyamayınca "
+            "kural motoru rail'i kaçırıyor; AI görüntüden okusa bile çapraz-kontrol yalnız EFT ekliyordu, FAST/"
+            "HAVALE eklenmiyordu → işlem türü ekrana boş geliyordu. (3) 03:37 QNB PDF'inde REF_ID_LENGTH_MISMATCH "
+            "yanlış-pozitifi: profil sadece 3 örnekten türetildiği için tek-değerli (sorgu_no={10}) ve gerçek "
+            "dekont 1 hane oynayınca sapma sanılıyordu.",
+     "fix": "(1) should_adjudicate artık HER dekontta True (double-check); güvenlik: AI çelişki yaratamaz, "
+            "7.96 kapısı kanıtsız 'sahte'yi 'belirsiz'e çevirir, skor/kararı DÜŞÜRMEZ. (2) c2-b bloğu: kural "
+            "motoru rail'i HİÇ üretmediğinde AI'ın okuduğu FAST/HAVALE de RAIL_IS_* olarak eklenir (yalnız "
+            "hiçbir rail kodu yokken; kural motoru rail'i OTORİTER). (3) REF-no uzunluğuna ±1 hane toleransı — "
+            "yalnız 2+ hane sapma yakalanır. Test #41 (double-check) + #42 (±1 tolerans) kilitler. Ziraat "
+            "CONSISTENCY_FAIL incelendi: fotoğrafta zaten info (weight 0), skoru düşürmüyor → düzeltme gerekmedi.",
+     "not": "Kullanıcı kuralı: 'skor %100 olsa da AI çağır, double-check olsun' + banka-bazlı teşhis iyileştirmeleri."},
     {"id": "Z17", "date": "2026-08-24 04:05", "area": "BÜTÜNSEL KONTROL-ÇAKIŞMASI DENETİMİ: bir kontrolün diğerini ezdiği 4 yol kapatıldı (alt-ajan analizi)", "test": 40,
      "bug": "Tüm pipeline 'bir kontrol diğerini eziyor mu' diye denetlendi. Bulunan gerçek çakışmalar: "
             "(1) KRİTİK: _remove_codes yalnız 'findings'e uygulanıyordu; _post_ai ekleme döngüsü kaldırılan kodu "
@@ -1538,244 +1441,56 @@ def _t40_definitive_eft_fee_protection():
     return ok, f"gec-eft={a}, eft-tutari={b}, fast-degil={c}, defter-tuzagi-yok={d}"
 
 
-def _t41_receiver_bankname_iban_code_mismatch():
-    """(KULLANICI KURALI) Dekontta YAZAN alıcı banka adı ile alıcı IBAN'ın banka kodu farklı
-    bankaları gösteriyorsa KESİN SAHTE — fotoğrafta da tetiklenmeli (geçerli IBAN + yazan ad).
-    Gerçek olay: VakıfBank dekontu 'ALICI BANKA: Türkiye Garanti Bankası' yazıp IBAN kodu 00010
-    (Ziraat) / 00067 (Yapı Kredi) taşıyordu; sahte olmasına rağmen %72 alıyordu."""
-    import authenticity as A
-    txt = ("İŞLEM TÜRÜ  FAST Giden Anlık Ödeme\n"
-           "ALICI BANKA  Türkiye Garanti Bankası A.Ş.   SORGU NO 2869688238\n"
-           "ALICI HESAP NO / IBAN  TR20 0001 0027 1897 1593 9850 01   İŞLEM NO 2026082120159022")
-    rcv = "TR200001002718971593985001"                     # geçerli; banka kodu 00010 = Ziraat
-    codes = {d["code"] for d in A.bank_name_iban_contradiction(txt, "", rcv)}
-    if "RECEIVER_BANK_MISMATCH" not in codes:
-        return False, f"Garanti yazan + Ziraat IBAN çelişkisi YAKALANMADI: {codes}"
-    # Yanlış-pozitif koruması: yazan banka = IBAN bankası (Ziraat=Ziraat) → tetiklenMEmeli
-    txt_ok = "ALICI BANKA  T.C. Ziraat Bankası\nALICI HESAP NO / IBAN  TR20 0001 0027 1897 1593 9850 01"
-    if any(d["code"] == "RECEIVER_BANK_MISMATCH" for d in A.bank_name_iban_contradiction(txt_ok, "", rcv)):
-        return False, "Ziraat=Ziraat iken YANLIŞ-POZİTİF mismatch"
-    return True, "Alıcı banka adı↔IBAN kodu çelişkisi (Garanti≠Ziraat) KESİN yakalanıyor; eşleşmede FP yok."
+def _t41_ai_always_double_checks():
+    """DOUBLE-CHECK (kullanıcı kuralı): skor %100 / dekont tertemiz olsa BİLE her dekont YZ'ye gitmeli.
+    should_adjudicate her durumda True dönmeli. Testler: (a) tertemiz dijital PDF (bulgu yok, tüm alanlar
+    dolu) → True; (b) neden listesinde 'double-check' geçmeli; (c) tetikli durum (kritik bulgu) → yine True."""
+    import ai_adjudicator as _aj
+    clean = {"sender": {"name": "AHMET", "iban": "TR330006100519786457841326"},
+             "receiver": {"name": "MEHMET", "iban": "TR190001009011147534405001"},
+             "amount": {"value": 100.0},
+             "transaction": {"document_no": "123456", "ref_no": "789012", "sequence_number": "1"}}
+    go1, r1 = _aj.should_adjudicate([], clean, "pdf")           # tertemiz dijital PDF
+    go2, r2 = _aj.should_adjudicate([{"code": "AMOUNT_MISMATCH", "severity": "critical"}], clean, "pdf")
+    a = go1 is True
+    b = any("double-check" in x.lower() or "çift-kontrol" in x.lower() for x in r1)
+    c = go2 is True
+    ok = a and b and c
+    return ok, f"temiz-pdf-de-cagrilir={a}, double-check-nedeni={b}, tetikli-de-cagrilir={c}"
 
 
-def _t42_fast_samebank_definitive_fake():
-    """(KULLANICI KURALI) İşlem FAST görünüyor ama gönderici ve alıcı IBAN AYNI bankadaysa KESİN
-    SAHTE (FAST bankalararası; aynı banka içi HAVALE olur). Ayrıca 'FAST Giden Anlık Ödeme'
-    başlığı (VakıfBank) FAST olarak tanınmalı."""
-    import authenticity as A
-    if A.detect_transfer_rail("İŞLEM TÜRÜ  FAST Giden Anlık Ödeme") != "fast":
-        return False, "'FAST Giden Anlık Ödeme' FAST olarak TANINMADI"
-    s = _gen_iban("00015", "0000000000012345")             # VakıfBank
-    r = _gen_iban("00015", "0000000000067890")             # AYNI banka, farklı hesap
-    rb = A.check_rail_bank("İŞLEM TÜRÜ  FAST Giden Anlık Ödeme", s, r, [s, r])
-    if not rb or rb.get("code") != "RAIL_SAMEBANK_MISMATCH":
-        return False, f"FAST + aynı banka çelişkisi YAKALANMADI: {rb}"
-    # Yanlış-pozitif koruması: farklı banka → tetiklenMEmeli
-    r2 = _gen_iban("00062", "0000000000067890")            # Garanti (farklı banka)
-    if A.check_rail_bank("İŞLEM TÜRÜ  FAST Giden Anlık Ödeme", s, r2, [s, r2]):
-        return False, "Farklı bankada YANLIŞ-POZİTİF RAIL_SAMEBANK"
-    return True, "FAST+aynı-banka KESİN sahte; 'FAST Giden Anlık Ödeme' FAST tanınıyor; farklı bankada FP yok."
+def _t42_ref_id_length_tolerance():
+    """REFERANS NUMARA UZUNLUĞU ±1 HANE TOLERANSI (yanlış-pozitif azaltma): profiller sadece 3 örnekten
+    türetildiği için izinli uzunluk çoğu zaman TEK değer (QNB sorgu_no={10}). Gerçek dekontta numara 1 hane
+    oynayabilir → yalnız 2+ hane sapma SAPMA sayılmalı. Testler: (a) 10 hane (tam) → bulgu YOK; (b) 11 hane
+    (±1) → bulgu YOK; (c) 7 hane (3 sapma) → REF_ID_LENGTH_MISMATCH VAR."""
+    import reference_profiles as _rp
+    def _has_mismatch(digits):
+        out = _rp.check_against_reference("qnb", f"SORGU NO: {'1'*digits}")
+        return any(o.get("code") == "REF_ID_LENGTH_MISMATCH" for o in out)
+    a = not _has_mismatch(10)     # tam eşleşme → yok
+    b = not _has_mismatch(11)     # ±1 tolerans → yok
+    c = _has_mismatch(7)          # 3 hane sapma → yakalanır
+    ok = a and b and c
+    return ok, f"tam-eslesme-yok={a}, ±1-tolerans-yok={b}, 3-sapma-yakalanir={c}"
 
 
-def _t43_ai_fills_empty_bank_stated():
-    """(KULLANICI KURALI) AI'ın GÖRÜNTÜDEN okuduğu YAZILI banka adı (bank_stated), alan BOŞsa UYGULANMALI —
-    OCR bu alanı çoğu düzende dolduramıyor (etiketi 'ALIC] BANKA' gibi bozuk okuyor), boş kalırsa banka-adı↔
-    IBAN çelişki kuralı fotoğrafta ASLA çalışmaz. Ama OCR'ın okuduğu DOLU bir bank_stated AI ile EZİLMEMELİ.
-    Gerçek olay: AI 'Türkiye Garanti Bankası A.Ş.' döndürüyordu ama apply_corrections onu bloke ediyordu."""
-    import ai_adjudicator as AJ
-    # (1) BOŞ bank_stated → AI'ın görüntüden okuduğu değer uygulanır
-    ex = {"receiver": {"iban": "", "bank_stated": ""}}
-    adj = {"corrected_fields": {"receiver.bank_stated": "Türkiye Garanti Bankası A.Ş.",
-                                "receiver.iban": "TR200001002718971593985001"}}
-    out = AJ.apply_corrections(ex, adj)
-    if not (out.get("receiver", {}).get("bank_stated") or ""):
-        return False, "BOŞ bank_stated AI değeriyle DOLDURULMADI"
-    # (2) DOLU bank_stated → korunur (AI ezmez)
-    ex2 = {"receiver": {"iban": "", "bank_stated": "VakıfBank"}}
-    adj2 = {"corrected_fields": {"receiver.bank_stated": "Garanti"}}
-    out2 = AJ.apply_corrections(ex2, adj2)
-    if out2.get("receiver", {}).get("bank_stated") != "VakıfBank":
-        return False, "DOLU bank_stated AI ile EZİLDİ (korunmalıydı)"
-    return True, "bank_stated: boşsa AI'ın görüntüden okuması doldurur, doluysa korunur (çelişki kuralı önkoşulu)."
-
-
-def _t44_ai_verdict_escalated_on_hard_finding():
-    """(KULLANICI KURALI) YZ 'gerçek/belirsiz' dediği hâlde NETLEŞMİŞ veride KESİN çelişki (ör. RECEIVER_BANK_
-    MISMATCH) varsa, rapordaki YZ hükmü 'sahte'ye çekilmeli (verdict_ham korunur) ve gerekçeye netleşmiş-veri
-    notu eklenmeli. YZ, okuyamadığı veriyle değil netleşmiş/düzeltilmiş veriyle konuşmalı."""
-    import verdicts as V
-    # (1) YZ 'gerçek' + kesin çelişki → 'sahte'ye çekilir
-    ai = {"verdict": "gerçek", "reasoning_tr": "çelişki yok."}
-    hard = [("RECEIVER_BANK_MISMATCH", "Alıcı banka Garanti ↔ IBAN kodu Ziraat")]
-    out, changed = V.escalate_verdict_on_hard_findings(ai, hard, "gerçek")
-    if not changed or out.get("verdict") != "sahte" or out.get("verdict_ham") != "gerçek":
-        return False, f"kesin çelişki varken YZ hükmü 'sahte'ye çekilmedi: {out.get('verdict')}"
-    if "UZLAŞTIRMA" not in (out.get("reasoning_tr") or ""):
-        return False, "gerekçeye netleşmiş-veri uzlaştırma notu eklenmedi"
-    # (2) Kesin çelişki YOKken YZ 'gerçek' → DOKUNULMAZ (yanlış-pozitif olmaz)
-    ai2 = {"verdict": "gerçek", "reasoning_tr": "temiz."}
-    out2, changed2 = V.escalate_verdict_on_hard_findings(ai2, [], "gerçek")
-    if changed2 or out2.get("verdict") != "gerçek":
-        return False, "çelişki yokken YZ hükmü gereksiz değiştirildi (FP)"
-    return True, "YZ hükmü: kesin çelişki varsa netleşmiş veriyle 'sahte'ye çekilir; yoksa korunur."
-
-
-def _t45_ai_forensic_flag_scored():
-    """(KATMAN 2 — adli şüpheci tarama) YZ'nin görsel-tahrifat DIŞINDA bulduğu yüksek-güvenli kırmızı bayrak
-    (celiskiler → AI_FORENSIC_FLAG) skoru 'güvenilir' olamayacak seviyeye (≤45) çeker; bayrak yokken image_only
-    tavanı (72) korunur (yanlış-pozitif yok)."""
-    import scoring
-    from forensics import Finding
-    finds = [Finding("AI_FORENSIC_FLAG", "high", "content", 32, tr="ref 8888/8888 tekrarlı dolgu", en="")]
-    res = scoring.compute_score(finds, "image_only")
-    if res.authenticity_score > 45:
-        return False, f"AI_FORENSIC_FLAG skoru ≤45'e çekmedi: {res.authenticity_score}"
-    res2 = scoring.compute_score([], "image_only")
-    if res2.authenticity_score < 60:
-        return False, f"bayrak yokken skor gereksiz düştü (FP): {res2.authenticity_score}"
-    return True, f"AI_FORENSIC_FLAG → skor {res.authenticity_score} (≤45); bayrak yokken tavan {res2.authenticity_score} korunur."
-
-
-def _t46_thinking_escalation_policy():
-    """ESKALASYON POLİTİKASI (bkz. ESKALASYON_POLITIKASI.md): önce DÜŞÜNMESİZ AI; 'sahte' ya da kesin temizde
-    düşünme AÇILMAZ; yalnız 'DURUM' (AI belirsiz / düşük-güvenli bayrak / fotoğraf tavanda güçlü bulgu yok /
-    e-belge fotoğrafı / bilinmeyen banka / kara-liste) varsa TETİKLENİR. Tutar tetikleyicisi YOK."""
-    import ai_adjudicator as AJ
-    from forensics import Finding
-    # (1) zaten sahte → tetiklenmez
-    go, _ = AJ.should_escalate_to_thinking({"verdict": "sahte"}, [], {}, "image", "ocr")
-    if go:
-        return False, "sahte iken düşünme AÇILDI (açılmamalı)"
-    # (2) deterministik kesin bulgu → tetiklenmez
-    go, _ = AJ.should_escalate_to_thinking({"verdict": "gerçek"},
-            [Finding("RECEIVER_BANK_MISMATCH", "critical", "content", 46, tr="x", en="x")], {}, "image", "ocr")
-    if go:
-        return False, "kesin bulgu varken düşünme AÇILDI"
-    # (3) fotoğraf + güçlü bulgu yok + AI gerçek → TETİKLENİR ('İş Bankası' durumu)
-    go, why = AJ.should_escalate_to_thinking({"verdict": "gerçek"},
-            [Finding("IMAGE_ONLY_DOC", "info", "content", 0, tr="x", en="x"),
-             Finding("RAIL_IS_FAST", "info", "content", 0, tr="x", en="x")],
-            {"raw_text": "x"}, "image", "ocr")
-    if not go:
-        return False, f"fotoğraf-tavan durumunda düşünme AÇILMADI ({why})"
-    # (4) AI belirsiz → TETİKLENİR
-    go, _ = AJ.should_escalate_to_thinking({"verdict": "belirsiz"}, [], {}, "image", "ocr")
-    if not go:
-        return False, "belirsizde düşünme AÇILMADI"
-    # (5) temiz dijital PDF + bulgu yok + gerçek → tetiklenMEZ (yanlış-pozitif olmasın)
-    go, _ = AJ.should_escalate_to_thinking({"verdict": "gerçek"}, [], {}, "pdf", "digital")
-    if go:
-        return False, "temiz dijital PDF'te gereksiz düşünme (FP)"
-    # (6) düşük-güvenli (%55) bayrak → TETİKLENİR
-    go, _ = AJ.should_escalate_to_thinking(
-            {"verdict": "gerçek", "celiskiler": [{"alan": "ref", "aciklama": "x", "guven": 55}]}, [], {}, "pdf", "digital")
-    if not go:
-        return False, "düşük-güvenli bayrakta düşünme AÇILMADI"
-    return True, "Eskalasyon: sahte/kesin-temizde açılmaz; belirsiz/düşük-güven/foto-tavan'da açılır; tutar tetikleyicisi yok."
-
-
-def _t47_pdf_no_text_layer_hard_stop():
-    """PDF DİJİTAL METİN KATMANI KAPISI (kullanıcı kuralı — GENEL, tüm belge tipleri): input_kind=='pdf'
-    ama seçilebilir dijital metin YOKSA (bir fotoğraf/ekran görüntüsü PDF'e sarılmış) → PDF_NO_TEXT_LAYER
-    (KESİN sahte, skor ≤8) ve analiz BURADA kesilir: OCR/Vision/YZ çalışMAZ, yanlış NOT_A_RECEIPT ya da
-    STATEMENT_BALANCE_BREAK ÜRETİLMEZ. İki-yönlü kilit: (a) foto-PDF → tetiklenir + AI atlanır (AI açık olsa
-    bile); (b) doğrudan GÖRSEL yüklemesi (input_kind=='image') → tetiklenMEZ (foto zaten görseldir, kural
-    yalnız PDF kabına sarılmış görsele uygulanır). (c) dijital-metin PDF'lerde tetiklenmediği tüm bataryayla
-    (çok sayıda geçerli dijital dekont senaryosu) zaten doğrulanır."""
-    import analyze, ai_adjudicator, io
-    from PIL import Image
-    _b = io.BytesIO()
-    Image.new("RGB", (900, 600), "white").save(_b, format="PDF")   # metin katmanı YOK foto-PDF
-    photo_pdf = _b.getvalue()
-    o_ai = ai_adjudicator.is_enabled
-    ai_adjudicator.is_enabled = lambda: True   # sunucu gibi AI AÇIK; hard-stop yine de AI'ı atlamalı
-    try:
-        rep = analyze.analyze_document(photo_pdf, "x.pdf", input_kind="pdf", use_store=False)
-        rep_img = analyze.analyze_document(photo_pdf, "x.jpg", input_kind="image", use_store=False)
-    finally:
-        ai_adjudicator.is_enabled = o_ai
-    codes = {f.get("code") for f in rep.get("findings_tr", [])}
-    codes_img = {f.get("code") for f in rep_img.get("findings_tr", [])}
-    sc = rep.get("score", {}) or {}
-    fired = "PDF_NO_TEXT_LAYER" in codes
-    low = (sc.get("authenticity_score") if sc.get("authenticity_score") is not None else 99) <= 8
-    ai_skipped = rep.get("yapay_zeka_degerlendirmesi") is None
-    no_false = not ({"NOT_A_RECEIPT", "STATEMENT_BALANCE_BREAK"} & codes)
-    ts_none = (rep.get("extracted", {}) or {}).get("text_source") == "none"
-    img_not_fired = "PDF_NO_TEXT_LAYER" not in codes_img
-    ok = fired and low and ai_skipped and no_false and ts_none and img_not_fired
-    return ok, (f"foto-pdf-tetik={fired}, skor≤8={low}, AI-atlandı={ai_skipped}, yanlış-kod-yok={no_false}, "
-                f"text_source=none={ts_none}, görsel-tetiklemez={img_not_fired}")
-
-
-def _t48_deep_thinking_verdict_authoritative():
-    """DERİN (DÜŞÜNMELİ) TUR OTORİTESİ (kullanıcı kuralı): Düşünme turu gri-bölgede AÇILDIYSA ve hükmü
-    'şüpheli' ise, tek tek bayraklar <60 güvende (AI_FORENSIC_FLAG yok) kalsa BİLE bu skora YANSIR
-    (AI_DEEP_DOUBT → skor ≤55 = 'Orta Risk / Şüpheli') ve YZ hükmü 'belirsiz'e ÇEKİLMEZ. İki-yönlü:
-    (a) düşünme AÇIK (dusunme.acildi=True) → AI_DEEP_DOUBT + skor≤55 + hüküm 'şüpheli' KALIR;
-    (b) düşünme KAPALI (sığ tek tur) → AI_DEEP_DOUBT YOK ve şüpheli, somut kanıt yokken 'belirsiz'e çekilir."""
-    import analyze, ai_adjudicator, banks, ocr, vision_ocr
-    from PIL import Image
-    def vi(body):
-        for kk in range(100):
-            c = "TR%02d%s" % (kk, body)
-            if banks.iban_valid(c) is True:
-                return c
-    isb = vi("0006400000000123456789")      # İş Bankası 00064
-    vak = vi("0001500000000987654321")      # VakıfBank 00015
-    ocr_text = "TÜRKİYE İŞ BANKASI\nFAST Giden\nSorgu No 21.08.2026/447/8888/8888\n"
-    adj = {"verdict": "şüpheli", "confidence": 58,
-           "reasoning_tr": "IBAN'lar geçerli, banka kodları uyumlu; ancak e-Dekont'un fotoğrafı + imza şüphesi.",
-           "corrected_fields": {"sender.iban": isb, "receiver.iban": vak,
-                                "sender.name": "İSMAİL VEDAT GÜLER", "receiver.name": "Cebrail Başıgüzel",
-                                "amount.value": 75000.0},
-           "celiskiler": [{"alan": "İmza", "aciklama": "e-Dekont üzerinde el yazısı imza", "guven": 55}],
-           "gorsel_tahrifat": []}
-    o_ai = (ai_adjudicator.is_enabled, ai_adjudicator.should_adjudicate, ai_adjudicator.adjudicate,
-            ai_adjudicator.is_thinking_enabled, ai_adjudicator.should_escalate_to_thinking)
-    o_v = (vision_ocr.is_configured, vision_ocr.extract_from_image, ocr.ocr_pdf_candidates,
-           ocr.ocr_available, ocr.render_page_to_image)
-    def _setup():
-        ai_adjudicator.is_enabled = lambda: True
-        ai_adjudicator.should_adjudicate = lambda *a, **k: (True, ["test"])
-        ai_adjudicator.adjudicate = lambda *a, **k: dict(adj)
-        vision_ocr.is_configured = lambda: True
-        vision_ocr.extract_from_image = lambda *a, **k: {
-            "bank": "Türkiye İş Bankası", "sender_iban": isb, "receiver_iban": vak,
-            "sender_name": "İSMAİL VEDAT GÜLER", "receiver_name": "Cebrail Başıgüzel"}
-        ocr.ocr_available = lambda: True
-        ocr.ocr_pdf_candidates = lambda *a, **k: [ocr_text]
-        ocr.render_page_to_image = lambda *a, **k: Image.new("RGB", (600, 400), "white")
-    try:
-        # (a) DÜŞÜNME AÇIK
-        _setup()
-        ai_adjudicator.is_thinking_enabled = lambda: True
-        ai_adjudicator.should_escalate_to_thinking = lambda *a, **k: (True, "düşük-güvenli bayrak (%55)")
-        rep_on = analyze.analyze_document(_blank_pdf(), "x.png", input_kind="image", use_store=False)
-        # (b) DÜŞÜNME KAPALI
-        _setup()
-        ai_adjudicator.is_thinking_enabled = lambda: False
-        ai_adjudicator.should_escalate_to_thinking = lambda *a, **k: (False, "kapalı")
-        rep_off = analyze.analyze_document(_blank_pdf(), "x.png", input_kind="image", use_store=False)
-    finally:
-        (ai_adjudicator.is_enabled, ai_adjudicator.should_adjudicate, ai_adjudicator.adjudicate,
-         ai_adjudicator.is_thinking_enabled, ai_adjudicator.should_escalate_to_thinking) = o_ai
-        (vision_ocr.is_configured, vision_ocr.extract_from_image, ocr.ocr_pdf_candidates,
-         ocr.ocr_available, ocr.render_page_to_image) = o_v
-    codes_on = {f.get("code") for f in rep_on.get("findings_tr", [])}
-    sc_on = (rep_on.get("score", {}) or {}).get("authenticity_score")
-    aj_on = rep_on.get("yapay_zeka_degerlendirmesi") or {}
-    deep_fired = "AI_DEEP_DOUBT" in codes_on
-    scored = (sc_on is not None and sc_on <= 55)          # 'düşük risk' (≥70) OLAMAZ
-    verdict_kept = (str(aj_on.get("verdict") or "").lower() in ("şüpheli", "supheli"))
-    # (b) düşünme kapalı: AI_DEEP_DOUBT yok + hüküm belirsize çekildi
-    codes_off = {f.get("code") for f in rep_off.get("findings_tr", [])}
-    aj_off = rep_off.get("yapay_zeka_degerlendirmesi") or {}
-    off_no_deep = "AI_DEEP_DOUBT" not in codes_off
-    off_belirsiz = (str(aj_off.get("verdict") or "").lower() == "belirsiz")
-    ok = deep_fired and scored and verdict_kept and off_no_deep and off_belirsiz
-    return ok, (f"[düşünme AÇIK] AI_DEEP_DOUBT={deep_fired}, skor={sc_on}(≤55={scored}), hüküm-şüpheli-kaldı={verdict_kept} | "
-                f"[düşünme KAPALI] deep-yok={off_no_deep}, belirsiz={off_belirsiz}")
+def _t43_receiver_bank_mismatch_valid_iban():
+    """ALICI BANKA ÇELİŞKİSİ — GEÇERLİ IBAN İSE FOTOĞRAFTA DA GÖSTER: Sahada görülen gerçek yanlış-negatif
+    (VakıfBank fotoğrafı: 'ALICI BANKA: Garanti' yazarken alıcı IBAN 00010=Ziraat; servis 'gerçek 72' dedi).
+    Kural: alıcı IBAN mod-97 GEÇERLİYSE etiketle çelişkisi GERÇEK tahrifat (geçerli IBAN OCR artefaktı olamaz)
+    → fotoğrafta bastırılmamalı. Testler: (a) deterministic_checks bu çelişkide RECEIVER_BANK_MISMATCH üretir;
+    (b) IBAN mod-97 geçerli (yani fotoğraf bastırma koşulu 'geçersiz' SAĞLANMAZ → gösterilir);
+    (c) aynı banka (Ziraat etiketi + Ziraat IBAN) → çelişki YOK."""
+    import authenticity as _a, banks as _b
+    ZIRAAT_IBAN = "TR200001002718971593985001"   # 00010 Ziraat, mod-97 geçerli
+    b_valid = _b.iban_valid(ZIRAAT_IBAN) is True
+    out_mis = _a.deterministic_checks("vakif", "", ZIRAAT_IBAN, "Türkiye Garanti Bankası A.Ş.", [ZIRAAT_IBAN])
+    a = any(d["code"] == "RECEIVER_BANK_MISMATCH" for d in out_mis)
+    out_ok = _a.deterministic_checks("vakif", "", ZIRAAT_IBAN, "T.C. Ziraat Bankası", [ZIRAAT_IBAN])
+    c = not any(d["code"] == "RECEIVER_BANK_MISMATCH" for d in out_ok)
+    ok = a and b_valid and c
+    return ok, f"celiski-uretildi={a}, iban-gecerli(fotoğrafta-gösterilir)={b_valid}, ayni-banka-celiski-yok={c}"
 
 
 _CHECKS = [
@@ -1819,55 +1534,27 @@ _CHECKS = [
     (38, "QNB'ye özel: 'GİDEN EFT'→EFT, 'GİDEN FAST EFT'→FAST; sadece QNB kanalı (rail tüm bankalarda/PDF'de)", _t38_qnb_giden_eft_rule),
     (39, "Tek otoriter rail: RAIL_IS_FAST+RAIL_IS_EFT gibi çelişki nihai raporda kalmaz (düzeltilmiş veri otoriter)", _t39_single_authoritative_rail),
     (40, "Kesin EFT ücret kanıtı ('GEÇ EFT'/'EFT TUTARI') korunur: yanlış IBAN düzeltmesi EFT riskini ezemez", _t40_definitive_eft_fee_protection),
-    (41, "Yazan alıcı/gönderici banka adı ↔ IBAN banka kodu çelişkisi → KESİN sahte (fotoğrafta da)", _t41_receiver_bankname_iban_code_mismatch),
-    (42, "FAST + gönderici=alıcı banka → KESİN sahte; 'FAST Giden Anlık Ödeme' FAST tanınır", _t42_fast_samebank_definitive_fake),
-    (43, "AI boş bank_stated'i görüntüden doldurur (dolu olanı ezmez) → çelişki kuralı fotoğrafta çalışır", _t43_ai_fills_empty_bank_stated),
-    (44, "YZ 'gerçek' dese de netleşmiş veride kesin çelişki varsa hüküm 'sahte'ye çekilir (verdict_ham korunur)", _t44_ai_verdict_escalated_on_hard_finding),
-    (45, "KATMAN 2: YZ adli şüphe kırmızı bayrağı (celiskiler) → AI_FORENSIC_FLAG, skor ≤45 (bayrak yokken tavan korunur)", _t45_ai_forensic_flag_scored),
-    (46, "Koşullu düşünme eskalasyonu: sahte/kesin-temizde açılmaz, yalnız 'durum'da açılır (tutar tetikleyicisi yok)", _t46_thinking_escalation_policy),
-    (47, "PDF metin katmanı yok (foto PDF'e sarılmış) → PDF_NO_TEXT_LAYER, skor ≤8, analiz kesilir (OCR/YZ yok); görsel yüklemesi tetiklemez", _t47_pdf_no_text_layer_hard_stop),
-    (48, "Derin (düşünmeli) tur 'şüpheli' → skora yansır (AI_DEEP_DOUBT, ≤55/Orta-Şüpheli) + hüküm korunur; düşünme kapalıyken sığ şüpheli belirsize çekilir", _t48_deep_thinking_verdict_authoritative),
+    (41, "Double-check: skor %100 olsa da YZ her zaman çağrılır (should_adjudicate hep True)", _t41_ai_always_double_checks),
+    (42, "Referans no uzunluğu ±1 hane toleransı: gerçek dekont yanlış-pozitifi yok, 2+ sapma yakalanır", _t42_ref_id_length_tolerance),
+    (43, "Alıcı banka ≠ IBAN kodu çelişkisi: alıcı IBAN mod-97 geçerliyse fotoğrafta da gösterilir (yanlış-negatif giderildi)", _t43_receiver_bank_mismatch_valid_iban),
 ]
 
 
 def run() -> dict:
-    """Tüm değişmez testlerini çalıştırır. Döner: özet + her testin sonucu + geliştirme günlüğü.
-
-    ÖNEMLİ (canlı sunucu): Test bataryası boyunca YZ değerlendiricisi GLOBAL olarak
-    KAPATILIR. Sebep: sunucuda API anahtarı olduğundan ai_adjudicator.is_enabled True'dur;
-    AI'ı mock'lamayan testler analyze_document çağırınca GERÇEK ağ AI çağrısı yapardı →
-    batarya yavaşlar/asılır, arka plan yeniden-hesabı bitmez, önbellek tazelenmez. Her test
-    zaten kendi ihtiyacı olan AI davranışını yerelde mock'lar (kendi save/restore'u ile),
-    bu global kapatma onların içinde iç içe doğru çalışır. finally ile orijinaller geri yüklenir."""
+    """Tüm değişmez testlerini çalıştırır. Döner: özet + her testin sonucu + geliştirme günlüğü."""
     # Her testi, onu doğuran geliştirme kaydıyla eşleştir → o iyileştirmenin tarih+saati
     _date_by_test = {it["test"]: it["date"] for it in IMPROVEMENTS if it.get("test")}
     checks = []
     passed = 0
-    # --- GLOBAL AI-KAPATMA GUARD'I (yalnız batarya süresince) ---
-    # Yalnız is_enabled kapatılır: analyze.py, AI bloğunu `if is_enabled()` ile geçer;
-    # False iken should_adjudicate/adjudicate HİÇ çağrılmaz → canlı ağ çağrısı olmaz.
-    # should_adjudicate'e DOKUNULMAZ (test #23 onu doğrudan sınar). Kendi is_enabled=True
-    # mock'u yapan testler (ör. #33) kendi save/restore'u ile iç içe doğru çalışır.
-    _ai_saved = None
-    try:
-        import ai_adjudicator as _aj_sc
-        _ai_saved = _aj_sc.is_enabled
-        _aj_sc.is_enabled = lambda: False
-    except Exception:
-        _aj_sc = None
-    try:
-        for cid, name, fn in _CHECKS:
-            try:
-                ok, detail = fn()
-            except Exception as e:
-                ok, detail = False, f"İSTİSNA: {e} | {traceback.format_exc(limit=1)}"
-            if ok:
-                passed += 1
-            checks.append({"id": cid, "name": name, "ok": bool(ok), "detail": detail,
-                           "date": _date_by_test.get(cid, "")})
-    finally:
-        if _aj_sc is not None and _ai_saved is not None:
-            _aj_sc.is_enabled = _ai_saved
+    for cid, name, fn in _CHECKS:
+        try:
+            ok, detail = fn()
+        except Exception as e:
+            ok, detail = False, f"İSTİSNA: {e} | {traceback.format_exc(limit=1)}"
+        if ok:
+            passed += 1
+        checks.append({"id": cid, "name": name, "ok": bool(ok), "detail": detail,
+                       "date": _date_by_test.get(cid, "")})
     return {
         "all_ok": passed == len(_CHECKS),
         "passed": passed,
@@ -1878,128 +1565,3 @@ def run() -> dict:
         "improvements": IMPROVEMENTS,
         "invariant_rules": INVARIANT_RULES,
     }
-
-
-# ==================================================================
-# ÖNBELLEKLİ ÖZ-DENETİM  (ekl: hızlı GET yanıtı için)
-# ------------------------------------------------------------------
-# run() ~40 değişmez testi SENKRON koşar (~45 sn) ve bu, WebFetch /
-# izleme yoklamalarının okuma zaman aşımını (≈10 sn) aşar; uç 499/
-# timeout verir. Bu katman sonucu ARKA PLANDA hesaplar, belleğe +
-# kalıcı diske (/data) yazar ve GET ucunun ANINDA son bilinen sonucu
-# döndürmesini sağlar. Şema run() ile aynıdır; ek alanlar: cached,
-# status, as_of, age_seconds, stale.
-# Ek yarar: run() artık her istekte değil, en çok 10 dk'da bir arka
-# planda koşar → testlerin ai_adjudicator'ı geçici monkeypatch'lediği
-# pencere canlı trafikle çok daha az çakışır.
-# ==================================================================
-import os as _os
-import json as _json
-import time as _time
-import threading as _threading
-
-_CACHE_LOCK = _threading.Lock()
-_CACHE = {"result": None, "computed_monotonic": None, "computing": False}
-_SELF_CHECK_MAX_AGE = int(_os.environ.get("DEKONT_SELF_CHECK_MAX_AGE", "600"))  # sn (10 dk)
-
-
-def _sc_cache_file() -> str:
-    """Sonucu yazacağımız yol: kalıcı disk /data varsa oraya, yoksa /tmp."""
-    candidates = ["/data",
-                  _os.path.dirname(_os.environ.get("DEKONT_DB_PATH", "") or ""),
-                  "/tmp"]
-    for d in candidates:
-        if d and _os.path.isdir(d) and _os.access(d, _os.W_OK):
-            return _os.path.join(d, "self_check_cache.json")
-    return _os.path.join("/tmp", "self_check_cache.json")
-
-
-def _sc_persist(result: dict) -> None:
-    try:
-        with open(_sc_cache_file(), "w", encoding="utf-8") as f:
-            _json.dump(result, f, ensure_ascii=False)
-    except Exception:
-        pass
-
-
-def _sc_load_persisted():
-    try:
-        with open(_sc_cache_file(), "r", encoding="utf-8") as f:
-            return _json.load(f)
-    except Exception:
-        return None
-
-
-def _sc_compute_and_store() -> dict:
-    try:
-        result = run()
-    except Exception as e:
-        result = {"all_ok": None, "status": "error", "error": str(e),
-                  "passed": 0, "total": len(_CHECKS), "checks": [],
-                  "generated_at": _now_tr()}
-    with _CACHE_LOCK:
-        _CACHE["result"] = result
-        _CACHE["computed_monotonic"] = _time.monotonic()
-        _CACHE["computing"] = False
-    _sc_persist(result)
-    return result
-
-
-def _sc_start_bg_compute() -> None:
-    with _CACHE_LOCK:
-        if _CACHE["computing"]:
-            return
-        _CACHE["computing"] = True
-    _threading.Thread(target=_sc_compute_and_store,
-                      name="self_check_warm", daemon=True).start()
-
-
-def start_background_warm() -> None:
-    """Açılışta çağrılır: diskteki son sonucu belleğe alır, arka planda taze hesap başlatır."""
-    persisted = _sc_load_persisted()
-    if persisted is not None:
-        with _CACHE_LOCK:
-            if _CACHE["result"] is None:
-                _CACHE["result"] = persisted
-                # diskten gelenin yaşı bilinmiyor → 'bayat' say, hemen tazele
-    _sc_start_bg_compute()
-
-
-def run_cached(max_age_seconds: int = None) -> dict:
-    """Önbellekteki son öz-denetim sonucunu ANINDA döndürür (WebFetch/izleme dostu).
-    Sonuç yoksa/bayatsa arka planda yeniden hesaplar. run() ile AYNI şema + meta alanlar."""
-    if max_age_seconds is None:
-        max_age_seconds = _SELF_CHECK_MAX_AGE
-    with _CACHE_LOCK:
-        result = _CACHE["result"]
-        computed = _CACHE["computed_monotonic"]
-    now = _time.monotonic()
-    age = None if computed is None else round(now - computed, 1)
-    stale = (computed is None) or (age is not None and age > max_age_seconds)
-    if stale:
-        _sc_start_bg_compute()
-    if result is None:
-        # Henüz hiç sonuç yok (yalnızca ilk-defa açılışta). ALARM ÜRETME.
-        return {
-            "all_ok": None,
-            "status": "computing",
-            "passed": 0,
-            "total": len(_CHECKS),
-            "checks": [],
-            "improvements": IMPROVEMENTS,
-            "invariant_rules": INVARIANT_RULES,
-            "cached": False,
-            "as_of": None,
-            "age_seconds": None,
-            "stale": True,
-            "note": "İlk öz-denetim arka planda hesaplanıyor (~1 dk). Birazdan tekrar deneyin.",
-            "generated_at": _now_tr(),
-            "generated_tz": "Europe/Istanbul",
-        }
-    out = dict(result)
-    out["cached"] = True
-    out["status"] = out.get("status") or "ready"
-    out["as_of"] = result.get("generated_at")
-    out["age_seconds"] = age
-    out["stale"] = bool(stale)
-    return out
