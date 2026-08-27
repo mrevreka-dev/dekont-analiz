@@ -1273,10 +1273,13 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
                             if _go2:
                                 import os as _os_th
                                 _tb = int(_os_th.environ.get("DEKONT_THINK_BUDGET", "3000") or 3000)
+                                # PERFORMANS: düşünme turu zaman aşımı env ile (vars. 25 sn, eskiden 90).
+                                # first-pass (≤20s) + düşünme (≤25s) ≈ ≤45s → client timeout'una takılmaz.
+                                _tt = float(_os_th.environ.get("DEKONT_THINK_TIMEOUT", "25") or 25)
                                 _ai2 = _aj.adjudicate(
                                     _ex_dict, _find_dicts, _auth_aj.bank_key(ex.bank),
                                     pil_image=locals().get("pil"), input_kind=input_kind,
-                                    text_source=extraction.text_source, timeout=90.0, thinking_budget=_tb)
+                                    text_source=extraction.text_source, timeout=_tt, thinking_budget=_tb)
                                 if _ai2 is not None:
                                     _ai2["tetik_nedenleri"] = _reasons
                                     _ai2["dusunme"] = {"acildi": True, "sebep": _why2, "butce": _tb}

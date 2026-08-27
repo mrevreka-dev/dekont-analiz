@@ -366,11 +366,19 @@ def _build_prompt(extraction: dict, findings: list, bank_ctx: str, input_kind: s
 
 
 def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=None,
-               input_kind: str = "pdf", text_source: str = "digital", timeout: float = 45.0,
+               input_kind: str = "pdf", text_source: str = "digital", timeout: float = 0.0,
                thinking_budget: int = 0) -> dict | None:
     """YZ değerlendiricisini çalıştırır. Dönen dict rapora EK alan olarak konur; hata/kapalıysa None."""
     if not is_enabled():
         return None
+    # PERFORMANS: ilk-tur AI zaman aşımı env ile ayarlanır (varsayılan 20 sn, eskiden 45).
+    # API yavaşsa 20 sn'de bırakılır → istek client timeout'una (~45 sn) TAKILMADAN deterministik
+    # sonuçla döner. Düşünme turu kendi (daha kısa) timeout'unu açıkça geçirir.
+    if not timeout or timeout <= 0:
+        try:
+            timeout = float(os.environ.get("DEKONT_AI_TIMEOUT", "20") or 20)
+        except Exception:
+            timeout = 20.0
     api_key = os.environ["ANTHROPIC_API_KEY"]
     model = os.environ.get("DEKONT_ADJUDICATOR_MODEL") or os.environ.get("DEKONT_VISION_MODEL") or DEFAULT_MODEL
     try:
@@ -415,9 +423,9 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
         # budget_tokens kaldırıldı, derinliği 'effort' (low/medium/high, vars. high) belirler.
         # max_tokens hâlâ TAVAN — düşünme + JSON çıktısı için bol pay bırak (aksi hâlde model
         # tüm token'ı düşünmeye harcayıp boş JSON döndürebilir; _recover yine de kurtarır).
-        _eff = str(os.environ.get("DEKONT_THINK_EFFORT", "high")).strip().lower()
+        _eff = str(os.environ.get("DEKONT_THINK_EFFORT", "medium")).strip().lower()   # PERFORMANS: vars. medium (eskiden high)
         if _eff not in ("low", "medium", "high"):
-            _eff = "high"
+            _eff = "medium"
         body = {"model": model, "max_tokens": _tb + 2000,
                 "thinking": {"type": "adaptive"},
                 "output_config": {"effort": _eff},
