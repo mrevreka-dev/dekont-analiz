@@ -1225,14 +1225,20 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             _find_dicts = [{"code": f.code, "severity": f.severity, "weight": f.weight, "tr": f.tr}
                            for f in findings]
             _go, _reasons = _aj.should_adjudicate(_find_dicts, _ex_dict, input_kind)
+            # HIZLI DOUBLE-CHECK (performans, seçenek 2): TERTEMİZ dijital PDF'te (dijital metin katmanı,
+            # yüksek/kritik bulgu YOK) YZ teyidi hızlı/hafif yapılır — VISION göndermeden ve HIZLI model
+            # (Haiku) ile. Böylece temiz dekontlarda double-check korunur ama gecikme (13-28 sn) düşer.
+            # FOTOĞRAF ya da yüksek/kritik bulgu taşıyan HER belge → TAM double-check (Sonnet + vision).
+            _light_check = (input_kind == "pdf" and extraction.text_source == "digital"
+                            and not any(f.severity in ("high", "critical") for f in findings))
             print(f"[adjudicator] eskalasyon={_go} input_kind={input_kind} pil_var={locals().get('pil') is not None} "
-                  f"nedenler={_reasons}", flush=True)
+                  f"hafif={_light_check} nedenler={_reasons}", flush=True)
             if _go:
                 import authenticity as _auth_aj
                 ai_adjudication = _aj.adjudicate(
                     _ex_dict, _find_dicts, _auth_aj.bank_key(ex.bank),
-                    pil_image=locals().get("pil"), input_kind=input_kind,
-                    text_source=extraction.text_source)
+                    pil_image=(None if _light_check else locals().get("pil")), input_kind=input_kind,
+                    text_source=extraction.text_source, light=_light_check)
                 if ai_adjudication is not None:
                     ai_adjudication["tetik_nedenleri"] = _reasons
                     # ÖĞREN: YZ'nin doğruladığı banka-bazlı etiket ipuçlarını kalıcı store'a yaz

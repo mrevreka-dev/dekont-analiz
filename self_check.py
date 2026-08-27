@@ -34,6 +34,16 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z20", "date": "2026-08-27 21:55", "area": "HIZLI DOUBLE-CHECK: temiz dijital PDF'te hafif model+vision'sız teyit (latency düşürme, seçenek 2)", "test": 44,
+     "bug": "Double-check açıldığından (skor %100'de bile AI) HER tarama AI çağırıyordu; canlı metriklerde ağır "
+            "taramalar 13-28 sn, bazıları 30 sn tavanına dayanıyordu (kaynak bol, hata yok — sadece gecikme). "
+            "Temiz dijital PDF'ler bile tam Sonnet ile teyit ediliyordu.",
+     "fix": "adjudicate'e light bayrağı: tertemiz dijital PDF'te (text_source=digital, input_kind=pdf, yüksek/"
+            "kritik bulgu YOK) HIZLI model (DEFAULT_LIGHT_MODEL=claude-haiku-5, env DEKONT_ADJUDICATOR_LIGHT_MODEL "
+            "ile değiştirilebilir) + vision GÖNDERİLMEZ + daha küçük çıktı (max_tokens 900). Fotoğraf ya da "
+            "yüksek/kritik bulgu taşıyan belge → TAM double-check (Sonnet + vision). Hafif model erişilemezse "
+            "double-check kaybolmasın diye tam modele (Sonnet) bir kez yedek deneme. Test #44 kilitler.",
+     "not": "Kullanıcı seçimi (seçenek 2): double-check korunur, temiz dekontlarda hız geri gelir."},
     {"id": "Z19", "date": "2026-08-24 06:40", "area": "ALICI BANKA ÇELİŞKİSİ fotoğrafta da yakalanıyor (geçerli IBAN ise): sahadaki VakıfBank yanlış-negatifi", "test": 43,
      "bug": "Sahada VakıfBank fotoğrafı: 'ALICI BANKA: Türkiye Garanti Bankası A.Ş.' yazarken alıcı IBAN "
             "TR20 0001 00... = 00010 (Ziraat). Gerçek bir dekontta alıcı banka IBAN'dan türetilir → çelişemez; "
@@ -1493,6 +1503,26 @@ def _t43_receiver_bank_mismatch_valid_iban():
     return ok, f"celiski-uretildi={a}, iban-gecerli(fotoğrafta-gösterilir)={b_valid}, ayni-banka-celiski-yok={c}"
 
 
+def _t44_light_double_check_fast_path():
+    """HIZLI DOUBLE-CHECK YOLU (performans, seçenek 2): tertemiz dijital PDF'te YZ teyidi HIZLI model +
+    vision'sız yapılır; fotoğraf/şüpheli belgede tam Sonnet+vision. Testler: (a) hafif model tanımlı ve
+    tam modelden FARKLI; (b) adjudicate 'light' parametresini kabul eder; (c) 'light' yolun karar mantığı:
+    dijital-PDF + yüksek/kritik bulgu YOK → hafif; fotoğraf ya da yüksek/kritik bulgu → tam."""
+    import ai_adjudicator as _aj
+    import inspect
+    a = (getattr(_aj, "DEFAULT_LIGHT_MODEL", "") and _aj.DEFAULT_LIGHT_MODEL != _aj.DEFAULT_MODEL)
+    b = "light" in inspect.signature(_aj.adjudicate).parameters
+    # (c) karar mantığının aynısı (analyze.py ile birebir): dijital-PDF + ciddi bulgu yok → hafif
+    def _decide(input_kind, text_source, sevs):
+        return (input_kind == "pdf" and text_source == "digital"
+                and not any(s in ("high", "critical") for s in sevs))
+    c = (_decide("pdf", "digital", ["info", "medium"]) is True          # temiz dijital PDF → hafif
+         and _decide("pdf", "digital", ["high"]) is False               # şüpheli PDF → tam
+         and _decide("image", "ocr", ["info"]) is False)                # fotoğraf → tam (vision)
+    ok = bool(a) and b and c
+    return ok, f"hafif-model-farkli={bool(a)}, light-parametresi={b}, karar-mantigi={c}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1537,6 +1567,7 @@ _CHECKS = [
     (41, "Double-check: skor %100 olsa da YZ her zaman çağrılır (should_adjudicate hep True)", _t41_ai_always_double_checks),
     (42, "Referans no uzunluğu ±1 hane toleransı: gerçek dekont yanlış-pozitifi yok, 2+ sapma yakalanır", _t42_ref_id_length_tolerance),
     (43, "Alıcı banka ≠ IBAN kodu çelişkisi: alıcı IBAN mod-97 geçerliyse fotoğrafta da gösterilir (yanlış-negatif giderildi)", _t43_receiver_bank_mismatch_valid_iban),
+    (44, "Hızlı double-check: temiz dijital PDF'te hafif model+vision'sız; fotoğraf/şüpheli belgede tam Sonnet+vision", _t44_light_double_check_fast_path),
 ]
 
 

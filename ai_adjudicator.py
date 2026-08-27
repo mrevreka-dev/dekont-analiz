@@ -40,6 +40,9 @@ import urllib.error
 
 API_URL = "https://api.anthropic.com/v1/messages"
 DEFAULT_MODEL = "claude-sonnet-5"
+# HIZLI (hafif) model: tertemiz dijital PDF'te double-check için — düşük gecikme/maliyet. Fotoğraf ve
+# şüpheli belgelerde DEFAULT_MODEL (Sonnet) + vision kullanılır. Env ile değiştirilebilir.
+DEFAULT_LIGHT_MODEL = "claude-haiku-5"
 
 # Deterministik olarak KESİN kabul edilen bulgu kodları — YZ bunları EZEMEZ (yalnız açıklar).
 _HARD_PROOF_CODES = {
@@ -287,12 +290,21 @@ def _build_prompt(extraction: dict, findings: list, bank_ctx: str, input_kind: s
 
 
 def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=None,
-               input_kind: str = "pdf", text_source: str = "digital", timeout: float = 45.0) -> dict | None:
-    """YZ değerlendiricisini çalıştırır. Dönen dict rapora EK alan olarak konur; hata/kapalıysa None."""
+               input_kind: str = "pdf", text_source: str = "digital", timeout: float = 45.0,
+               light: bool = False) -> dict | None:
+    """YZ değerlendiricisini çalıştırır. Dönen dict rapora EK alan olarak konur; hata/kapalıysa None.
+    light=True (tertemiz dijital PDF double-check): HIZLI model (Haiku) + vision YOK + daha küçük çıktı —
+    gecikme/maliyet düşer; kanıta dayalı tam inceleme fotoğraf/şüpheli belgelerde (light=False) yapılır."""
     if not is_enabled():
         return None
     api_key = os.environ["ANTHROPIC_API_KEY"]
-    model = os.environ.get("DEKONT_ADJUDICATOR_MODEL") or os.environ.get("DEKONT_VISION_MODEL") or DEFAULT_MODEL
+    if light:
+        # Hafif teyit: önce açık env (ADJUDICATOR_MODEL) varsa ona saygı; yoksa hızlı model.
+        model = (os.environ.get("DEKONT_ADJUDICATOR_LIGHT_MODEL")
+                 or os.environ.get("DEKONT_ADJUDICATOR_MODEL") or DEFAULT_LIGHT_MODEL)
+        pil_image = None                      # hafif yolda vision gönderilmez (dijital PDF zaten metin)
+    else:
+        model = os.environ.get("DEKONT_ADJUDICATOR_MODEL") or os.environ.get("DEKONT_VISION_MODEL") or DEFAULT_MODEL
     try:
         import bank_knowledge as _bk
         bank_ctx = _bk.context_for(bank_key)
@@ -325,23 +337,35 @@ def adjudicate(extraction: dict, findings: list, bank_key: str = "", pil_image=N
     # ÜRETMEDEN kesiliyordu (stop_reason=max_tokens, content=['thinking']) → boş yanıt + YÜKSEK MALİYET
     # (her çağrı 4096 düşünme token'ı). Düşünmeyi KAPATIYORUZ: model doğrudan JSON üretir → hızlı, ucuz,
     # dolu yanıt. 2048 token forensic JSON için yeterli.
-    body = {"model": model, "max_tokens": 1400, "thinking": {"type": "disabled"},
-            "messages": [{"role": "user", "content": content}]}
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(API_URL, data=data, method="POST")
-    req.add_header("x-api-key", api_key)
-    req.add_header("anthropic-version", "2023-06-01")
-    req.add_header("content-type", "application/json")
+    def _call(_model, _max_tokens):
+        _body = {"model": _model, "max_tokens": _max_tokens, "thinking": {"type": "disabled"},
+                 "messages": [{"role": "user", "content": content}]}
+        _req = urllib.request.Request(API_URL, data=json.dumps(_body).encode("utf-8"), method="POST")
+        _req.add_header("x-api-key", api_key)
+        _req.add_header("anthropic-version", "2023-06-01")
+        _req.add_header("content-type", "application/json")
+        with urllib.request.urlopen(_req, timeout=timeout) as _resp:
+            return json.loads(_resp.read().decode("utf-8"))
+
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
+        payload = _call(model, 900 if light else 1400)
     except urllib.error.HTTPError as e:
         try:
             _b = e.read().decode("utf-8")[:400]
         except Exception:
             _b = ""
         print(f"[ai_adjudicator] HTTP {e.code} model={model}: {_b}", flush=True)
-        return None
+        # YEDEK: hafif model geçersiz/erişilemezse (ör. model adı yanlış) double-check KAYBOLMASIN →
+        # tam model (Sonnet) ile bir kez yeniden dene (metin-tabanlı; vision zaten gönderilmemişti).
+        if light and model != DEFAULT_MODEL:
+            try:
+                print(f"[ai_adjudicator] hafif model başarısız → {DEFAULT_MODEL} ile yeniden deneniyor", flush=True)
+                payload = _call(DEFAULT_MODEL, 1400)
+            except Exception as e2:
+                print(f"[ai_adjudicator] yedek de başarısız: {type(e2).__name__}: {e2}", flush=True)
+                return None
+        else:
+            return None
     except Exception as e:
         print(f"[ai_adjudicator] error model={model}: {type(e).__name__}: {e}", flush=True)
         return None
