@@ -827,6 +827,16 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
     _qnb_giden_eft = ("gideneft" in ns) and not _qnb_giden_fast_eft
     qnb_definitive_eft = False                          # QNB'ye özel net-EFT bildirimi için bayrak
 
+    # ===================== ENPARA'YA ÖZEL EFT/FAST AYRIMI (kullanıcı kuralı) =====================
+    # Enpara dekontlarında tutar/ücret HER ZAMAN 'EFT TUTARI / EFT ÜCRETİ' (ve B/A alanında 'EFTB')
+    # olarak yazılır — bu Enpara'nın GENEL ŞABLONUDUR, tek başına işlemin EFT olduğu anlamına GELMEZ.
+    # Gerçek işlem türü '(FAST) sorgu no:' ibaresi ya da 'GİDEN FAST EFT' başlığıyla belirlenir:
+    #   - '(FAST)' işareti VARSA → FAST (EFT TUTARI/ÜCRETİ etiketlerini EZER).
+    # Sadece Enpara kanalına özel (bkey='enpara' ya da gönderici IBAN kodu 00157). Boşluk atıldığı için
+    # "(FAST) sorgu no" → '(fast)sorguno' (yani '(fast)' alt-dizesi), "GİDEN FAST EFT" → 'gidenfasteft'.
+    _is_enpara = (bkey == "enpara") or (sc == "00157")
+    _enpara_fast = _is_enpara and (("(fast)" in ns) or ("gidenfasteft" in ns))
+
     rail, conf = "belirsiz", 0
     title_based_eft = False
     # ===================== BİRİNCİL KAPI: IBAN BANKA KODU =====================
@@ -840,6 +850,10 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
             return "fast", 93, "QNB: başlıkta 'GİDEN FAST EFT' → FAST (bu ibare FAST teslimini gösterir; içindeki 'EFT' genel şablondur)."
         if _is_qnb and _qnb_giden_eft:
             return "eft", 96, "QNB: başlıkta 'GİDEN EFT' → KESİN EFT (QNB kanalına özel net gösterge)."
+        # ENPARA'YA ÖZEL (en yüksek öncelik): '(FAST)' / 'GİDEN FAST EFT' → FAST; Enpara'nın 'EFT TUTARI/
+        # ÜCRETİ' genel şablon etiketleri bu işareti EZEMEZ.
+        if _enpara_fast:
+            return "fast", 93, "Enpara: '(FAST) sorgu no' / 'GİDEN FAST EFT' işareti → FAST ('EFT TUTARI/ÜCRETİ' Enpara'nın genel şablonudur, tek başına EFT demek değildir)."
         if eft_definitive:
             return "eft", 95, "Ücret kaleminde 'GEÇ EFT / GECEFT' → KESİN EFT."
         if fast_billing and not eft_billing:
@@ -880,6 +894,8 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
         elif _is_qnb and _qnb_giden_eft:
             rail, conf = "eft", 92; qnb_definitive_eft = True
             ev.append("QNB: 'GİDEN EFT' → KESİN EFT (IBAN kodu okunamadı, QNB kanalına özel).")
+        elif _enpara_fast:
+            rail, conf = "fast", 90; ev.append("Enpara: '(FAST) sorgu no' / 'GİDEN FAST EFT' → FAST (IBAN kodu okunamadı).")
         elif eft_definitive:
             rail, conf = "eft", 90; ev.append("'GEÇ EFT/GECEFT' → EFT (IBAN kodu okunamadı).")
         elif fast_billing and not eft_billing:
@@ -914,6 +930,16 @@ def classify_rail(text: str, sender_iban: str = "", receiver_iban: str = "",
                      "geçiyor; bu ibare QNB'de FAST teslimini gösterir (içindeki 'EFT' genel şablondur).")
         notice_en = ("TRANSFER RAIL: This is a **FAST** transaction. The QNB receipt says 'GİDEN FAST EFT', "
                      "which denotes FAST delivery on the QNB channel (the embedded 'EFT' is a generic template).")
+    elif rail == "fast" and _enpara_fast:
+        notice_tr = ("İŞLEM KANALI: Bu işlem bir **FAST** işlemidir — **EFT DEĞİLDİR**. Enpara dekontunda "
+                     "'(FAST) sorgu no' / 'GİDEN FAST EFT' işareti var; Enpara tutar/ücreti HER ZAMAN 'EFT "
+                     "TUTARI / EFT ÜCRETİ' olarak yazar (genel şablon) ve bu tek başına EFT anlamına gelmez. "
+                     "Gerçek kanal '(FAST)' işaretiyle FAST'tır. NOT: Bu, kanal sınıflandırmasıdır; dekontun "
+                     "sahte olup olmadığından AYRIDIR.")
+        notice_en = ("TRANSFER RAIL: This is a **FAST** transaction — **NOT EFT**. The Enpara receipt carries a "
+                     "'(FAST) sorgu no' / 'GİDEN FAST EFT' marker; Enpara always labels the amount/fee as 'EFT "
+                     "TUTARI / EFT ÜCRETİ' (generic template), which alone does not mean EFT. The '(FAST)' marker "
+                     "makes the real rail FAST. NOTE: rail classification, separate from authenticity.")
     elif rail == "eft" and title_based_eft:
         notice_tr = ("İŞLEM KANALI: Bu işlem büyük olasılıkla bir **EFT** işlemidir — **FAST DEĞİLDİR**. "
                      "Gerekçe: dekont başlığında 'EFT BANKALAR ARASI HESABA HAVALE' ibaresi var, işlem "

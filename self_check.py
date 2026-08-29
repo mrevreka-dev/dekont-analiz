@@ -34,6 +34,16 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z21", "date": "2026-08-28 00:05", "area": "ENPARA'YA ÖZEL: '(FAST) sorgu no'/'GİDEN FAST EFT' → FAST (EFT TUTARI/ÜCRETİ genel şablonunu ezer)", "test": 45,
+     "bug": "Sahada gerçek bir Enpara FAST dekontu (sorgu no 4775742852) EFT olarak sınıflandı. Neden: Enpara "
+            "dekontlarında tutar/ücret HER ZAMAN 'EFT TUTARI / EFT ÜCRETİ' (ve B/A alanında 'EFTB') yazar — bu "
+            "Enpara'nın GENEL ŞABLONUDUR. classify_rail bu eft_billing etiketini görüp EFT'ye karar veriyor, "
+            "oysa dekontta '(FAST) sorgu no:' ve 'GİDEN FAST EFT' işaretleri işlemin FAST olduğunu gösteriyordu.",
+     "fix": "classify_rail'e ENPARA'YA ÖZEL gate (bkey='enpara' ya da gönderici IBAN kodu 00157): boşluk-atılmış "
+            "metinde '(fast)' ya da 'gidenfasteft' varsa → FAST (%93), EFT TUTARI/ÜCRETİ etiketlerini EZER. Hem "
+            "bankalararası dalda hem IBAN-okunamadı yedeğinde; Enpara'ya özel bildirim metniyle. '(FAST)' YOKSA "
+            "gerçek Enpara EFT davranışı korunur (eft_billing → EFT). QNB/diğer bankalara SIZMAZ. Test #45 kilitler.",
+     "not": "Kullanıcı kuralı: Enpara'da '(FAST) sorgu no' / 'GİDEN FAST EFT' FAST demektir; 'EFT TUTARI' Enpara genel şablonudur."},
     {"id": "Z20", "date": "2026-08-27 21:55", "area": "HIZLI DOUBLE-CHECK: temiz dijital PDF'te hafif model+vision'sız teyit (latency düşürme, seçenek 2)", "test": 44,
      "bug": "Double-check açıldığından (skor %100'de bile AI) HER tarama AI çağırıyordu; canlı metriklerde ağır "
             "taramalar 13-28 sn, bazıları 30 sn tavanına dayanıyordu (kaynak bol, hata yok — sadece gecikme). "
@@ -709,10 +719,11 @@ def _t15_coverage_bank_based():
 
 
 def _t16_enpara_eft_fast_and_receiver():
-    """Enpara/QNB: işlemi 'EFT (FAST)' diye gösterir AMA tutar/ücreti 'EFT TUTARI / EFT ÜCRETİ' diye
-    FATURALAR → bu bir EFT'dir ('(FAST)' teslim rayıdır, anlık EFT altyapısı). Rail EFT olmalı.
-    FATURA etiketi (EFT ÜCRETİ), çıplak '(FAST)' etiketini YENER. Ayrıca 'ALICI ÜNVANI' satırı OCR'da
-    kaçarsa alıcı adı açıklamadan ('<ad>, Bireysel Ödeme') yedeklenmeli (alıcı adı boş kalmamalı)."""
+    """ENPARA (kullanıcı kuralı, GÜNCELLENDİ): Enpara dekontlarında tutar/ücret HER ZAMAN 'EFT TUTARI /
+    EFT ÜCRETİ' (genel şablon) yazar — bu tek başına EFT DEMEK DEĞİLDİR. İşlem türü '(FAST) sorgu no' /
+    'GİDEN FAST EFT' işaretiyle belirlenir → bu işaret varsa FAST'tır (EFT TUTARI/ÜCRETİ etiketini EZER).
+    (Önceki varsayım '(FAST) sadece teslim rayı, EFT ÜCRETİ yener' YANLIŞTI; kullanıcı gerçek Enpara FAST
+    dekontuyla düzeltti.) Ayrıca 'ALICI ÜNVANI' satırı OCR'da kaçarsa alıcı adı açıklamadan yedeklenmeli."""
     import authenticity as A
     from extract import extract_fields
     a = _gen_iban
@@ -726,8 +737,8 @@ def _t16_enpara_eft_fast_and_receiver():
            "GIDEN FAST EFT\nALICI IBAN: TR92 0001 0090 1114 0935 0050 01\n"
            "MÜŞTERİ ÜNVANI: MUSTAFA DOĞAN  IBAN: TR08 0015 7000 0000 0116 981974\n")
     ex = extract_fields(txt, txt, None)
-    ok = (r == "eft" and r2 == "fast" and ex.receiver.name.lower() == "yusuf erman")
-    return ok, f"Enpara EFT(FAST)→{r} (EFT olmalı — fatura EFT), İşbank FAST-fatura→{r2} (fast olmalı), alıcı yedeği={ex.receiver.name!r}"
+    ok = (r == "fast" and r2 == "fast" and ex.receiver.name.lower() == "yusuf erman")
+    return ok, f"Enpara '(FAST)'→{r} (FAST olmalı — '(FAST)' işareti EFT etiketini ezer), İşbank FAST-fatura→{r2} (fast olmalı), alıcı yedeği={ex.receiver.name!r}"
 
 
 def _t17_per_bank_comparison():
@@ -1523,6 +1534,34 @@ def _t44_light_double_check_fast_path():
     return ok, f"hafif-model-farkli={bool(a)}, light-parametresi={b}, karar-mantigi={c}"
 
 
+def _t45_enpara_fast_marker_over_eft_label():
+    """ENPARA'YA ÖZEL EFT/FAST (kullanıcı kuralı): Enpara dekontlarında tutar/ücret HER ZAMAN 'EFT TUTARI/
+    ÜCRETİ' yazar (genel şablon) — bu tek başına EFT demek DEĞİLDİR. Gerçek kanal '(FAST) sorgu no' /
+    'GİDEN FAST EFT' işaretiyle belirlenir. Sahada görülen yanlış-negatif: gerçek FAST işlemi EFT sanıldı.
+    Testler: (a) Enpara + '(FAST)' + 'EFT TUTARI/ÜCRETİ' → FAST (EFT DEĞİL); (b) Enpara gerçek EFT (FAST
+    işareti YOK, 'GİDEN EFT') → EFT; (c) QNB/diğer bankaya SIZMAZ (kural Enpara'ya özel)."""
+    import authenticity as _a, banks as _b
+    ENP = "TR540015700000000205345915"   # 00157 Enpara (gönderici)
+    ISB = "TR340006400000163600363769"   # 00064 İş Bankası (alıcı) — bankalararası
+    if _b.iban_valid(ENP) is not True or _b.iban_valid(ISB) is not True:
+        return False, "test IBAN'ları geçersiz (fixture hatası)"
+    fast_txt = ("Enpara Şubesi\n(FAST) sorgu no: 4775742852\nGIDEN FAST EFT\n"
+                "EFT TUTARI : 99000 TL EFT ÜCRETİ(BSMV DAHİL) : 0 TL")
+    r_fast = _a.classify_rail(fast_txt, ENP, ISB, "enpara")
+    a = bool(r_fast) and r_fast.get("rail") == "fast"
+    eft_txt = "Enpara Şubesi\nGIDEN EFT\nEFT TUTARI : 99000 TL EFT ÜCRETİ : 0 TL"   # '(FAST)' YOK
+    r_eft = _a.classify_rail(eft_txt, ENP, ISB, "enpara")
+    b = bool(r_eft) and r_eft.get("rail") == "eft"
+    # Aynı metin ama QNB kanalı (gönderici QNB 00111): Enpara kuralı çalışmamalı — '(FAST)' burada
+    # QNB için de FAST verir ama kanıt/bildirim Enpara'ya özel OLMAMALI. Sızıntı testi: Enpara bayrağı
+    # QNB gönderici IBAN'da tetiklenmemeli.
+    QNB = "TR350011100000000120439443"
+    r_qnb = _a.classify_rail("EFT TUTARI 100 TL GIDEN EFT", QNB, ISB, "qnb")
+    c = bool(r_qnb) and r_qnb.get("rail") == "eft"   # QNB 'GİDEN EFT' (fast yok) → EFT, Enpara etkisi yok
+    ok = a and b and c
+    return ok, f"enpara-fast-isareti={a}, enpara-gercek-eft={b}, qnb-sizma-yok={c}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1568,6 +1607,7 @@ _CHECKS = [
     (42, "Referans no uzunluğu ±1 hane toleransı: gerçek dekont yanlış-pozitifi yok, 2+ sapma yakalanır", _t42_ref_id_length_tolerance),
     (43, "Alıcı banka ≠ IBAN kodu çelişkisi: alıcı IBAN mod-97 geçerliyse fotoğrafta da gösterilir (yanlış-negatif giderildi)", _t43_receiver_bank_mismatch_valid_iban),
     (44, "Hızlı double-check: temiz dijital PDF'te hafif model+vision'sız; fotoğraf/şüpheli belgede tam Sonnet+vision", _t44_light_double_check_fast_path),
+    (45, "Enpara'ya özel: '(FAST) sorgu no'/'GİDEN FAST EFT' → FAST ('EFT TUTARI/ÜCRETİ' genel şablonu ezmez)", _t45_enpara_fast_marker_over_eft_label),
 ]
 
 
