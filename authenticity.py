@@ -82,10 +82,27 @@ _RERENDER_PRODUCERS = ["pdfium", "skia", "chromium", "quartz", "cairo", "microso
 _BANK_USES_BROWSER = {"ziraat"}
 
 
+def is_mobile_pdf_share(producer: str) -> bool:
+    """Üretici bir MOBİL CİHAZ PDF paylaşımına mı işaret ediyor (iOS/iPadOS/Android'in sistem PDF motoru)?
+    KULLANICI GERÇEĞİ: Banka dekontları çoğu zaman telefonun uygulamasından 'PDF olarak paylaş/kaydet'
+    ile dışa aktarılır; bu durumda üretici bankanın kendi motoru (Skia vb.) DEĞİL, telefonun PDF motoru
+    (iOS 'Quartz PDFContext' / Android) olur. Bu OLAĞAN bir paylaşım biçimidir — düzenleme/tahrifat DEĞİL.
+    Bu yüzden üretici-temelli yapısal kontroller (PRODUCER_MISMATCH/EDITOR_PRODUCER/RESAVE) UYGULANMAZ;
+    karar içerik denetimleri + YZ görsel incelemesiyle verilir. macOS Preview ('Mac OS X ... Quartz') bu
+    tespitin DIŞINDADIR (yalnız mobil paylaşım kapsanır)."""
+    p = (producer or "").lower()
+    _ios = ("ios version" in p) or ("ipados version" in p) or ("iphone os" in p)
+    return (_ios and "quartz pdfcontext" in p) or ("android" in p and "pdf" in p)
+
+
 def check_producer(bkey: str, producer: str) -> dict | None:
     """Belgenin üreticisini bankanın gerçek imzasıyla karşılaştırır.
     Eşleşmezse bulgu döndürür. Banka tarayıcı KULLANMIYORSA ve belge bir tarayıcı/editörle
-    üretilmişse -> KRİTİK (doğrudan güvenilmez)."""
+    üretilmişse -> KRİTİK (doğrudan güvenilmez).
+    MOBİL PAYLAŞIM İSTİSNASI: üretici iOS/Android sistem PDF motoruysa (is_mobile_pdf_share) uyuşmazlık
+    ÜRETMEZ — dekont telefondan PDF olarak paylaşılmıştır, bu düzenleme değildir."""
+    if is_mobile_pdf_share(producer):
+        return None
     exp = EXPECTED_PRODUCERS.get(bkey)
     if not exp:
         return None                            # banka için beklenen üretici bilinmiyor

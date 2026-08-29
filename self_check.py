@@ -34,6 +34,19 @@ def _now_tr() -> str:
 #    Yeni geliştirme = buraya yeni kayıt + run() içine yeni test.
 # ------------------------------------------------------------------
 IMPROVEMENTS = [
+    {"id": "Z22", "date": "2026-08-29 03:00", "area": "MOBİL PDF PAYLAŞIMI (iOS/Android) TAHRİFAT SAYILMIYOR: üretici-temelli yanlış-pozitif giderildi (GENEL + Ziraat)", "test": 46,
+     "bug": "Sahada iPhone 11'den paylaşılan GERÇEK iki Ziraat dekontu 'skor 30 / yüksek risk' işaretlendi. "
+            "Neden: kullanıcı dekontu Ziraat uygulamasından 'PDF olarak paylaş' yapınca üretici bankanın kendi "
+            "motoru (Skia) değil, iOS 'Quartz PDFContext' oldu → check_producer PRODUCER_MISMATCH (high/30) + "
+            "forensics EDITOR_PRODUCER (medium/18) üretti (toplam 45 metadata cezası). Oysa mobil PDF paylaşımı "
+            "OLAĞANDIR, düzenleme değildir.",
+     "fix": "GENEL (tüm bankalar): authenticity.is_mobile_pdf_share() — üretici iOS/iPadOS 'Quartz PDFContext' "
+            "ya da Android sistem PDF motoruysa True. check_producer bu durumda uyuşmazlık ÜRETMEZ; analyze mobil "
+            "paylaşımda PRODUCER_MISMATCH/EDITOR_PRODUCER/PRODUCER_RESAVE bulgularını KALDIRIR ve MOBILE_PDF_SHARE "
+            "(info, weight 0) ekler. Karar içerik denetimleri + YZ görsel teyidiyle verilir; yeniden-basıldığı "
+            "için hızlı-double-check yerine TAM (Sonnet) teyit zorlanır. macOS Preview ('Mac OS X ... Quartz') ve "
+            "tarayıcı Skia bu istisnanın DIŞINDA. Test #46 kilitler.",
+     "not": "Kullanıcı: iPhone 11'den paylaşılan gerçek Ziraat dekontları; hem bu banka özelinde hem genel olarak giderildi."},
     {"id": "Z21", "date": "2026-08-28 00:05", "area": "ENPARA'YA ÖZEL: '(FAST) sorgu no'/'GİDEN FAST EFT' → FAST (EFT TUTARI/ÜCRETİ genel şablonunu ezer)", "test": 45,
      "bug": "Sahada gerçek bir Enpara FAST dekontu (sorgu no 4775742852) EFT olarak sınıflandı. Neden: Enpara "
             "dekontlarında tutar/ücret HER ZAMAN 'EFT TUTARI / EFT ÜCRETİ' (ve B/A alanında 'EFTB') yazar — bu "
@@ -1562,6 +1575,22 @@ def _t45_enpara_fast_marker_over_eft_label():
     return ok, f"enpara-fast-isareti={a}, enpara-gercek-eft={b}, qnb-sizma-yok={c}"
 
 
+def _t46_mobile_pdf_share_not_forgery():
+    """MOBİL CİHAZDAN PDF PAYLAŞIMI (iOS/Android) TAHRİFAT DEĞİLDİR (kullanıcı gerçeği): Banka dekontu
+    telefondan 'PDF olarak paylaş' ile dışa aktarılınca üretici iOS 'Quartz PDFContext' / Android olur;
+    bankanın kendi motoru (Skia) beklenirken bu üretici PRODUCER_MISMATCH + EDITOR_PRODUCER üretip skoru
+    30'a (yüksek risk) çekiyordu — GERÇEK iPhone Ziraat dekontları yanlış işaretleniyordu. Testler:
+    (a) is_mobile_pdf_share iOS Quartz→True; (b) macOS Preview ('Mac OS X ... Quartz')→False (kapsam dışı);
+    (c) Skia (tarayıcı)→False; (d) check_producer iOS üreticide uyuşmazlık ÜRETMEZ (mobil istisna)."""
+    import authenticity as _a
+    a = _a.is_mobile_pdf_share("iOS Version 26.5 (Build 23F77) Quartz PDFContext") is True
+    b = _a.is_mobile_pdf_share("Mac OS X 10.15.7 Quartz PDFContext") is False
+    c = _a.is_mobile_pdf_share("Skia/PDF m120") is False
+    d = _a.check_producer("ziraat", "iOS Version 26.5 (Build 23F77) Quartz PDFContext") is None
+    ok = a and b and c and d
+    return ok, f"ios-mobil={a}, macos-kapsamdisi={b}, skia-kapsamdisi={c}, uyusmazlik-uretmez={d}"
+
+
 _CHECKS = [
     (1, "Geçersiz IBAN → Vision tetiklenir (KRİTİK)", _t1_vision_escalates_on_bad_iban),
     (2, "OCR tam çözünürlük (1600px)", _t2_ocr_full_resolution),
@@ -1608,6 +1637,7 @@ _CHECKS = [
     (43, "Alıcı banka ≠ IBAN kodu çelişkisi: alıcı IBAN mod-97 geçerliyse fotoğrafta da gösterilir (yanlış-negatif giderildi)", _t43_receiver_bank_mismatch_valid_iban),
     (44, "Hızlı double-check: temiz dijital PDF'te hafif model+vision'sız; fotoğraf/şüpheli belgede tam Sonnet+vision", _t44_light_double_check_fast_path),
     (45, "Enpara'ya özel: '(FAST) sorgu no'/'GİDEN FAST EFT' → FAST ('EFT TUTARI/ÜCRETİ' genel şablonu ezmez)", _t45_enpara_fast_marker_over_eft_label),
+    (46, "Mobil PDF paylaşımı (iOS/Android) tahrifat değildir: üretici-temelli yanlış-pozitif (PRODUCER_MISMATCH/EDITOR) giderildi", _t46_mobile_pdf_share_not_forgery),
 ]
 
 

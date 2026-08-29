@@ -875,6 +875,29 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             if _ft:
                 findings.append(Finding(_ft["code"], _ft["severity"], "fonts", _ft["weight"],
                                         tr=_ft["tr"], en=_ft["en"], detail=_ft.get("detail", "")))
+            # MOBİL CİHAZDAN PDF PAYLAŞIMI (iOS/Android) — GENEL DÜZELTME (tüm bankalar): Banka dekontu
+            # telefonun uygulamasından 'PDF olarak paylaş/kaydet' ile dışa aktarılınca üretici bankanın
+            # kendi motoru değil, telefonun PDF motoru (iOS 'Quartz PDFContext' / Android) olur. Bu OLAĞAN
+            # bir paylaşımdır, düzenleme/tahrifat DEĞİLDİR → üretici-temelli YAPISAL cezaları (PRODUCER_
+            # MISMATCH / EDITOR_PRODUCER / PRODUCER_RESAVE) KALDIR ve bir BİLGİ notu ekle. Karar içerik
+            # denetimleri + YZ görsel incelemesiyle verilir. (Sahada: iPhone'dan paylaşılan GERÇEK Ziraat
+            # dekontları yanlışlıkla 30/yüksek-risk işaretleniyordu.)
+            _mobile_share = _auth.is_mobile_pdf_share(struct.producer)
+            if _mobile_share:
+                findings[:] = [f for f in findings if f.code not in
+                               ("PRODUCER_MISMATCH", "EDITOR_PRODUCER", "PRODUCER_RESAVE")]
+                if not any(f.code == "MOBILE_PDF_SHARE" for f in findings):
+                    findings.append(Finding(
+                        "MOBILE_PDF_SHARE", "info", "metadata", 0,
+                        tr=("Bu PDF bir MOBİL CİHAZDAN (iOS/Android) 'PDF olarak paylaş/kaydet' ile dışa "
+                            "aktarılmış (üretici: telefonun sistem PDF motoru). Bu OLAĞAN bir paylaşım "
+                            "biçimidir, düzenleme/tahrifat DEĞİLDİR; bu nedenle üretici-temelli yapısal "
+                            "doğrulama uygulanmaz, karar içerik denetimleri ve YZ görsel incelemesiyle verilir."),
+                        en=("This PDF was exported from a MOBILE device (iOS/Android) via 'share/save as PDF' "
+                            "(producer is the phone's system PDF engine). This is a normal sharing method, not "
+                            "editing/tampering; producer-based structural checks are not applied — the verdict "
+                            "relies on content checks and AI visual review."),
+                        detail=f"producer={struct.producer}"))
             # Belge içi + XMP çapraz-tarih tutarlılığı.
             # FOTOĞRAF/OCR/vision'da BASKILANIR: bu kontrol metindeki HERHANGİ bir tarihi
             # işlem tarihiyle >3 gün fark için tarar. Bir dekont FOTOĞRAFINDA telefonun
@@ -1230,7 +1253,8 @@ def analyze_document(pdf_bytes: bytes, filename: str = "", input_kind: str = "pd
             # (Haiku) ile. Böylece temiz dekontlarda double-check korunur ama gecikme (13-28 sn) düşer.
             # FOTOĞRAF ya da yüksek/kritik bulgu taşıyan HER belge → TAM double-check (Sonnet + vision).
             _light_check = (input_kind == "pdf" and extraction.text_source == "digital"
-                            and not any(f.severity in ("high", "critical") for f in findings))
+                            and not any(f.severity in ("high", "critical") for f in findings)
+                            and not any(f.code == "MOBILE_PDF_SHARE" for f in findings))
             print(f"[adjudicator] eskalasyon={_go} input_kind={input_kind} pil_var={locals().get('pil') is not None} "
                   f"hafif={_light_check} nedenler={_reasons}", flush=True)
             if _go:
